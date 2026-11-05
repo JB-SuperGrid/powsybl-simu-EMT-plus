@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Copyright (c) 2026, SuperGrid Institute
+  All rights reserved. Proprietary and confidential.
+  -->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.powsybl</groupId>
+        <artifactId>powsybl-parent</artifactId>
+        <version>29</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.supergrid.simuemt</groupId>
+    <artifactId>powsybl-simu-emt-plus</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+
+    <name>SimuEmt Plus</name>
+    <description>
+        SuperGrid Institute's overlay on powsybl-simu-emt: a PSCAD Professional backend. Where powsybl-simu-emt-pscad writes
+        a .pscx for PSCAD Free, opened and run by hand, this writes a Python script driving PSCAD's automation library
+        (mhi.pscad, Professional and Educational editions only) that builds the same project - the same layout, component for
+        component - compiles it and runs it; and reads back what EMTDC wrote.
+    </description>
+
+    <organization>
+        <name>SuperGrid Institute</name>
+    </organization>
+    <licenses>
+        <license>
+            <name>Proprietary</name>
+            <comments>All rights reserved. See LICENSE.</comments>
+            <distribution>manual</distribution>
+        </license>
+    </licenses>
+    <developers>
+        <developer>
+            <name>Jean-Baptiste Heyberger</name>
+            <email>jean-baptiste.heyberger@supergrid-institute.com</email>
+            <organization>SuperGrid Institute</organization>
+        </developer>
+    </developers>
+
+    <properties>
+        <java.version>21</java.version>
+        <powsybl-simu-emt.version>1.0.0-SNAPSHOT</powsybl-simu-emt.version>
+        <!-- required for later correct replacement of argline by the parent pom -->
+        <argLine/>
+        <!-- Tests tagged pscad run the real PSCAD Professional - licence, compiler and all: left out unless -Ppscad. -->
+        <simuemt.plus.tests.excluded>pscad</simuemt.plus.tests.excluded>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- powsybl-simu-emt's own versions, powsybl-core's with them -->
+            <dependency>
+                <groupId>com.powsybl.simuemt</groupId>
+                <artifactId>powsybl-simu-emt</artifactId>
+                <version>${powsybl-simu-emt.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <!-- Compile dependencies -->
+        <dependency>
+            <groupId>com.powsybl.simuemt</groupId>
+            <artifactId>powsybl-simu-emt-pscad</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.powsybl.simuemt</groupId>
+            <artifactId>powsybl-simu-emt-extensions</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.powsybl</groupId>
+            <artifactId>powsybl-commons</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.powsybl</groupId>
+            <artifactId>powsybl-iidm-api</artifactId>
+        </dependency>
+
+        <!-- Test dependencies -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.powsybl</groupId>
+            <artifactId>powsybl-iidm-impl</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.powsybl.simuemt</groupId>
+            <artifactId>powsybl-simu-emt-preprocessing</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.powsybl.simuemt</groupId>
+            <artifactId>powsybl-simu-emt-test-resources</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <excludedGroups>${simuemt.plus.tests.excluded}</excludedGroups>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+    <profiles>
+        <profile>
+            <!-- Runs the tests that drive the real PSCAD Professional: mvn test -Ppscad -->
+            <id>pscad</id>
+            <properties>
+                <simuemt.plus.tests.excluded>none</simuemt.plus.tests.excluded>
+            </properties>
+        </profile>
+    </profiles>
+</project>
