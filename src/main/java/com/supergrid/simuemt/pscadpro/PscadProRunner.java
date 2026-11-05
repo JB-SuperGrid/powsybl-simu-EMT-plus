@@ -71,6 +71,19 @@ public final class PscadProRunner {
         return result;
     }
 
+    /**
+     * Has PSCAD turn the project of {@code script} into EMTDC's Fortran - {@code Main.f}, {@code Main.dta} in its build
+     * folder - whether or not an executable is then linked: what the circuit PSCAD was given is, checked without a linker.
+     * Refused only if the project never got as far as its build folder.
+     */
+    public static Result compile(Path script, PscadProSettings settings) {
+        Result result = execute(script, settings, true);
+        if (result.buildFolder() == null || !Files.exists(result.buildFolder().resolve("Main.f"))) {
+            throw failure(script, result);
+        }
+        return result;
+    }
+
     private static Result execute(Path script, PscadProSettings settings, boolean buildOnly) {
         Path directory = script.toAbsolutePath().getParent();
         String name = projectName(script);
