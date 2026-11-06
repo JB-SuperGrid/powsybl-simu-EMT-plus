@@ -4,14 +4,23 @@
  */
 package com.supergrid.simuemt.pscadpro;
 
+import com.powsybl.iidm.network.AcDcConverter;
 import com.powsybl.iidm.network.Network;
+import com.powsybl.iidm.network.VoltageSourceConverter;
+import com.powsybl.simuemt.extensions.hvdc.AveragedVscInitialState;
+import com.powsybl.simuemt.extensions.hvdc.AveragedVscModel;
+import com.powsybl.simuemt.extensions.hvdc.DcVoltageDroopLaw;
+import com.powsybl.simuemt.extensions.hvdc.VoltageSourceConverterModel;
 import com.powsybl.simuemt.pscad.PscadEdition;
 import com.powsybl.simuemt.pscad.PscadSimulationSettings;
 import com.powsybl.simuemt.pscad.PscadSteadyState;
 import com.powsybl.simuemt.testresources.ExampleNetworks;
+import org.assertj.core.api.SoftAssertions;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -67,7 +76,7 @@ class PscadProSimulationTest {
         ExampleNetworks.withLoadFlow(network);
         PscadSimulationSettings settings = new PscadSimulationSettings(20.0e-6, 0.3, 50.0, PscadEdition.PROFESSIONAL);
 
-        PscadProSimulation.PscadProRun run = PscadProSimulation.runFromSteadyState(network, tempDir, settings, List.of(), PRO);
+        PscadProSimulation.PscadProRun run = PscadProSimulation.run(network, tempDir, settings, List.of(), PRO);
 
         assertThat(Files.list(tempDir.resolve("template")).anyMatch(p -> p.getFileName().toString().endsWith(".py"))).isTrue();
         PscadSteadyState steady = PscadSteadyState.solve(run.project().circuit(), settings);
@@ -79,6 +88,54 @@ class PscadProSimulationTest {
             assertThat(run.output().fundamentalPhasor(channel, 50.0, 0.28, 0.3).magnitude() / crest - 1.0).as("|%s| in the last period", bus)
                     .isCloseTo(0.0, within(1.0e-4));
         }
+    }
+
+    /**
+     * The multi-terminal DC networks: example 4's three stations, VSC2 and VSC3 on the DC voltage droop ({@link
+     * EquivalenceCases#dcDroop}), and CIGRE B4 DCS2, its DC lines meeting at BMB5, held up by its two onshore droops alone. From
+     * rest - their AC and DC sides separate subsystems, which a snapshot restart does not patch - over 4 s: the DC side charged
+     * while the controls' integrals are held, until 2 s as a template's are, then let go. In the last 40 ms, each droop
+     * converter's power where its curve meets the DC voltage it settles at, as Xyce's and Kestrel's runs hold it: the load
+     * flow's, less what the curve takes off there; the other converters' the load flow's power, or DC voltage on V_DC; every
+     * converter's reactive power and DC voltage the load flow's.
+     *
+     * <p>Run 2026-11-06 at 50 us: the droops within 0.07 MW of their curves (0.001 on example 4), the powers held within 0.003
+     * MW, the V_DC within 1e-6 pu; the reactive powers within 0.15 Mvar and the DC voltages within 2e-4 pu of the load flow's.
+     */
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"vsc-three-terminal-vdc-droop", "cigre-dcs2"})
+    void aMultiTerminalDcNetworkHoldsItsOperatingPoint(String bench, @TempDir Path tempDir) throws Exception {
+        Network network = ExampleNetworks.withLoadFlow("cigre-dcs2".equals(bench) ? EquivalenceCases.bench(bench) : EquivalenceCases.dcDroop());
+        double runEnd = 4.0;
+        PscadSimulationSettings settings = new PscadSimulationSettings(50.0e-6, runEnd, 50.0, PscadEdition.PROFESSIONAL);
+
+        PscadProSimulation.PscadProRun run = PscadProSimulation.run(network, tempDir, settings, List.of(), PRO);
+
+        double from = runEnd - 0.04;
+        SoftAssertions softly = new SoftAssertions();
+        for (VoltageSourceConverter converter : network.getVoltageSourceConverters()) {
+            String id = converter.getId();
+            AveragedVscModel model = (AveragedVscModel) converter.getExtension(VoltageSourceConverterModel.class);
+            AveragedVscInitialState initial = AveragedVscInitialState.of(converter, model);
+            double rating = model.getRatedApparentPower();
+            double p = run.output().mean(id + "_P", from, runEnd) * rating;
+            double q = run.output().mean(id + "_Q", from, runEnd) * rating;
+            double vdc = run.output().mean(id + "_VDC", from, runEnd);
+            double lfP = converter.getTerminal1().getP();
+            double lfVdc = initial.dcVoltage() / initial.dcNominalVoltage();
+            double expectedP = DcVoltageDroopLaw.of(converter, initial)
+                    .map(law -> lfP - law.powerReduction(vdc) * initial.baseApparentPower()).orElse(lfP);
+            System.out.printf("%s %s (%s): P %.4f MW (expected %.4f, load flow %.4f), Q %.4f Mvar (%.4f), Vdc %.6f pu (%.6f)%n", bench, id,
+                    converter.getControlMode(), p, expectedP, lfP, q, converter.getTerminal1().getQ(), vdc, lfVdc);
+            if (converter.getControlMode() == AcDcConverter.ControlMode.V_DC) {
+                softly.assertThat(vdc).as("%s DC voltage, pu", id).isCloseTo(lfVdc, within(1.0e-4));
+            } else {
+                softly.assertThat(p).as("%s active power, MW", id).isCloseTo(expectedP, within(0.1));
+                softly.assertThat(vdc).as("%s DC voltage, pu", id).isCloseTo(lfVdc, within(5.0e-4));
+            }
+            softly.assertThat(q).as("%s reactive power, Mvar", id).isCloseTo(converter.getTerminal1().getQ(), within(0.3));
+        }
+        softly.assertAll();
     }
 
     /** A Fortran component of the project's own - the WT4B wind turbine's controls - built and compiled by PSCAD. */

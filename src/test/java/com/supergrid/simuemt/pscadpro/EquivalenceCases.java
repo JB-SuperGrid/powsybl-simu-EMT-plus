@@ -110,13 +110,13 @@ final class EquivalenceCases {
     }
 
     /** A bench of powsybl-simu-emt's test resources: {@code <bench>.xiidm} with its models, {@code <bench>-extensions.xml}. */
-    private static Network bench(String bench) {
+    static Network bench(String bench) {
         return EmtExtensionsXmlReader.readNetwork(ExampleNetworks.resource("/" + bench + ".xiidm"),
                 ExampleNetworks.resource("/" + bench + "-extensions.xml"));
     }
 
     /** Example 4's three stations, VSC2 and VSC3 on the DC voltage droop, VSC1 holding the DC voltage; its generators infinite buses. */
-    private static Network dcDroop() {
+    static Network dcDroop() {
         Network network = bench("vsc-three-terminal-vdc-droop");
         for (String generator : List.of("GEN1", "GEN2", "GEN3")) {
             network.getGenerator(generator).addExtension(GeneratorModel.class, new InfiniteBusGeneratorModel(5000.0, 10.0));
