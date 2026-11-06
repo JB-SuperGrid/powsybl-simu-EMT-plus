@@ -6,6 +6,7 @@ package com.supergrid.simuemt.pscadpro;
 
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.TwoSides;
+import com.powsybl.simuemt.extensions.GeneratorModel;
 import com.powsybl.simuemt.extensions.event.BranchOperation;
 import com.powsybl.simuemt.extensions.event.BreakerAction;
 import com.powsybl.simuemt.extensions.event.BusFault;
@@ -13,6 +14,7 @@ import com.powsybl.simuemt.extensions.event.EmtEvent;
 import com.powsybl.simuemt.extensions.event.FaultClearing;
 import com.powsybl.simuemt.extensions.event.LoadStep;
 import com.powsybl.simuemt.extensions.event.SwitchOperation;
+import com.powsybl.simuemt.extensions.infinitebus.InfiniteBusGeneratorModel;
 import com.powsybl.simuemt.extensions.line.BergeronLineModel;
 import com.powsybl.simuemt.preprocessing.EmtExtensionsXmlReader;
 import com.powsybl.simuemt.pscad.PscadEdition;
@@ -82,6 +84,7 @@ final class EquivalenceCases {
                 // Converters, with the models their benches' files give them
                 fromRest("vsc-grid-following", () -> bench("vsc-monopole-infinite-buses")),
                 fromRest("vsc-grid-forming", () -> bench("vsc-monopole-infinite-buses-3")),
+                fromRest("vsc-dc-droop", EquivalenceCases::dcDroop),
                 new Case("vsc-islanding", () -> bench("vsc-monopole-island"), List.of(ExampleNetworks.VSC_MONOPOLE_ISLANDING), SETTINGS,
                         Kind.FROM_REST),
                 // The events
@@ -109,6 +112,15 @@ final class EquivalenceCases {
     private static Network bench(String bench) {
         return EmtExtensionsXmlReader.readNetwork(ExampleNetworks.resource("/" + bench + ".xiidm"),
                 ExampleNetworks.resource("/" + bench + "-extensions.xml"));
+    }
+
+    /** Example 4's three stations, VSC2 and VSC3 on the DC voltage droop, VSC1 holding the DC voltage; its generators infinite buses. */
+    private static Network dcDroop() {
+        Network network = bench("vsc-three-terminal-vdc-droop");
+        for (String generator : List.of("GEN1", "GEN2", "GEN3")) {
+            network.getGenerator(generator).addExtension(GeneratorModel.class, new InfiniteBusGeneratorModel(5000.0, 10.0));
+        }
+        return network;
     }
 
     private static Network bergeronLine() {
