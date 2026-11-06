@@ -8,15 +8,16 @@ import java.nio.file.Path;
 import java.util.regex.Pattern;
 
 /**
- * What of a PSCAD build's files ({@code Main.f}, {@code Main.dta}) says where, when and through which route it was built
- * rather than what: left out, so that two builds of one circuit compare equal.
+ * What of a PSCAD build's files ({@code Main.f}, {@code Main.dta}, its station's) says where, when and through which route
+ * it was built rather than what: left out, so that two builds of one circuit compare equal.
  *
  * <ul>
  *     <li>the folder it was built in;</li>
  *     <li>each component's id, which PSCAD numbers its own way for a project created through its automation library -
- *     {@code COMPONENT_ID}, and the messages and warnings it tags with it;</li>
+ *     every call it is passed to with {@code ICALL_NO} - {@code COMPONENT_ID}, messages, warnings, the faults' logic;</li>
  *     <li>the Fortran continuation lines those ids' lengths move, joined back into one;</li>
- *     <li>the {@code Main} page's description, cosmetic.</li>
+ *     <li>the project's top page's name, its {@code Station} in a {@code .pscx}, {@code DS} ("default station") in a project
+ *     the library creates - in the station's own files, its name and its data file's.</li>
  * </ul>
  *
  * @author Jean-Baptiste Heyberger : jean-baptiste.heyberger@supergrid-institute.com
@@ -26,8 +27,8 @@ final class PscadBuildNormalizer {
     private static final Pattern LINE_ENDS = Pattern.compile("\r\n?");
     /** A free-form continuation: a line ending in {@code &}, the next one starting with blanks and {@code &}. */
     private static final Pattern CONTINUATION = Pattern.compile("&\n {5}&");
-    private static final Pattern COMPONENT_IDS = Pattern.compile("(COMPONENT_ID|EMTDC_MESSAGE|EMTDC_WARN|EMTDC_ERROR)\\(ICALL_NO,\\d+");
-    private static final Pattern DESCRIPTION = Pattern.compile("(?m)^! Description {3}:.*$");
+    private static final Pattern COMPONENT_IDS = Pattern.compile("\\(ICALL_NO,\\d+");
+    private static final Pattern STATION = Pattern.compile("(?m)^(! Component {5}: )(?:Station|DS)$|'(?:Station|DS)\\.dta'");
 
     private PscadBuildNormalizer() {
     }
@@ -38,7 +39,7 @@ final class PscadBuildNormalizer {
             normalized = normalized.replace(dir, "<project dir>");
         }
         normalized = CONTINUATION.matcher(normalized).replaceAll("");
-        normalized = COMPONENT_IDS.matcher(normalized).replaceAll("$1(ICALL_NO,<id>");
-        return DESCRIPTION.matcher(normalized).replaceAll("! Description   : <description>");
+        normalized = COMPONENT_IDS.matcher(normalized).replaceAll("(ICALL_NO,<id>");
+        return STATION.matcher(normalized).replaceAll(m -> m.group(1) != null ? m.group(1) + "<station>" : "'<station>.dta'");
     }
 }

@@ -4,16 +4,11 @@
  */
 package com.supergrid.simuemt.pscadpro;
 
-import com.powsybl.iidm.network.Network;
-import com.powsybl.simuemt.extensions.line.BergeronLineModel;
-import com.powsybl.simuemt.pscad.PscadEdition;
 import com.powsybl.simuemt.pscad.PscadFileWriter;
-import com.powsybl.simuemt.pscad.PscadSimulationSettings;
-import com.powsybl.simuemt.testresources.ExampleNetworks;
+import com.powsybl.simuemt.pscad.PscadProjectSerializer;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import java.io.IOException;
@@ -23,15 +18,14 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The script builds, in the real PSCAD, the circuit the {@code .pscx} is: each network written both ways, both built by
- * PSCAD, and the Fortran EMTDC is compiled from - {@code Main.f}, and {@code Main.dta}, its network data - the same. It
- * stops short of linking an executable, so it needs no linker: what holds the two routes to each other where a run cannot
+ * The script builds, in the real PSCAD, the circuit the {@code .pscx} is: each case of {@link EquivalenceCases} written both
+ * ways, both built by PSCAD, and every file EMTDC is compiled from the same - {@code Main.f}, {@code Main.dta} its network
+ * data, and those of the project's own components. It stops short of linking an executable, so it needs no linker: what holds the two routes to each other where a run cannot
  * be made, and what says a difference in a run is not the script's.
  *
  * <p>Tagged {@code pscad}: run with {@code mvn test -Ppscad}, on a machine with PSCAD 5.1 Professional licensed and its
@@ -43,41 +37,58 @@ import static org.assertj.core.api.Assertions.assertThat;
 class PscadProEquivalenceTest {
 
     private static final PscadProSettings PRO = PscadProSettings.defaults();
-    private static final PscadSimulationSettings SETTINGS = new PscadSimulationSettings(50.0e-6, 0.2, 50.0, PscadEdition.PROFESSIONAL);
+    private static final String STATION = "Station.";
+    private static final String DEFAULT_STATION = "DS.";
 
-    static Stream<Arguments> networks() {
-        return Stream.of(
-                Arguments.of("two-bus", (Supplier<Network>) ExampleNetworks::createTwoBusNetworkWithIdealInfiniteBusGenerator),
-                Arguments.of("bergeron-line", (Supplier<Network>) () -> {
-                    Network network = ExampleNetworks.createTwoBusNetworkWithIdealInfiniteBusGenerator();
-                    network.getLine("L1_2").addExtension(BergeronLineModel.class, new BergeronLineModel(320.0, 3.3e-4));
-                    return network;
-                }),
-                Arguments.of("transformer", (Supplier<Network>) ExampleNetworks::createThreeBusNetworkWithTransformerAndEmtExtensions),
-                Arguments.of("machine-ac1a", (Supplier<Network>) ExampleNetworks::createTwoBusNetworkWithAc1A),
-                Arguments.of("wind-turbine", (Supplier<Network>) ExampleNetworks::createWindTurbineNetwork));
+    /** Every case, or those named in {@code -Dequivalence.cases=two-bus,machine-ac1a}: each takes two PSCAD builds. */
+    static Stream<EquivalenceCases.Case> cases() {
+        String only = System.getProperty("equivalence.cases", "");
+        List<String> names = only.isBlank() ? List.of() : List.of(only.split(","));
+        return EquivalenceCases.all().filter(c -> names.isEmpty() || names.contains(c.name()));
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("networks")
-    void theScriptBuildsWhatThePscxBuilds(String name, Supplier<Network> networks, @TempDir Path tempDir) throws Exception {
+    @MethodSource("cases")
+    void theScriptBuildsWhatThePscxBuilds(EquivalenceCases.Case equivalenceCase, @TempDir Path tempDir) throws Exception {
         Path pscxDir = Files.createDirectories(tempDir.resolve("pscx"));
         Path scriptDir = Files.createDirectories(tempDir.resolve("script"));
-        PscadFileWriter.PscadProject pscx = PscadFileWriter.write(ExampleNetworks.withLoadFlow(networks.get()), pscxDir, SETTINGS);
-        PscadFileWriter.PscadProject script = PscadFileWriter.write(ExampleNetworks.withLoadFlow(networks.get()), scriptDir, SETTINGS, List.of(),
-                PscadPythonScriptWriter.INSTANCE);
+        PscadFileWriter.PscadProject pscx = equivalenceCase.write(pscxDir, PscadProjectSerializer.PSCX);
+        PscadFileWriter.PscadProject script = equivalenceCase.write(scriptDir, PscadPythonScriptWriter.INSTANCE);
 
         Path reference = buildPscx(pscx.file());
-        Path built = PscadProRunner.compile(script.file(), PRO).buildFolder();
+        PscadProRunner.Result compiled = PscadProRunner.compile(script.file(), PRO);
+        Path built = compiled.buildFolder();
 
-        for (String file : List.of("Main.f", "Main.dta")) {
-            // Kept, normalized, for whoever has to see a difference: target/equivalence/<network>/
-            Path kept = Files.createDirectories(Path.of("target", "equivalence", name));
-            Files.writeString(kept.resolve("pscx-" + file), normalized(reference.resolve(file), pscxDir));
-            Files.writeString(kept.resolve("script-" + file), normalized(built.resolve(file), scriptDir));
-            assertThat(normalized(built.resolve(file), scriptDir)).as("%s of %s", file, name)
-                    .isEqualTo(normalized(reference.resolve(file), pscxDir));
+        // Every file EMTDC is compiled from: Main's, and those of the project's own components
+        List<String> sources;
+        try (Stream<Path> files = Files.list(reference)) {
+            sources = files.map(f -> f.getFileName().toString()).filter(f -> f.endsWith(".f") || f.endsWith(".dta")).sorted().toList();
         }
+        assertThat(sources).contains("Main.f", "Main.dta");
+        Path kept = Files.createDirectories(Path.of("target", "equivalence", equivalenceCase.name()));
+        // What the script left out - a parameter a component's form does not have, which the .pscx carried and PSCAD ignored
+        Files.write(kept.resolve("warnings.txt"), compiled.warnings());
+        for (String file : sources) {
+            // Kept, normalized, for whoever has to see a difference: target/equivalence/<case>/
+            String expected = normalized(reference.resolve(file), pscxDir);
+            Files.writeString(kept.resolve("pscx-" + file), expected);
+            // The project's top page: its Station in a .pscx, DS ("default station") in a project the library creates
+            String builtFile = file.startsWith(STATION) ? DEFAULT_STATION + file.substring(STATION.length()) : file;
+            if (!Files.exists(built.resolve(builtFile)) && file.endsWith(".dta") && !holdsData(reference.resolve(file))) {
+                // A station's data file with nothing in it, which only a project PSCAD loads is given
+                continue;
+            }
+            assertThat(built.resolve(builtFile)).as("%s of %s", builtFile, equivalenceCase).exists();
+            String actual = normalized(built.resolve(builtFile), scriptDir);
+            Files.writeString(kept.resolve("script-" + file), actual);
+            assertThat(actual).as("%s of %s", file, equivalenceCase).isEqualTo(expected);
+        }
+    }
+
+    /** Whether a data file holds any data: anything but comments, its sections' headings and its end. */
+    private static boolean holdsData(Path dta) throws IOException {
+        return Files.readAllLines(dta, StandardCharsets.ISO_8859_1).stream().map(String::strip)
+                .anyMatch(line -> !line.isEmpty() && !line.startsWith("!") && !line.endsWith(":") && !"ENDPAGE".equals(line));
     }
 
     /** The build folder PSCAD made of a {@code .pscx}. */

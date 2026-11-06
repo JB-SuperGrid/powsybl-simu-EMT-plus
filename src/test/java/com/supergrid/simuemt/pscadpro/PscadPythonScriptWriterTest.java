@@ -60,7 +60,7 @@ class PscadPythonScriptWriterTest {
         assertThat(i).isEqualTo(placed.size());
         // Parameters as PSCAD's form holds them, past the library's codec: a choice by its index - the source's single-line view.
         assertThat(script).contains("place(canvas, \"master:source3\", ").contains("\"Ctrl\": \"0\"").contains("\"View\": \"1\"")
-                .contains("component._parameters(None, -1, parameters)")
+                .contains("component._parameters(None, -1, {name: value for name, value in parameters.items() if name in known})")
                 .contains("\"Name\": \"V_B1_A\", \"Group\": \"Bus voltages\"");
     }
 

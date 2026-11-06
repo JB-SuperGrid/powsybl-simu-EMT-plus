@@ -42,8 +42,10 @@ Phasor b2 = run.output().fundamentalPhasor(run.project().circuit().voltageChanne
 
 - `mvn test`: the script as written, without PSCAD (layout, settings, definitions, Python compiles it).
 - `mvn test -Ppscad`: the real PSCAD.
-  - `PscadProEquivalenceTest` needs no linker. Each network is written both as a `.pscx` and as a script, both are built
-    by PSCAD, and the EMTDC Fortran they compile to (`Main.f`, `Main.dta`) must be the same, component ids aside.
-    Normalized copies are kept in `target/equivalence/`.
+  - `PscadProEquivalenceTest` needs no linker. Each case of `EquivalenceCases` (19: sources, lines, transformers,
+    machines and their controls, the WT4B's Fortran, VSCs, arrester, motor, faults, breakers, load step, templates) is
+    written both as a `.pscx` and as a script, both are built by PSCAD, and every file EMTDC compiles from must be the
+    same, component ids and the station's name aside. Normalized copies and the script's warnings are kept in
+    `target/equivalence/`. Takes about 45 min; `-Dequivalence.cases=two-bus,wind-turbine` runs only those.
   - `PscadProSimulationTest` runs the networks. Each network is built, compiled and run, and what EMTDC wrote is held to the
   circuit's phasor steady state (`PscadSteadyState`), as upstream holds its hand-made PSCAD Free runs.

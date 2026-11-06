@@ -34,7 +34,8 @@ import java.util.Map;
  *
  * <p>The script reports what it did in {@code <name>.result} beside itself, one {@code key=value} per line: {@code status}
  * ({@code ran}, {@code built}, {@code build_failed} or {@code failed}), {@code build_folder} - where EMTDC writes its output,
- * named after the compiler - and an {@code error} line per error PSCAD reported. {@link PscadProRunner} reads it.
+ * named after the compiler - an {@code error} line per error PSCAD reported, and a {@code warning} line per parameter left out
+ * because the component's form has none of that name (PSCAD leaves such a parameter out of a {@code .pscx} it loads). {@link PscadProRunner} reads it.
  *
  * @author Jean-Baptiste Heyberger : jean-baptiste.heyberger@supergrid-institute.com
  */
@@ -124,13 +125,22 @@ public final class PscadPythonScriptWriter implements PscadProjectSerializer {
 
     private static void appendHelpers(StringBuilder py) {
         py.append("""
+                WARNINGS = []
+
                 def place(canvas, definition, x, y, parameters):
-                    \"\"\"A component at (x, y), canvas units; its parameters as PSCAD's form holds them, past the codec.\"\"\"
+                    \"\"\"A component at (x, y), canvas units; its parameters as PSCAD's form holds them, past the codec.
+
+                    A parameter the component's form does not have is left out, as PSCAD leaves it out of a .pscx it
+                    loads - and reported as a warning, where the .pscx would have said nothing.\"\"\"
                     component = canvas.create_component(definition, x // GRID, y // GRID)
                     if component is None:
                         raise RuntimeError(f"PSCAD created no {definition} at ({x}, {y})")
                     if parameters:
-                        component._parameters(None, -1, parameters)
+                        known = component.parameters().keys()
+                        unknown = [name for name in parameters if name not in known]
+                        if unknown:
+                            WARNINGS.append(f"{definition} at ({x}, {y}): no parameter {', '.join(unknown)} in its form, left out")
+                        component._parameters(None, -1, {name: value for name, value in parameters.items() if name in known})
                     return component
 
                 def transmission_line(canvas, definition, x, y, span, parameters):
@@ -177,6 +187,8 @@ public final class PscadPythonScriptWriter implements PscadProjectSerializer {
                         result.write(f"build_folder={build_folder}\\n")
                         for error in errors:
                             result.write("error=" + " ".join(str(error).split()) + "\\n")
+                        for warning in WARNINGS:
+                            result.write("warning=" + " ".join(str(warning).split()) + "\\n")
 
                 def main():
                     parser = argparse.ArgumentParser(description="Builds and runs PSCAD project " + NAME)
@@ -200,6 +212,7 @@ public final class PscadPythonScriptWriter implements PscadProjectSerializer {
                         project = pscad.create_case(path)
                         for _, xml in DEFINITIONS:
                             project.create_definition(xml)
+                        project.definition("Main").parameters(desc="Main Page")  # as a .pscx has it
                         canvas = project.canvas("Main")
                         canvas.parameters(size=PAGE_SIZE)
                         draw(canvas)

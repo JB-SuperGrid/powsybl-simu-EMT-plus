@@ -32,12 +32,14 @@ public final class PscadProRunner {
      * @param status      {@code ran}, {@code built}, {@code build_failed} or {@code failed}
      * @param buildFolder where EMTDC wrote its output, {@code null} if the project was never built
      * @param errors      PSCAD's errors, or the script's own
+     * @param warnings    what the script left out of the project, and why
      */
-    public record Result(String status, Path buildFolder, List<String> errors) {
+    public record Result(String status, Path buildFolder, List<String> errors, List<String> warnings) {
 
         public Result {
             Objects.requireNonNull(status);
             errors = List.copyOf(errors);
+            warnings = List.copyOf(warnings);
         }
 
         public boolean ran() {
@@ -126,6 +128,7 @@ public final class PscadProRunner {
         String status = null;
         Path buildFolder = null;
         List<String> errors = new ArrayList<>();
+        List<String> warnings = new ArrayList<>();
         try {
             for (String line : Files.readAllLines(resultFile, StandardCharsets.UTF_8)) {
                 int equals = line.indexOf('=');
@@ -138,6 +141,7 @@ public final class PscadProRunner {
                     case "status" -> status = value;
                     case "build_folder" -> buildFolder = value.isBlank() ? null : Path.of(value);
                     case "error" -> errors.add(value);
+                    case "warning" -> warnings.add(value);
                     default -> {
                         // a key of a later script, nothing to act on
                     }
@@ -149,7 +153,7 @@ public final class PscadProRunner {
         if (status == null) {
             throw new PowsyblException("SimuEmt Plus: no status in " + resultFile);
         }
-        return new Result(status, buildFolder, errors);
+        return new Result(status, buildFolder, errors, warnings);
     }
 
     private static PowsyblException failure(Path script, Result result) {
