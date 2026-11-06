@@ -12,21 +12,21 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The script builds, in the real PSCAD, the circuit the {@code .pscx} is: each case of {@link EquivalenceCases} written both
- * ways, both built by PSCAD, and every file EMTDC is compiled from the same - {@code Main.f}, {@code Main.dta} its network
+ * The script draws, in the real PSCAD, the circuit the {@code .pscx} is: each case of {@link EquivalenceCases} written both
+ * ways - the {@code .pscx} loaded whole, as {@link PscadProSimulation} runs it, and the script drawing it component by component
+ * through PSCAD's documented library - both built by PSCAD, and every file EMTDC is compiled from the same - {@code Main.f}, {@code Main.dta} its network
  * data, and those of the project's own components. It stops short of linking an executable, so it needs no linker: what holds the two routes to each other where a run cannot
- * be made, and what says a difference in a run is not the script's.
+ * be made, what says a difference in a run is not the file's, and
+ * what tells, on a new PSCAD, that the file is still read as the library would draw it.
  *
  * <p>Tagged {@code pscad}: run with {@code mvn test -Ppscad}, on a machine with PSCAD 5.1 Professional licensed and its
  * Fortran compiler.
@@ -55,7 +55,7 @@ class PscadProEquivalenceTest {
         PscadFileWriter.PscadProject pscx = equivalenceCase.write(pscxDir, PscadProjectSerializer.PSCX);
         PscadFileWriter.PscadProject script = equivalenceCase.write(scriptDir, PscadPythonScriptWriter.INSTANCE);
 
-        Path reference = buildPscx(pscx.file());
+        Path reference = PscadProRunner.compile(pscx.file(), PRO).buildFolder();
         PscadProRunner.Result compiled = PscadProRunner.compile(script.file(), PRO);
         Path built = compiled.buildFolder();
 
@@ -89,23 +89,6 @@ class PscadProEquivalenceTest {
     private static boolean holdsData(Path dta) throws IOException {
         return Files.readAllLines(dta, StandardCharsets.ISO_8859_1).stream().map(String::strip)
                 .anyMatch(line -> !line.isEmpty() && !line.startsWith("!") && !line.endsWith(":") && !"ENDPAGE".equals(line));
-    }
-
-    /** The build folder PSCAD made of a {@code .pscx}. */
-    private static Path buildPscx(Path pscx) throws IOException, InterruptedException {
-        Path helper = pscx.getParent().resolve("build_pscx.py");
-        try (InputStream in = PscadProEquivalenceTest.class.getResourceAsStream("/build_pscx.py")) {
-            Files.copy(in, helper);
-        }
-        List<String> command = new java.util.ArrayList<>(PRO.pythonCommand());
-        command.addAll(List.of(helper.toString(), pscx.toString(), "--fortran", PRO.fortranCompiler(), "--version", PRO.pscadVersion()));
-        Process process = new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(pscx.getParent().resolve("build_pscx.log").toFile()).start();
-        assertThat(process.waitFor(10, TimeUnit.MINUTES)).isTrue();
-        String name = pscx.getFileName().toString().replace(".pscx", "");
-        PscadProRunner.Result result = PscadProRunner.read(pscx.getParent().resolve(name + ".result"));
-        assertThat(result.buildFolder()).as("%s built: %s", pscx, result.errors()).isNotNull();
-        assertThat(result.buildFolder().resolve("Main.f")).exists();
-        return result.buildFolder();
     }
 
     /** A build's file, the folder it was built in and the instant it was built at left out. */

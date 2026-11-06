@@ -12,6 +12,8 @@ import com.powsybl.simuemt.extensions.hvdc.AveragedVscModel;
 import com.powsybl.simuemt.extensions.hvdc.DcVoltageDroopLaw;
 import com.powsybl.simuemt.extensions.hvdc.VoltageSourceConverterModel;
 import com.powsybl.simuemt.pscad.PscadEdition;
+import com.powsybl.simuemt.pscad.PscadFileWriter;
+import com.powsybl.simuemt.pscad.PscadProjectSerializer;
 import com.powsybl.simuemt.pscad.PscadSimulationSettings;
 import com.powsybl.simuemt.pscad.PscadSteadyState;
 import com.powsybl.simuemt.testresources.ExampleNetworks;
@@ -30,7 +32,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;
 
 /**
- * The real PSCAD Professional, through its automation library: each network written as a script, built, compiled, run, and
+ * The real PSCAD Professional, through its automation library: each network written as its {@code .pscx}, loaded, built, compiled, run, and
  * what EMTDC wrote held to the circuit's own phasor steady state ({@link PscadSteadyState}), solved independently of PSCAD -
  * as {@code powsybl-simu-emt-pscad}'s tests hold the runs made by hand in PSCAD Free.
  *
@@ -52,8 +54,8 @@ class PscadProSimulationTest {
 
         PscadProSimulation.PscadProRun run = PscadProSimulation.run(network, tempDir, settings, List.of(), PRO);
 
-        assertThat(run.project().file()).hasFileName("two_bus.py");
-        assertThat(tempDir.resolve("two_bus.pscx")).exists();
+        assertThat(run.project().file()).hasFileName("two_bus.pscx");
+        assertThat(tempDir.resolve(PscadProRunner.DRIVER)).exists();
         PscadSteadyState steady = PscadSteadyState.solve(run.project().circuit(), settings);
         for (String bus : List.of("B1", "B2")) {
             for (char phase : "ABC".toCharArray()) {
@@ -76,9 +78,9 @@ class PscadProSimulationTest {
         ExampleNetworks.withLoadFlow(network);
         PscadSimulationSettings settings = new PscadSimulationSettings(20.0e-6, 0.3, 50.0, PscadEdition.PROFESSIONAL);
 
-        PscadProSimulation.PscadProRun run = PscadProSimulation.run(network, tempDir, settings, List.of(), PRO);
+        PscadProSimulation.PscadProRun run = PscadProSimulation.runFromSteadyState(network, tempDir, settings, List.of(), PRO);
 
-        assertThat(Files.list(tempDir.resolve("template")).anyMatch(p -> p.getFileName().toString().endsWith(".py"))).isTrue();
+        assertThat(Files.list(tempDir.resolve("template")).anyMatch(p -> p.getFileName().toString().endsWith(".pscx"))).isTrue();
         PscadSteadyState steady = PscadSteadyState.solve(run.project().circuit(), settings);
         for (String bus : List.of("B1", "B2")) {
             double crest = steady.voltage(bus, 'A').magnitude();
@@ -138,14 +140,14 @@ class PscadProSimulationTest {
         softly.assertAll();
     }
 
-    /** A Fortran component of the project's own - the WT4B wind turbine's controls - built and compiled by PSCAD. */
+    /** A Fortran component of the project's own - the WT4B wind turbine's controls - loaded, built and compiled by PSCAD. */
     @Test
     void aFortranComponentCompiles(@TempDir Path tempDir) {
         Network network = ExampleNetworks.withLoadFlow(ExampleNetworks.createWindTurbineNetwork());
         PscadSimulationSettings settings = new PscadSimulationSettings(50.0e-6, 0.2, 50.0, PscadEdition.PROFESSIONAL);
-        Path script = com.powsybl.simuemt.pscad.PscadFileWriter.write(network, tempDir, settings, List.of(), PscadPythonScriptWriter.INSTANCE).file();
+        Path pscx = PscadFileWriter.write(network, tempDir, settings, List.of(), PscadProjectSerializer.PSCX).file();
 
-        PscadProRunner.Result result = PscadProRunner.build(script, PRO);
+        PscadProRunner.Result result = PscadProRunner.build(pscx, PRO);
 
         assertThat(result.errors()).isEmpty();
         assertThat(result.buildFolder()).isDirectory();

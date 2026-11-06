@@ -8,6 +8,7 @@ import com.powsybl.iidm.network.Network;
 import com.powsybl.simuemt.extensions.event.EmtEvent;
 import com.powsybl.simuemt.pscad.PscadFileWriter;
 import com.powsybl.simuemt.pscad.PscadOutput;
+import com.powsybl.simuemt.pscad.PscadProjectSerializer;
 import com.powsybl.simuemt.pscad.PscadSimulationSettings;
 
 import java.io.IOException;
@@ -18,18 +19,22 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * An IIDM network simulated in PSCAD Professional, end to end: written as a project script ({@link PscadPythonScriptWriter}),
- * built, compiled and run by PSCAD ({@link PscadProRunner}), and its curves read back ({@link PscadOutput}) - what
- * {@code powsybl-simu-emt-pscad} leaves to whoever opens its {@code .pscx} in PSCAD Free.
+ * An IIDM network simulated in PSCAD Professional, end to end: written as the {@code .pscx} {@code powsybl-simu-emt-pscad}
+ * writes for PSCAD Free ({@link PscadProjectSerializer#PSCX}), loaded, built, compiled and run by PSCAD through its
+ * automation library ({@link PscadProRunner}), and its curves read back ({@link PscadOutput}) - what PSCAD Free leaves to
+ * whoever opens the {@code .pscx} by hand.
  *
- * <p>Everything about the circuit and its run is {@link PscadFileWriter}'s, as for the {@code .pscx}: the same circuit, the
- * same events, and in steady state the same template and restart - this only writes them as scripts and runs them.
+ * <p>Everything about the circuit and its run is {@link PscadFileWriter}'s: the same circuit, the same events, and in steady
+ * state the same template and restart - this only has PSCAD run them. The project is loaded whole, not drawn through the
+ * library component by component ({@link PscadPythonScriptWriter}): PSCAD takes each component drawn as an edit of its
+ * canvas, some 0.7 s apiece - 8 minutes for a wind turbine's 683 - where it loads the whole file in a second. The drawing is
+ * held to the file by {@code PscadProEquivalenceTest}: both give EMTDC the same Fortran.
  *
  * @author Jean-Baptiste Heyberger : jean-baptiste.heyberger@supergrid-institute.com
  */
 public final class PscadProSimulation {
 
-    /** A run: the script and the circuit it was written from, where EMTDC wrote its output, and that output. */
+    /** A run: the project file and the circuit it was written from, where EMTDC wrote its output, and that output. */
     public record PscadProRun(PscadFileWriter.PscadProject project, Path buildFolder, PscadOutput output) {
     }
 
@@ -40,7 +45,7 @@ public final class PscadProSimulation {
     public static PscadProRun run(Network network, Path workDir, PscadSimulationSettings settings, List<? extends EmtEvent> events,
                                   PscadProSettings pro) {
         PscadFileWriter.PscadProject project = PscadFileWriter.write(network, directory(workDir), settings, events,
-                PscadPythonScriptWriter.INSTANCE);
+                PscadProjectSerializer.PSCX);
         return execute(project, pro);
     }
 
@@ -52,10 +57,10 @@ public final class PscadProSimulation {
     public static PscadProRun runFromSteadyState(Network network, Path workDir, PscadSimulationSettings settings,
                                                  List<? extends EmtEvent> events, PscadProSettings pro) {
         PscadFileWriter.PscadProject template = PscadFileWriter.writeTemplate(network, directory(workDir.resolve("template")), settings, events,
-                PscadPythonScriptWriter.INSTANCE);
+                PscadProjectSerializer.PSCX);
         PscadProRun templateRun = execute(template, pro);
         PscadFileWriter.PscadProject restart = PscadFileWriter.writeRestart(network, directory(workDir.resolve("restart")), settings, events,
-                templateRun.buildFolder(), PscadPythonScriptWriter.INSTANCE);
+                templateRun.buildFolder(), PscadProjectSerializer.PSCX);
         return execute(restart, pro);
     }
 
