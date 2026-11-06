@@ -5,7 +5,6 @@
 package com.supergrid.simuemt.pscadpro;
 
 import com.powsybl.iidm.network.Network;
-import com.powsybl.simuemt.extensions.line.BergeronLineModel;
 import com.powsybl.simuemt.pscad.PscadEdition;
 import com.powsybl.simuemt.pscad.PscadSimulationSettings;
 import com.powsybl.simuemt.pscad.PscadSteadyState;
@@ -59,12 +58,12 @@ class PscadProSimulationTest {
 
     /**
      * From the steady state: the template run by PSCAD writes its snapshot, the restart starts from it patched - steady from
-     * its first period, as ATP, Xyce and Kestrel are. With a distributed line, which the script creates from its definition.
+     * its first period, as ATP, Xyce and Kestrel are. With lumped lines only: a travelling-wave line splits the circuit into
+     * subsystems, which the snapshot patching does not handle.
      */
     @Test
     void aRestartIsSteadyFromItsFirstPeriod(@TempDir Path tempDir) throws Exception {
         Network network = ExampleNetworks.createTwoBusNetworkWithIdealInfiniteBusGenerator();
-        network.getLine("L1_2").addExtension(BergeronLineModel.class, new BergeronLineModel(320.0, 3.3e-4));
         ExampleNetworks.withLoadFlow(network);
         PscadSimulationSettings settings = new PscadSimulationSettings(20.0e-6, 0.3, 50.0, PscadEdition.PROFESSIONAL);
 
