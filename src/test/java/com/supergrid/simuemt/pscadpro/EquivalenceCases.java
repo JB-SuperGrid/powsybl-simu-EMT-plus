@@ -85,6 +85,7 @@ final class EquivalenceCases {
                 fromRest("vsc-grid-following", () -> bench("vsc-monopole-infinite-buses")),
                 fromRest("vsc-grid-forming", () -> bench("vsc-monopole-infinite-buses-3")),
                 fromRest("vsc-dc-droop", EquivalenceCases::dcDroop),
+                fromRest("cigre-dcs2", () -> bench("cigre-dcs2")),
                 new Case("vsc-islanding", () -> bench("vsc-monopole-island"), List.of(ExampleNetworks.VSC_MONOPOLE_ISLANDING), SETTINGS,
                         Kind.FROM_REST),
                 // The events
