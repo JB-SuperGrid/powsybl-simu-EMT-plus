@@ -26,9 +26,8 @@ import java.util.Objects;
  *
  * <p>Everything about the circuit and its run is {@link PscadFileWriter}'s: the same circuit, the same events, and in steady
  * state the same template and restart - this only has PSCAD run them. The project is loaded whole, not drawn through the
- * library component by component ({@link PscadPythonScriptWriter}): PSCAD takes each component drawn as an edit of its
- * canvas, some 0.7 s apiece - 8 minutes for a wind turbine's 683 - where it loads the whole file in a second. The drawing is
- * held to the file by {@code PscadProEquivalenceTest}: both give EMTDC the same Fortran.
+ * library component by component: PSCAD takes each component drawn as an edit of its canvas, some 0.7 s apiece - 8 minutes
+ * for a wind turbine's 683 - where it loads the whole file in a second.
  *
  * @author Jean-Baptiste Heyberger : jean-baptiste.heyberger@supergrid-institute.com
  */

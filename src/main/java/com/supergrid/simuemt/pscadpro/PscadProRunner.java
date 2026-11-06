@@ -20,9 +20,8 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * Has PSCAD Professional build and run a project, and reads what it reports: PSCAD launched, the project built, compiled and
- * run, EMTDC's output in its build folder. The project is a {@code .pscx} - loaded whole by {@code pscad_run.py}, the driver
- * this writes beside it - or a script {@link PscadPythonScriptWriter} wrote, which draws it component by component. Either
- * way, the console goes to {@code <name>.log} beside the project, and what was done to {@code <name>.result}.
+ * run, EMTDC's output in its build folder. The project is a {@code .pscx}, loaded whole by {@code pscad_run.py}, the driver
+ * this writes beside it. The console goes to {@code <name>.log} beside the project, and what was done to {@code <name>.result}.
  *
  * <p>A failure is reported, by name, with PSCAD's errors: a missing licence, a compiler that will not link (PSCAD's Intel
  * Fortran needs the Windows SDK's libraries), a run that wrote nothing.
@@ -36,14 +35,12 @@ public final class PscadProRunner {
      * @param status      {@code ran}, {@code built}, {@code build_failed} or {@code failed}
      * @param buildFolder where EMTDC wrote its output, {@code null} if the project was never built
      * @param errors      PSCAD's errors, or the driver's own
-     * @param warnings    what a drawing script left out of the project, and why; none for a {@code .pscx}
      */
-    public record Result(String status, Path buildFolder, List<String> errors, List<String> warnings) {
+    public record Result(String status, Path buildFolder, List<String> errors) {
 
         public Result {
             Objects.requireNonNull(status);
             errors = List.copyOf(errors);
-            warnings = List.copyOf(warnings);
         }
 
         public boolean ran() {
@@ -71,23 +68,10 @@ public final class PscadProRunner {
         return result;
     }
 
-    /** Builds {@code project} without running it - what a check of the circuit PSCAD compiles takes. */
+    /** Builds {@code project} - compiled, linked into EMTDC's executable - without running it. */
     public static Result build(Path project, PscadProSettings settings) {
         Result result = execute(project, settings, true);
         if (!"built".equals(result.status())) {
-            throw failure(project, result);
-        }
-        return result;
-    }
-
-    /**
-     * Has PSCAD turn {@code project} into EMTDC's Fortran - {@code Main.f}, {@code Main.dta} in its build
-     * folder - whether or not an executable is then linked: what the circuit PSCAD was given is, checked without a linker.
-     * Refused only if the project never got as far as its build folder.
-     */
-    public static Result compile(Path project, PscadProSettings settings) {
-        Result result = execute(project, settings, true);
-        if (result.buildFolder() == null || !Files.exists(result.buildFolder().resolve("Main.f"))) {
             throw failure(project, result);
         }
         return result;
@@ -97,9 +81,7 @@ public final class PscadProRunner {
         Path directory = project.toAbsolutePath().getParent();
         String name = projectName(project);
         List<String> command = new ArrayList<>(settings.pythonCommand());
-        if (isPscx(project)) {
-            command.add(driver(directory).toString());
-        }
+        command.add(driver(directory).toString());
         command.add(project.toAbsolutePath().toString());
         command.add("--version");
         command.add(settings.pscadVersion());
@@ -111,7 +93,7 @@ public final class PscadProRunner {
             command.add("--no-run");
         }
         Path log = directory.resolve(name + ".log");
-        Path resultFile = directory.resolve(PscadPythonScriptWriter.resultFileName(name));
+        Path resultFile = directory.resolve(name + ".result");
         try {
             Files.deleteIfExists(resultFile);
             Process process = new ProcessBuilder(command).directory(directory.toFile()).redirectErrorStream(true)
@@ -134,10 +116,6 @@ public final class PscadProRunner {
         return read(resultFile);
     }
 
-    private static boolean isPscx(Path project) {
-        return project.getFileName().toString().endsWith(".pscx");
-    }
-
     /** {@link #DRIVER}, written into {@code directory}. */
     private static Path driver(Path directory) {
         Path driver = directory.resolve(DRIVER);
@@ -156,7 +134,6 @@ public final class PscadProRunner {
         String status = null;
         Path buildFolder = null;
         List<String> errors = new ArrayList<>();
-        List<String> warnings = new ArrayList<>();
         try {
             for (String line : Files.readAllLines(resultFile, StandardCharsets.UTF_8)) {
                 int equals = line.indexOf('=');
@@ -169,9 +146,8 @@ public final class PscadProRunner {
                     case "status" -> status = value;
                     case "build_folder" -> buildFolder = value.isBlank() ? null : Path.of(value);
                     case "error" -> errors.add(value);
-                    case "warning" -> warnings.add(value);
                     default -> {
-                        // a key of a later script, nothing to act on
+                        // a key of a later driver, nothing to act on
                     }
                 }
             }
@@ -181,7 +157,7 @@ public final class PscadProRunner {
         if (status == null) {
             throw new PowsyblException("SimuEmt Plus: no status in " + resultFile);
         }
-        return new Result(status, buildFolder, errors, warnings);
+        return new Result(status, buildFolder, errors);
     }
 
     private static PowsyblException failure(Path project, Result result) {

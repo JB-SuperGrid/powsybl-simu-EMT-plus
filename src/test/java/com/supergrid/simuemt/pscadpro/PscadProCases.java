@@ -30,13 +30,14 @@ import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 /**
- * The networks and scenarios the script is held to the {@code .pscx} on ({@link PscadProEquivalenceTest}): every kind of
- * component and event the PSCAD backend writes - sources, lines, transformers, machines and their controls, Fortran
- * components, voltage source converters, faults, breakers, load steps, arresters, motors - from rest, and as a steady-state run's template.
+ * The networks and scenarios PSCAD Professional builds ({@link PscadProBuildTest}): every kind of component and event the
+ * PSCAD backend writes - sources, lines, transformers, machines and their controls, Fortran components, voltage source
+ * converters, faults, breakers, load steps, arresters, motors - from rest, and as a steady-state run's template. Together
+ * they cover every upstream example network the backend writes.
  *
  * @author Jean-Baptiste Heyberger : jean-baptiste.heyberger@supergrid-institute.com
  */
-final class EquivalenceCases {
+final class PscadProCases {
 
     /** How a case is written: from rest, or as the template a restart is taken from. */
     enum Kind {
@@ -47,7 +48,7 @@ final class EquivalenceCases {
     /** One case: a network, the events it goes through, its settings and how it is written. */
     record Case(String name, Supplier<Network> network, List<? extends EmtEvent> events, PscadSimulationSettings settings, Kind kind) {
 
-        /** The project written into {@code directory} by {@code serializer}. */
+        /** The project written into {@code directory} by {@code serializer}: its {@code .pscx} by default. */
         PscadFileWriter.PscadProject write(Path directory, PscadProjectSerializer serializer) {
             Network loaded = ExampleNetworks.withLoadFlow(network.get());
             return switch (kind) {
@@ -66,14 +67,21 @@ final class EquivalenceCases {
     static final PscadSimulationSettings ON_TIME_STEP = new PscadSimulationSettings(20.0e-6, 0.4, 50.0, PscadEdition.PROFESSIONAL,
             PscadSwitching.ON_TIME_STEP);
 
-    private EquivalenceCases() {
+    private PscadProCases() {
+    }
+
+    /** Every case, or those named in {@code -Dpscad.cases=two-bus,machine-ac1a}. */
+    static Stream<Case> selected() {
+        String only = System.getProperty("pscad.cases", "");
+        List<String> names = only.isBlank() ? List.of() : List.of(only.split(","));
+        return all().filter(c -> names.isEmpty() || names.contains(c.name()));
     }
 
     static Stream<Case> all() {
         return Stream.of(
                 // The circuit's kinds of components
                 fromRest("two-bus", ExampleNetworks::createTwoBusNetworkWithIdealInfiniteBusGenerator),
-                fromRest("bergeron-line", EquivalenceCases::bergeronLine),
+                fromRest("bergeron-line", PscadProCases::bergeronLine),
                 fromRest("transformer", ExampleNetworks::createThreeBusNetworkWithTransformerAndEmtExtensions),
                 fromRest("three-winding-transformer", ExampleNetworks::createFourBusNetworkWithThreeWindingsTransformerAndEmtExtensions),
                 fromRest("machine-ac1a", ExampleNetworks::createTwoBusNetworkWithAc1A),
@@ -107,7 +115,7 @@ final class EquivalenceCases {
                 fromRest("vsc-grid-following", () -> bench("vsc-monopole-infinite-buses")),
                 fromRest("vsc-grid-forming", () -> bench("vsc-monopole-infinite-buses-3")),
                 fromRest("vsc-dc-chopper", () -> bench("vsc-monopole-infinite-buses-2")),
-                fromRest("vsc-dc-droop", EquivalenceCases::dcDroop),
+                fromRest("vsc-dc-droop", PscadProCases::dcDroop),
                 fromRest("cigre-dcs2", () -> bench("cigre-dcs2")),
                 new Case("vsc-islanding", () -> bench("vsc-monopole-island"), List.of(ExampleNetworks.VSC_MONOPOLE_ISLANDING), SETTINGS,
                         Kind.FROM_REST),

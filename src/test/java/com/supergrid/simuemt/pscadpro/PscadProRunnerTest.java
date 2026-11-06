@@ -54,7 +54,6 @@ class PscadProRunnerTest {
         assertThat(result.ran()).isFalse();
         assertThat(result.buildFolder()).hasFileName("two_bus.if18");
         assertThat(result.errors()).containsExactly("Input port 'I' is floating.", "LINK : fatal error LNK1104");
-        assertThat(result.warnings()).isEmpty();
     }
 
     private static boolean pythonAvailable() {

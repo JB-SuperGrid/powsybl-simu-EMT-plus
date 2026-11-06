@@ -16,11 +16,9 @@ output.
 
 Circuit, events, template and restart all stay `PscadFileWriter`'s: whatever upstream adds to the `.pscx` runs here as is.
 
-`PscadPythonScriptWriter` writes the same project as a script that draws it through the library, component by component
-(`<name>.py`). It is not how a simulation is run: PSCAD takes each component drawn as an edit of its canvas, some 0.7 s
-apiece, 8 minutes for a wind turbine's 683 components, where it loads the whole file in a second. It is what the `.pscx`
-is held to (`PscadProEquivalenceTest`): what the documented library draws and what PSCAD reads from the file must compile
-to the same Fortran.
+The project is loaded whole rather than drawn through the library component by component: PSCAD takes each component drawn
+as an edit of its canvas, some 0.7 s apiece (8 minutes for a wind turbine's 683 components), where it loads the whole file
+in a second.
 
 ## Use
 
@@ -37,8 +35,7 @@ Phasor b2 = run.output().fundamentalPhasor(run.project().circuit().voltageChanne
 
 ## Requirements
 
-- powsybl-simu-emt with `PscadDrawing` / `PscadProjectSerializer` (upstream branch `pscad-drawing-api`, until merged:
-  `mvn install -pl simuemt-pscad -am` in the upstream checkout).
+- powsybl-simu-emt's `simuemt-pscad`, installed from the upstream checkout: `mvn install -pl simuemt-pscad -am`.
 - PSCAD 5.1 Professional, licensed, with `mhi.pscad` installed in the Python that `PscadProSettings.pythonCommand` runs
   (`py` by default).
 - A Fortran compiler PSCAD detects. The default is Intel Fortran Classic 64-bit, which also needs Visual Studio's C++
@@ -46,14 +43,12 @@ Phasor b2 = run.output().fundamentalPhasor(run.project().circuit().voltageChanne
 
 ## Tests
 
-- `mvn test`: without PSCAD: the drawing script as written (layout, settings, definitions), and Python compiles it and the driver.
+- `mvn test`: without PSCAD: every case's `.pscx` is written, the driver ships and Python compiles it, its report is read.
 - `mvn test -Ppscad`: the real PSCAD.
-  - `PscadProEquivalenceTest` needs no linker. Each case of `EquivalenceCases` (42: sources, lines, transformers,
-    machines and their exciters, governors, limiters and controllers, wind turbines, VSCs and DC grids, arrester, motors, faults,
-    breakers, load step, templates) is written both as a `.pscx`, loaded whole, and as a script, drawn component by
-    component; both are built by PSCAD, and every file EMTDC compiles from must be the
-    same, component ids and the station's name aside. Normalized copies and the script's warnings are kept in
-    `target/equivalence/`. Takes about 2 h 30, the drawing most of it; `-Dequivalence.cases=two-bus,wind-turbine` runs only those.
+  - `PscadProBuildTest` builds each case of `PscadProCases` (42, every upstream example network the backend writes:
+    sources, lines, transformers, machines and their exciters, governors, limiters and controllers, wind turbines, VSCs
+    and DC grids, arrester, motors, faults, breakers, load step, templates): its `.pscx` loaded, compiled and linked into
+    EMTDC's executable, without an error. About 15 s a case; `-Dpscad.cases=two-bus,wind-turbine` builds only those.
   - `PscadProSimulationTest` runs the networks. Each `.pscx` is loaded, built, compiled and run, and what EMTDC wrote is
     held to the circuit's phasor steady state (`PscadSteadyState`), as upstream holds its hand-made PSCAD Free runs, and
     the multi-terminal DC grids to their load flow and droop curves.

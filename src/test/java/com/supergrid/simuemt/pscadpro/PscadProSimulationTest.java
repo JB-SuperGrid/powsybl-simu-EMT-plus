@@ -94,7 +94,7 @@ class PscadProSimulationTest {
 
     /**
      * The multi-terminal DC networks: example 4's three stations, VSC2 and VSC3 on the DC voltage droop ({@link
-     * EquivalenceCases#dcDroop}), and CIGRE B4 DCS2, its DC lines meeting at BMB5, held up by its two onshore droops alone. From
+     * PscadProCases#dcDroop}), and CIGRE B4 DCS2, its DC lines meeting at BMB5, held up by its two onshore droops alone. From
      * rest - their AC and DC sides separate subsystems, which a snapshot restart does not patch - over 4 s: the DC side charged
      * while the controls' integrals are held, until 2 s as a template's are, then let go. In the last 40 ms, each droop
      * converter's power where its curve meets the DC voltage it settles at, as Xyce's and Kestrel's runs hold it: the load
@@ -107,7 +107,7 @@ class PscadProSimulationTest {
     @ParameterizedTest(name = "{0}")
     @ValueSource(strings = {"vsc-three-terminal-vdc-droop", "cigre-dcs2"})
     void aMultiTerminalDcNetworkHoldsItsOperatingPoint(String bench, @TempDir Path tempDir) throws Exception {
-        Network network = ExampleNetworks.withLoadFlow("cigre-dcs2".equals(bench) ? EquivalenceCases.bench(bench) : EquivalenceCases.dcDroop());
+        Network network = ExampleNetworks.withLoadFlow("cigre-dcs2".equals(bench) ? PscadProCases.bench(bench) : PscadProCases.dcDroop());
         double runEnd = 4.0;
         PscadSimulationSettings settings = new PscadSimulationSettings(50.0e-6, runEnd, 50.0, PscadEdition.PROFESSIONAL);
 
