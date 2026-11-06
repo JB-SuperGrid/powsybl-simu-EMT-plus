@@ -37,6 +37,6 @@ class PscadProCasesTest {
 
     @Test
     void theCasesHaveDistinctNames() {
-        assertThat(PscadProCases.all().map(PscadProCases.Case::name)).doesNotHaveDuplicates().hasSize(42);
+        assertThat(PscadProCases.all().map(PscadProCases.Case::name)).doesNotHaveDuplicates().hasSize(55);
     }
 }

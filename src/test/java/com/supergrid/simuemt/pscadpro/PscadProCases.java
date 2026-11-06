@@ -4,8 +4,11 @@
  */
 package com.supergrid.simuemt.pscadpro;
 
+import com.powsybl.iidm.network.Bus;
 import com.powsybl.iidm.network.Network;
+import com.powsybl.iidm.network.TopologyKind;
 import com.powsybl.iidm.network.TwoSides;
+import com.powsybl.iidm.network.VoltageLevel;
 import com.powsybl.simuemt.extensions.GeneratorModel;
 import com.powsybl.simuemt.extensions.event.BranchOperation;
 import com.powsybl.simuemt.extensions.event.BreakerAction;
@@ -16,6 +19,7 @@ import com.powsybl.simuemt.extensions.event.LoadStep;
 import com.powsybl.simuemt.extensions.event.SwitchOperation;
 import com.powsybl.simuemt.extensions.infinitebus.InfiniteBusGeneratorModel;
 import com.powsybl.simuemt.extensions.line.BergeronLineModel;
+import com.powsybl.simuemt.preprocessing.EmtEventsXml;
 import com.powsybl.simuemt.preprocessing.EmtExtensionsXmlReader;
 import com.powsybl.simuemt.pscad.PscadEdition;
 import com.powsybl.simuemt.pscad.PscadFileWriter;
@@ -33,7 +37,7 @@ import java.util.stream.Stream;
  * The networks and scenarios PSCAD Professional builds ({@link PscadProBuildTest}): every kind of component and event the
  * PSCAD backend writes - sources, lines, transformers, machines and their controls, Fortran components, voltage source
  * converters, faults, breakers, load steps, arresters, motors - from rest, and as a steady-state run's template. Together
- * they cover every upstream example network the backend writes.
+ * they cover every upstream example network the backend writes, those past PSCAD Free's 15 electrical nodes among them.
  *
  * @author Jean-Baptiste Heyberger : jean-baptiste.heyberger@supergrid-institute.com
  */
@@ -93,6 +97,22 @@ final class PscadProCases {
                 fromRest("constant-power-load", ExampleNetworks::createTwoBusNetworkWithConstantPowerLoad),
                 fromRest("phase-shifter", ExampleNetworks::createThreeBusNetworkWithPhaseShiftingTransformer),
                 fromRest("wind-turbine-reec-c", ExampleNetworks::createTwoBusNetworkWithReecC),
+                // Past PSCAD Free's 15 electrical nodes: what upstream writes for the Professional edition only
+                new Case("line-closing-at-both-ends", ExampleNetworks::createTwoBusNetworkWithLineDisconnectedAtBothEnds,
+                        events("branch-l1_2b-close-one-0.2-two-0.3"), SETTINGS, Kind.FROM_REST),
+                fromRest("three-winding-open-leg", ExampleNetworks::createThreeBusNetworkWithThreeWindingsTransformerOpenAtLegThree),
+                new Case("three-winding-leg-closing", ExampleNetworks::createThreeBusNetworkWithThreeWindingsTransformerOpenAtLegThree,
+                        events("leg-t2_3_4-three-close-0.2"), SETTINGS, Kind.FROM_REST),
+                fromRest("arrester-on-a-line-out-of-service", ExampleNetworks::createTwoBusNetworkWithArresterAtTheFarEndOfALineOutOfService),
+                fromRest("pure-phase-shifter", ExampleNetworks::createThreeBusNetworkWithPurePhaseShiftingTransformer),
+                fromRest("pure-phase-shifter-ynd11", ExampleNetworks::createThreeBusNetworkWithPurePhaseShiftingYnd11Transformer),
+                fromRest("pure-phase-shifting-leg", ExampleNetworks::createFourBusNetworkWithPurePhaseShiftingLeg),
+                fromRest("phase-shifting-leg-with-windings", ExampleNetworks::createFourBusNetworkWithPhaseShiftingLegAndWindings),
+                fromRest("phase-shifter-and-ratio", () -> withRatio(ExampleNetworks.createThreeBusNetworkWithPurePhaseShiftingTransformer())),
+                fromRest("phase-shifter-ynd11-and-ratio", () -> withRatio(ExampleNetworks.createThreeBusNetworkWithPurePhaseShiftingYnd11Transformer())),
+                fromRest("phase-shifting-leg-and-ratio", () -> withRatio(ExampleNetworks.createFourBusNetworkWithPurePhaseShiftingLeg())),
+                fromRest("phase-shifting-leg-with-windings-and-ratio", () -> withRatio(ExampleNetworks.createFourBusNetworkWithPhaseShiftingLegAndWindings())),
+                fromRest("twelve-bus-chain", PscadProCases::twelveBusChain),
                 // A machine's controls of the project's own, in Fortran: exciters, limiters and controllers
                 fromRest("machine-st4b", ExampleNetworks::createTwoBusNetworkWithSt4B),
                 fromRest("machine-ac8b", ExampleNetworks::createTwoBusNetworkWithAc8B),
@@ -151,6 +171,31 @@ final class PscadProCases {
         Network network = bench("vsc-three-terminal-vdc-droop");
         for (String generator : List.of("GEN1", "GEN2", "GEN3")) {
             network.getGenerator(generator).addExtension(GeneratorModel.class, new InfiniteBusGeneratorModel(5000.0, 10.0));
+        }
+        return network;
+    }
+
+    /** The upstream scenario {@code events/<name>.xml}. */
+    private static List<EmtEvent> events(String name) {
+        return EmtEventsXml.read(ExampleNetworks.resource("/events/" + name + ".xml"));
+    }
+
+    /** {@code network}'s phase tap changers with a ratio tap changer beside each, as upstream folds into their ratio. */
+    private static Network withRatio(Network network) {
+        return ExampleNetworks.withRatioBesideThePhaseTapChangers(network, ExampleNetworks.RATIO_BESIDE_PHASE_RHO, false);
+    }
+
+    /** The two-bus bench carried on to B12 by a line a bus: a circuit whose layout needs a page larger than the smallest. */
+    private static Network twelveBusChain() {
+        Network network = ExampleNetworks.createTwoBusNetworkWithInfiniteBusGenerator();
+        for (int i = 3; i <= 12; i++) {
+            VoltageLevel level = network.newSubstation().setId("SC" + i).add().newVoltageLevel().setId("VLC" + i).setNominalV(400.0)
+                    .setTopologyKind(TopologyKind.BUS_BREAKER).add();
+            Bus bus = level.getBusBreakerView().newBus().setId("B" + i).add();
+            String previous = "B" + (i - 1);
+            network.newLine().setId("LC" + i).setVoltageLevel1(network.getBusBreakerView().getBus(previous).getVoltageLevel().getId())
+                    .setBus1(previous).setConnectableBus1(previous).setVoltageLevel2(level.getId()).setBus2(bus.getId())
+                    .setConnectableBus2(bus.getId()).setR(1.0).setX(10.0).setG1(0.0).setB1(0.0).setG2(0.0).setB2(0.0).add();
         }
         return network;
     }

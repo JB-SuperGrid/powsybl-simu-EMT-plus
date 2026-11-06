@@ -45,10 +45,14 @@ Phasor b2 = run.output().fundamentalPhasor(run.project().circuit().voltageChanne
 
 - `mvn test`: without PSCAD: every case's `.pscx` is written, the driver ships and Python compiles it, its report is read.
 - `mvn test -Ppscad`: the real PSCAD.
-  - `PscadProBuildTest` builds each case of `PscadProCases` (42, every upstream example network the backend writes:
+  - `PscadProBuildTest` builds each case of `PscadProCases` (55, every upstream example network the backend writes, those
+    past PSCAD Free's 15 electrical nodes among them:
     sources, lines, transformers, machines and their exciters, governors, limiters and controllers, wind turbines, VSCs
     and DC grids, arrester, motors, faults, breakers, load step, templates): its `.pscx` loaded, compiled and linked into
     EMTDC's executable, without an error. About 15 s a case; `-Dpscad.cases=two-bus,wind-turbine` builds only those.
   - `PscadProSimulationTest` runs the networks. Each `.pscx` is loaded, built, compiled and run, and what EMTDC wrote is
     held to the circuit's phasor steady state (`PscadSteadyState`), as upstream holds its hand-made PSCAD Free runs, and
     the multi-terminal DC grids to their load flow and droop curves.
+  - `PscadProBeyondFreeTest` runs what upstream writes for the Professional edition only, past Free's 15 nodes, and holds it
+    to what upstream holds ATP, Xyce and Kestrel to: the four phase-shifter benches on the load flow, a line put back into
+    service, a three-winding transformer's leg closed, an open-ended energization with and without its arrester.
