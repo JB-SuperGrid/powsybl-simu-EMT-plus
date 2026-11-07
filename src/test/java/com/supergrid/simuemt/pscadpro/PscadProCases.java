@@ -164,6 +164,10 @@ final class PscadProCases {
                 converters("vsc-blocked", () -> preprocessed("vsc-three-terminal-all-droop", false, false), new ConverterBlocking("VSC1", 2.3)),
                 converters("cigre-dcs2-cmf1-trip", () -> preprocessed("cigre-dcs2", false, false), new ConverterBlocking("CMF1", 2.3),
                         new ConverterBlocking("WTF1", 2.3)),
+                converters("cigre-dcs2-dc-fault-bmf1", PscadProCases::dcs2DcFault, new DcFault("FDC", "BMF1", 0.0, 2.3, 12.0),
+                        new ConverterBlocking("CMB2", 2.302), new ConverterBlocking("CMB3", 2.302), new ConverterBlocking("WTF1", 2.302),
+                        new BranchOperation("TRB2", TwoSides.ONE, 2.36, BreakerAction.OPEN, FaultClearing.AT_CURRENT_ZERO),
+                        new BranchOperation("TRB3", TwoSides.ONE, 2.36, BreakerAction.OPEN, FaultClearing.AT_CURRENT_ZERO)),
                 // CIGRE B4 whole: a solid three-phase fault at BAB1, in its meshed AC system B, cleared after 100 ms
                 // IEEE 14-bus with its DC grid: a solid three-phase fault at bus 4, between its machines and its stations, 100 ms
                 converters("ieee14-dc-fault-b4", () -> preprocessed("ieee14-dc", false, false), new BusFault("F", "B4", "ABC", true, 1.0,
@@ -233,6 +237,15 @@ final class PscadProCases {
         AveragedVscModel model = (AveragedVscModel) converter.getExtension(VoltageSourceConverterModel.class);
         converter.addExtension(VoltageSourceConverterModel.class, new AveragedVscModel(model.getRatedApparentPower(), model.getPhaseReactorResistance(),
                 model.getPhaseReactorReactance(), model.getDcCapacitorEnergyConstant(), 0.1, model.getBridgeInductance()));
+    }
+
+    /** CIGRE DCS2, its stations protected, CMF1 - the faulted node's - with a DC reactor, as upstream's DC fault at BMF1 has it. */
+    private static Network dcs2DcFault() {
+        Network network = bench("cigre-dcs2");
+        withDcReactor(network.getVoltageSourceConverter("CMF1"));
+        network.getVoltageSourceConverters().forEach(converter -> converter.addExtension(VscProtectionModel.class, new OvercurrentProtection(2.0, 0.0)));
+        EmtNetworkPreprocessor.preprocess(network, LocalComputationManager.getDefault());
+        return network;
     }
 
     /** Example 4 with its DC breaker DCB, its stations protected, VSC3 alone with a DC reactor, as upstream's selective clearing has it. */
