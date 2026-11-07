@@ -38,7 +38,7 @@ import static org.assertj.core.api.Assertions.within;
  * The networks past PSCAD Free's 15 electrical nodes that upstream writes for the Professional edition and that no PSCAD run
  * had held yet, run in PSCAD Professional and held to what upstream holds ATP, Xyce and Kestrel to on
  * the same scenarios: the load flow, and the physics of each switching. Each check is the network's or the circuit's, not
- * another backend's run. From the steady state where upstream's snapshot patching takes the circuit, from rest otherwise.
+ * another backend's run. From the steady state, but for the arrester: upstream's snapshot does not hold one yet.
  *
  * <p>Tagged {@code pscad}: run with {@code mvn test -Ppscad}, on a machine with PSCAD 5.1 Professional licensed, Intel
  * Fortran and the Windows SDK.
@@ -70,13 +70,13 @@ class PscadProBeyondFreeTest {
 
     /**
      * The four phase-shifter benches - 18 to 24 nodes - fed from an ideal source, with and without a ratio tap changer beside the
-     * phase one: in the last 60 ms of 0.6 s from rest, every bus at the load flow's voltage within 1e-4 pu, and at its angle from B1,
-     * displaced by the vector groups', within 0.01 degree - upstream's bounds for the three other backends. From rest: past some
-     * twenty nodes the snapshot's branches no longer run between the nodes {@code Main.dta} numbers them by, and upstream's patching
-     * refuses it (the YNd11 and three-winding benches).
+     * phase one, from their steady state: in the first period and in the last 60 ms of 0.2 s, every bus at the load flow's voltage
+     * within 1e-4 pu, and at its angle from B1, displaced by the vector groups', within 0.01 degree - upstream's bounds for the
+     * three other backends. Past some twenty nodes PSCAD Professional renumbers the snapshot's nodes (the YNd11 and three-winding
+     * benches), which upstream's patching reads through the snapshot's map.
      *
-     * <p>Run 2026-11-07: every bus within 3.7e-5 pu and 3.5e-4 degree of the load flow, ratio tap changer or not - the three other
-     * backends' own level upstream (3.7e-5 pu, 4.8e-4 degree).
+     * <p>Run 2026-11-07: every bus within 3.7e-5 pu and 3.5e-4 degree of the load flow, ratio tap changer or not, the same in the
+     * first period as at the end - the three other backends' own level upstream (3.7e-5 pu, 4.8e-4 degree).
      */
     @ParameterizedTest(name = "{0}")
     @MethodSource("phaseShifters")
@@ -87,26 +87,29 @@ class PscadProBeyondFreeTest {
         }
         network.getGenerator("GEN").addExtension(GeneratorModel.class, new InfiniteBusGeneratorModel(0.0, 0.0));
         ExampleNetworks.withLoadFlow(network);
-        double runEnd = 0.6;
+        double runEnd = 0.2;
 
-        PscadProSimulation.PscadProRun run = PscadProSimulation.run(network, tempDir, settings(runEnd), List.of(), PRO);
+        PscadProSimulation.PscadProRun run = PscadProSimulation.runFromSteadyState(network, tempDir, settings(runEnd), List.of(), PRO);
 
         VectorGroupOffsets offsets = VectorGroupOffsets.of(network);
         Bus b1 = network.getBusBreakerView().getBus("B1");
-        double[] window = {runEnd - 0.06, runEnd};
         SoftAssertions softly = new SoftAssertions();
-        for (Bus bus : network.getBusBreakerView().getBuses()) {
-            if (bus == b1) {
-                continue;
+        for (double[] window : new double[][] {{TIME_STEP, TIME_STEP + 1.0 / FREQUENCY}, {runEnd - 0.06, runEnd}}) {
+            for (Bus bus : network.getBusBreakerView().getBuses()) {
+                if (bus == b1) {
+                    continue;
+                }
+                double nominal = bus.getVoltageLevel().getNominalV();
+                double puError = magnitude(run, bus.getId(), 'A', window) / (nominal * 1.0e3 * SQRT_TWO_THIRDS) - bus.getV() / nominal;
+                double expected = bus.getAngle() - b1.getAngle() + offsets.degrees(bus) - offsets.degrees(b1);
+                double angleError = Math.IEEEremainder(angleFrom(run, "B1", bus.getId(), window) - expected, 360.0);
+                System.out.printf("%s %s from %.5f s: %.3e pu, %.3e degree%n", name, bus.getId(), window[0], puError, angleError);
+                softly.assertThat(puError).as("|V(%s)| against the load flow's, pu, %s, from %.5f s", bus.getId(), name, window[0])
+                        .isCloseTo(0.0, within(1.0e-4));
+                softly.assertThat(angleError)
+                        .as("V(%s)'s angle from V(B1) against the load flow's, degrees, %s, from %.5f s", bus.getId(), name, window[0])
+                        .isCloseTo(0.0, within(0.01));
             }
-            double nominal = bus.getVoltageLevel().getNominalV();
-            double puError = magnitude(run, bus.getId(), 'A', window) / (nominal * 1.0e3 * SQRT_TWO_THIRDS) - bus.getV() / nominal;
-            double expected = bus.getAngle() - b1.getAngle() + offsets.degrees(bus) - offsets.degrees(b1);
-            double angleError = Math.IEEEremainder(angleFrom(run, "B1", bus.getId(), window) - expected, 360.0);
-            System.out.printf("%s %s: %.3e pu, %.3e degree%n", name, bus.getId(), puError, angleError);
-            softly.assertThat(puError).as("|V(%s)| against the load flow's, pu, %s", bus.getId(), name).isCloseTo(0.0, within(1.0e-4));
-            softly.assertThat(angleError).as("V(%s)'s angle from V(B1) against the load flow's, degrees, %s", bus.getId(), name)
-                    .isCloseTo(0.0, within(0.01));
         }
         softly.assertAll();
     }
