@@ -7,10 +7,12 @@ package com.supergrid.simuemt.pscadpro;
 import com.powsybl.iidm.network.AcDcConverter;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.VoltageSourceConverter;
+import com.powsybl.simuemt.extensions.GeneratorModel;
 import com.powsybl.simuemt.extensions.hvdc.AveragedVscInitialState;
 import com.powsybl.simuemt.extensions.hvdc.AveragedVscModel;
 import com.powsybl.simuemt.extensions.hvdc.DcVoltageDroopLaw;
 import com.powsybl.simuemt.extensions.hvdc.VoltageSourceConverterModel;
+import com.powsybl.simuemt.extensions.machine.SubtransientMachineModel;
 import com.powsybl.simuemt.pscad.PscadEdition;
 import com.powsybl.simuemt.pscad.PscadFileWriter;
 import com.powsybl.simuemt.pscad.PscadProjectSerializer;
@@ -95,7 +97,8 @@ class PscadProSimulationTest {
     /**
      * The multi-terminal DC networks: example 4's three stations, VSC2 and VSC3 on the DC voltage droop ({@link
      * PscadProCases#dcDroop}); CIGRE B4 DCS2, its DC lines meeting at BMB5, held up by its two onshore droops alone; and CIGRE B4
-     * whole, its eleven stations on three DC grids, DCS3 meshed, between two meshed AC systems and four offshore islands. From
+     * whole, its eleven stations on three DC grids, DCS3 meshed, between two meshed AC systems and four offshore islands; the IEEE
+     * 14-bus network with its DC grid, its machines Dynawo's - their speed back on the synchronous one within 5e-4 pu. From
      * rest - their AC and DC sides separate subsystems, which a snapshot restart does not patch - over 4 s: the DC side charged
      * while the controls' integrals are held, until 2 s as a template's are, then let go. In the last 40 ms, each droop
      * converter's power where its curve meets the DC voltage it settles at, as Xyce's and Kestrel's runs hold it: the load
@@ -108,12 +111,16 @@ class PscadProSimulationTest {
      * <p>Run 2026-11-06 at 50 us: the droops within 0.07 MW of their curves (0.001 on example 4), the powers held within 0.003
      * MW, the V_DC within 1e-6 pu; the reactive powers within 0.15 Mvar and the DC voltages within 2e-4 pu of the load flow's.
      * CIGRE B4 whole, 2026-11-07, 4 s in 54 s: its droops within 0.06 MW of their curves, its powers within 0.08 MW, its V_DC on
-     * theirs; the reactive powers within 0.1 Mvar, CBA1's 2.5 Mvar off; the DC voltages within 1.1e-4 pu.
+     * theirs; the reactive powers within 0.1 Mvar, CBA1's 2.5 Mvar off; the DC voltages within 1.1e-4 pu. IEEE 14 with its DC grid,
+     * 2026-11-07, 4 s in 40 s: its droops on their curves within 0.01 MW, CSW within 0.003 MW, CS2 on its V_DC; the reactive powers
+     * within 0.1 Mvar; its machines 9e-5 pu fast, the 3 MW its droops, still short of their load flow's power until let go, bring
+     * then, which G1's and G2's proportional governors take back.
      */
     @ParameterizedTest(name = "{0}")
-    @ValueSource(strings = {"vsc-three-terminal-vdc-droop", "cigre-dcs2", "cigre-b4"})
+    @ValueSource(strings = {"vsc-three-terminal-vdc-droop", "cigre-dcs2", "cigre-b4", "ieee14-dc"})
     void aMultiTerminalDcNetworkHoldsItsOperatingPoint(String bench, @TempDir Path tempDir) throws Exception {
-        Network network = ExampleNetworks.withLoadFlow(bench.startsWith("cigre") ? PscadProCases.bench(bench) : PscadProCases.dcDroop());
+        Network network = ExampleNetworks.withLoadFlow("vsc-three-terminal-vdc-droop".equals(bench) ? PscadProCases.dcDroop()
+                : PscadProCases.bench(bench));
         double runEnd = 4.0;
         PscadSimulationSettings settings = new PscadSimulationSettings(50.0e-6, runEnd, 50.0, PscadEdition.PROFESSIONAL);
 
@@ -144,6 +151,12 @@ class PscadProSimulationTest {
             double qTolerance = converter.getControlMode() == AcDcConverter.ControlMode.V_DC ? 0.003 * rating : 0.3;
             softly.assertThat(q).as("%s reactive power, Mvar", id).isCloseTo(converter.getTerminal1().getQ(), within(qTolerance));
         }
+        // Its machines, if any: back on the synchronous speed.
+        network.getGeneratorStream().filter(g -> g.getExtension(GeneratorModel.class) instanceof SubtransientMachineModel).forEach(g -> {
+            double speed = run.output().mean(g.getId() + "_W", from, runEnd);
+            System.out.printf("%s %s: speed %.6f pu%n", bench, g.getId(), speed);
+            softly.assertThat(speed).as("%s speed, pu", g.getId()).isCloseTo(1.0, within(5.0e-4));
+        });
         softly.assertAll();
     }
 

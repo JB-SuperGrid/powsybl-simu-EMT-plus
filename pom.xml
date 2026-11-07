@@ -112,6 +112,12 @@
             <artifactId>powsybl-simu-emt-test-resources</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <!-- The IEEE 14-bus network, as powsybl reads the IEEE common data format -->
+            <groupId>com.powsybl</groupId>
+            <artifactId>powsybl-ieee-cdf-converter</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
