@@ -17,6 +17,7 @@ import com.powsybl.simuemt.extensions.event.BreakerAction;
 import com.powsybl.simuemt.extensions.event.BusFault;
 import com.powsybl.simuemt.extensions.event.ConverterBlocking;
 import com.powsybl.simuemt.extensions.event.ConverterDeblocking;
+import com.powsybl.simuemt.extensions.event.ConverterPowerStep;
 import com.powsybl.simuemt.extensions.event.DcFault;
 import com.powsybl.simuemt.extensions.event.DcSwitchOperation;
 import com.powsybl.simuemt.extensions.event.EmtEvent;
@@ -164,6 +165,10 @@ final class PscadProCases {
                 converters("vsc-blocked", () -> preprocessed("vsc-three-terminal-all-droop", false, false), new ConverterBlocking("VSC1", 2.3)),
                 converters("cigre-dcs2-cmf1-trip", () -> preprocessed("cigre-dcs2", false, false), new ConverterBlocking("CMF1", 2.3),
                         new ConverterBlocking("WTF1", 2.3)),
+                // Upstream's DCS2 droops' power steps, the second at 3.5 s: 5 s
+                new Case("cigre-dcs2-power-steps", () -> preprocessed("cigre-dcs2", false, false), List.of(new ConverterPowerStep("CMB2", 2.3, 0.125),
+                        new ConverterPowerStep("CMB3", 3.5, -0.1)), new PscadSimulationSettings(20.0e-6, 5.0, 50.0, PscadEdition.PROFESSIONAL),
+                        Kind.FROM_REST),
                 converters("cigre-dcs2-dc-fault-bmf1", PscadProCases::dcs2DcFault, new DcFault("FDC", "BMF1", 0.0, 2.3, 12.0),
                         new ConverterBlocking("CMB2", 2.302), new ConverterBlocking("CMB3", 2.302), new ConverterBlocking("WTF1", 2.302),
                         new BranchOperation("TRB2", TwoSides.ONE, 2.36, BreakerAction.OPEN, FaultClearing.AT_CURRENT_ZERO),
