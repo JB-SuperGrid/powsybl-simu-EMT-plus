@@ -94,20 +94,26 @@ class PscadProSimulationTest {
 
     /**
      * The multi-terminal DC networks: example 4's three stations, VSC2 and VSC3 on the DC voltage droop ({@link
-     * PscadProCases#dcDroop}), and CIGRE B4 DCS2, its DC lines meeting at BMB5, held up by its two onshore droops alone. From
+     * PscadProCases#dcDroop}); CIGRE B4 DCS2, its DC lines meeting at BMB5, held up by its two onshore droops alone; and CIGRE B4
+     * whole, its eleven stations on three DC grids, DCS3 meshed, between two meshed AC systems and four offshore islands. From
      * rest - their AC and DC sides separate subsystems, which a snapshot restart does not patch - over 4 s: the DC side charged
      * while the controls' integrals are held, until 2 s as a template's are, then let go. In the last 40 ms, each droop
      * converter's power where its curve meets the DC voltage it settles at, as Xyce's and Kestrel's runs hold it: the load
      * flow's, less what the curve takes off there; the other converters' the load flow's power, or DC voltage on V_DC; every
-     * converter's reactive power and DC voltage the load flow's.
+     * converter's reactive power and DC voltage the load flow's. A V_DC converter's power is not the load flow's: it takes, besides,
+     * its DC grid's other converters' phase reactor losses, which the load flow has not (R 0.003 pu; CIGRE B4's CBA1 13.4 MW of
+     * DCS3's, 13.5 MW by R I^2) - its reactive power, holding its AC bus, then their drop across its transformer, within 0.3% of its
+     * rating.
      *
      * <p>Run 2026-11-06 at 50 us: the droops within 0.07 MW of their curves (0.001 on example 4), the powers held within 0.003
      * MW, the V_DC within 1e-6 pu; the reactive powers within 0.15 Mvar and the DC voltages within 2e-4 pu of the load flow's.
+     * CIGRE B4 whole, 2026-11-07, 4 s in 54 s: its droops within 0.06 MW of their curves, its powers within 0.08 MW, its V_DC on
+     * theirs; the reactive powers within 0.1 Mvar, CBA1's 2.5 Mvar off; the DC voltages within 1.1e-4 pu.
      */
     @ParameterizedTest(name = "{0}")
-    @ValueSource(strings = {"vsc-three-terminal-vdc-droop", "cigre-dcs2"})
+    @ValueSource(strings = {"vsc-three-terminal-vdc-droop", "cigre-dcs2", "cigre-b4"})
     void aMultiTerminalDcNetworkHoldsItsOperatingPoint(String bench, @TempDir Path tempDir) throws Exception {
-        Network network = ExampleNetworks.withLoadFlow("cigre-dcs2".equals(bench) ? PscadProCases.bench(bench) : PscadProCases.dcDroop());
+        Network network = ExampleNetworks.withLoadFlow(bench.startsWith("cigre") ? PscadProCases.bench(bench) : PscadProCases.dcDroop());
         double runEnd = 4.0;
         PscadSimulationSettings settings = new PscadSimulationSettings(50.0e-6, runEnd, 50.0, PscadEdition.PROFESSIONAL);
 
@@ -135,7 +141,8 @@ class PscadProSimulationTest {
                 softly.assertThat(p).as("%s active power, MW", id).isCloseTo(expectedP, within(0.1));
                 softly.assertThat(vdc).as("%s DC voltage, pu", id).isCloseTo(lfVdc, within(5.0e-4));
             }
-            softly.assertThat(q).as("%s reactive power, Mvar", id).isCloseTo(converter.getTerminal1().getQ(), within(0.3));
+            double qTolerance = converter.getControlMode() == AcDcConverter.ControlMode.V_DC ? 0.003 * rating : 0.3;
+            softly.assertThat(q).as("%s reactive power, Mvar", id).isCloseTo(converter.getTerminal1().getQ(), within(qTolerance));
         }
         softly.assertAll();
     }

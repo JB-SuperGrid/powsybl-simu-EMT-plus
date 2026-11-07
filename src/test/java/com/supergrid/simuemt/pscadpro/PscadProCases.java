@@ -155,6 +155,7 @@ final class PscadProCases {
                 fromRest("vsc-dc-chopper", () -> bench("vsc-monopole-infinite-buses-2")),
                 fromRest("vsc-dc-droop", PscadProCases::dcDroop),
                 fromRest("cigre-dcs2", () -> bench("cigre-dcs2")),
+                fromRest("cigre-b4", () -> bench("cigre-b4")),
                 new Case("vsc-islanding", () -> bench("vsc-monopole-island"), List.of(ExampleNetworks.VSC_MONOPOLE_ISLANDING), SETTINGS,
                         Kind.FROM_REST),
                 // Converters blocked, deblocked, protected, through DC faults and DC breakers: upstream's PSCAD Professional runs
@@ -162,6 +163,9 @@ final class PscadProCases {
                 converters("vsc-blocked", () -> preprocessed("vsc-three-terminal-all-droop", false, false), new ConverterBlocking("VSC1", 2.3)),
                 converters("cigre-dcs2-cmf1-trip", () -> preprocessed("cigre-dcs2", false, false), new ConverterBlocking("CMF1", 2.3),
                         new ConverterBlocking("WTF1", 2.3)),
+                // CIGRE B4 whole: a solid three-phase fault at BAB1, in its meshed AC system B, cleared after 100 ms
+                converters("cigre-b4-fault-b1", () -> preprocessed("cigre-b4", false, false), new BusFault("F", "BAB1", "ABC", true, 1.0, 2.5, 2.6,
+                        FaultClearing.AT_CURRENT_ZERO)),
                 converters("vsc-deblocked", () -> preprocessed("vsc-monopole-infinite-buses-3", false, false), new ConverterBlocking("VSC2", 2.3),
                         new ConverterDeblocking("VSC2", 2.5)),
                 converters("dc-fault-blocked", () -> preprocessed("vsc-three-terminal-all-droop", true, false), new DcFault("FDC", "DC3P", 0.0, 2.3, 12.0),
@@ -247,8 +251,13 @@ final class PscadProCases {
         return network;
     }
 
-    /** A bench of powsybl-simu-emt's test resources: {@code <bench>.xiidm} with its models, {@code <bench>-extensions.xml}. */
+    /** A bench of powsybl-simu-emt's test resources: {@code <bench>.xiidm} with its models, {@code <bench>-extensions.xml} - but
+     * {@code cigre-b4}, this project's own ({@link CigreB4Network}). */
     static Network bench(String bench) {
+        if ("cigre-b4".equals(bench)) {
+            // This project's own, not upstream's.
+            return CigreB4Network.load();
+        }
         return EmtExtensionsXmlReader.readNetwork(ExampleNetworks.resource("/" + bench + ".xiidm"),
                 ExampleNetworks.resource("/" + bench + "-extensions.xml"));
     }

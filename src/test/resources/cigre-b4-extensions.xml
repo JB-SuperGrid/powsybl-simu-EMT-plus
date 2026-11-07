@@ -1,0 +1,364 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Copyright (c) 2026, SuperGrid Institute
+    All rights reserved. Proprietary and confidential.
+-->
+<!--
+    CIGRE B4's DC grid test system, whole: complements cigre-b4.xiidm (CigreB4Network.create, flat).
+
+    The external grids GRA0 and GRB0 and the onshore power sources GA1, GB1, GB2 and GB3 infinite buses of 30 GVA, X/R 10, the
+    brochure's. Converters averaged as cigre-dcs2-extensions.xml's, a 15 % phase reactor on their rating (R 0.003 pu), DC capacitors of
+    40 ms, a bridge inductance for their blocking - a bipole's one converter of twice a pole's rating: onshore, and CBC2 offshore,
+    grid-following (on their DC voltage, their droop or their power, as IIDM's control mode says), CMC1, CBD1, CME1 and CMF1 grid-forming
+    (a virtual synchronous machine), each its island's. The offshore wind parks WTC1, WTC2, WTD1 and WTF1 Dynawo's WT4B example
+    (ExampleNetworks.wt4bDynawoExample) on their own rating. Each DC line one lumped pi of its 400 kV conductor: a +-200 kV monopole's
+    2 L and C / 2 of the brochure's per-km pole data, a +-400 kV bipole's L / 2 and 2 C (cables 2.615 mH and 0.2185 uF at +-200 kV,
+    0.1908 uF at +-400 kV; OHLs 0.8273 mH, 0.0139 uF at +-200 kV, 0.9356 mH, 0.0123 uF at +-400 kV).
+-->
+<extensions>
+    <extension id="GRA0">
+        <infiniteBusGeneratorModel shortCircuitPowerMva="30000.0" xOverR="10.0"/>
+    </extension>
+    <extension id="GRB0">
+        <infiniteBusGeneratorModel shortCircuitPowerMva="30000.0" xOverR="10.0"/>
+    </extension>
+    <extension id="GA1">
+        <infiniteBusGeneratorModel shortCircuitPowerMva="30000.0" xOverR="10.0"/>
+    </extension>
+    <extension id="GB1">
+        <infiniteBusGeneratorModel shortCircuitPowerMva="30000.0" xOverR="10.0"/>
+    </extension>
+    <extension id="GB2">
+        <infiniteBusGeneratorModel shortCircuitPowerMva="30000.0" xOverR="10.0"/>
+    </extension>
+    <extension id="GB3">
+        <infiniteBusGeneratorModel shortCircuitPowerMva="30000.0" xOverR="10.0"/>
+    </extension>
+    <extension id="CMA1">
+        <averagedVscModel ratedApparentPower="800.0" phaseReactorResistance="0.003" phaseReactorReactance="0.15"
+                          dcCapacitorEnergyConstant="0.04" bridgeInductance="0.08"/>
+        <gridFollowingControl>
+            <ddsrf filterFrequency="35.3553"/>
+            <ddsrfPll proportionalGain="88.8442" integralGain="3947.84"/>
+            <dualSequenceCurrentControl proportionalGain="0.477465" integralGain="2.0">
+                <negativeSequenceSuppression/>
+            </dualSequenceCurrentControl>
+            <currentLimit maxCurrent="1.1"/>
+            <outerLoops activePowerProportionalGain="0.0" activePowerIntegralGain="50.0"
+                        dcVoltageProportionalGain="5.62973" dcVoltageIntegralGain="202.129"
+                        reactivePowerProportionalGain="0.0" reactivePowerIntegralGain="50.0"
+                        acVoltageProportionalGain="0.0" acVoltageIntegralGain="12.5" acVoltageDroop="0.05"/>
+            <faultRideThrough voltageThreshold="0.9" reactiveCurrentGain="2.0"/>
+            <measurement timeConstant="0.001"/>
+        </gridFollowingControl>
+    </extension>
+    <extension id="CBA1">
+        <averagedVscModel ratedApparentPower="2400.0" phaseReactorResistance="0.003" phaseReactorReactance="0.15"
+                          dcCapacitorEnergyConstant="0.04" bridgeInductance="0.08"/>
+        <gridFollowingControl>
+            <ddsrf filterFrequency="35.3553"/>
+            <ddsrfPll proportionalGain="88.8442" integralGain="3947.84"/>
+            <dualSequenceCurrentControl proportionalGain="0.477465" integralGain="2.0">
+                <negativeSequenceSuppression/>
+            </dualSequenceCurrentControl>
+            <currentLimit maxCurrent="1.1"/>
+            <outerLoops activePowerProportionalGain="0.0" activePowerIntegralGain="50.0"
+                        dcVoltageProportionalGain="5.62973" dcVoltageIntegralGain="202.129"
+                        reactivePowerProportionalGain="0.0" reactivePowerIntegralGain="50.0"
+                        acVoltageProportionalGain="0.0" acVoltageIntegralGain="12.5" acVoltageDroop="0.05"/>
+            <faultRideThrough voltageThreshold="0.9" reactiveCurrentGain="2.0"/>
+            <measurement timeConstant="0.001"/>
+        </gridFollowingControl>
+    </extension>
+    <extension id="CBB1">
+        <averagedVscModel ratedApparentPower="2400.0" phaseReactorResistance="0.003" phaseReactorReactance="0.15"
+                          dcCapacitorEnergyConstant="0.04" bridgeInductance="0.08"/>
+        <gridFollowingControl>
+            <ddsrf filterFrequency="35.3553"/>
+            <ddsrfPll proportionalGain="88.8442" integralGain="3947.84"/>
+            <dualSequenceCurrentControl proportionalGain="0.477465" integralGain="2.0">
+                <negativeSequenceSuppression/>
+            </dualSequenceCurrentControl>
+            <currentLimit maxCurrent="1.1"/>
+            <outerLoops activePowerProportionalGain="0.0" activePowerIntegralGain="50.0"
+                        dcVoltageProportionalGain="5.62973" dcVoltageIntegralGain="202.129"
+                        reactivePowerProportionalGain="0.0" reactivePowerIntegralGain="50.0"
+                        acVoltageProportionalGain="0.0" acVoltageIntegralGain="12.5" acVoltageDroop="0.05"/>
+            <faultRideThrough voltageThreshold="0.9" reactiveCurrentGain="2.0"/>
+            <measurement timeConstant="0.001"/>
+        </gridFollowingControl>
+    </extension>
+    <extension id="CMB2">
+        <averagedVscModel ratedApparentPower="800.0" phaseReactorResistance="0.003" phaseReactorReactance="0.15"
+                          dcCapacitorEnergyConstant="0.04" bridgeInductance="0.08"/>
+        <gridFollowingControl>
+            <ddsrf filterFrequency="35.3553"/>
+            <ddsrfPll proportionalGain="88.8442" integralGain="3947.84"/>
+            <dualSequenceCurrentControl proportionalGain="0.477465" integralGain="2.0">
+                <negativeSequenceSuppression/>
+            </dualSequenceCurrentControl>
+            <currentLimit maxCurrent="1.1"/>
+            <outerLoops activePowerProportionalGain="0.0" activePowerIntegralGain="50.0"
+                        dcVoltageProportionalGain="5.62973" dcVoltageIntegralGain="202.129"
+                        reactivePowerProportionalGain="0.0" reactivePowerIntegralGain="50.0"
+                        acVoltageProportionalGain="0.0" acVoltageIntegralGain="12.5" acVoltageDroop="0.05"/>
+            <faultRideThrough voltageThreshold="0.9" reactiveCurrentGain="2.0"/>
+            <measurement timeConstant="0.001"/>
+        </gridFollowingControl>
+    </extension>
+    <extension id="CBB2">
+        <averagedVscModel ratedApparentPower="1600.0" phaseReactorResistance="0.003" phaseReactorReactance="0.15"
+                          dcCapacitorEnergyConstant="0.04" bridgeInductance="0.08"/>
+        <gridFollowingControl>
+            <ddsrf filterFrequency="35.3553"/>
+            <ddsrfPll proportionalGain="88.8442" integralGain="3947.84"/>
+            <dualSequenceCurrentControl proportionalGain="0.477465" integralGain="2.0">
+                <negativeSequenceSuppression/>
+            </dualSequenceCurrentControl>
+            <currentLimit maxCurrent="1.1"/>
+            <outerLoops activePowerProportionalGain="0.0" activePowerIntegralGain="50.0"
+                        dcVoltageProportionalGain="5.62973" dcVoltageIntegralGain="202.129"
+                        reactivePowerProportionalGain="0.0" reactivePowerIntegralGain="50.0"
+                        acVoltageProportionalGain="0.0" acVoltageIntegralGain="12.5" acVoltageDroop="0.05"/>
+            <faultRideThrough voltageThreshold="0.9" reactiveCurrentGain="2.0"/>
+            <measurement timeConstant="0.001"/>
+        </gridFollowingControl>
+    </extension>
+    <extension id="CMB3">
+        <averagedVscModel ratedApparentPower="1200.0" phaseReactorResistance="0.003" phaseReactorReactance="0.15"
+                          dcCapacitorEnergyConstant="0.04" bridgeInductance="0.08"/>
+        <gridFollowingControl>
+            <ddsrf filterFrequency="35.3553"/>
+            <ddsrfPll proportionalGain="88.8442" integralGain="3947.84"/>
+            <dualSequenceCurrentControl proportionalGain="0.477465" integralGain="2.0">
+                <negativeSequenceSuppression/>
+            </dualSequenceCurrentControl>
+            <currentLimit maxCurrent="1.1"/>
+            <outerLoops activePowerProportionalGain="0.0" activePowerIntegralGain="50.0"
+                        dcVoltageProportionalGain="5.62973" dcVoltageIntegralGain="202.129"
+                        reactivePowerProportionalGain="0.0" reactivePowerIntegralGain="50.0"
+                        acVoltageProportionalGain="0.0" acVoltageIntegralGain="12.5" acVoltageDroop="0.05"/>
+            <faultRideThrough voltageThreshold="0.9" reactiveCurrentGain="2.0"/>
+            <measurement timeConstant="0.001"/>
+        </gridFollowingControl>
+    </extension>
+    <extension id="CMC1">
+        <averagedVscModel ratedApparentPower="800.0" phaseReactorResistance="0.003" phaseReactorReactance="0.15"
+                          dcCapacitorEnergyConstant="0.04" bridgeInductance="0.08"/>
+        <gridFormingControl>
+            <virtualSynchronousMachine inertiaConstant="5.0" dampingCoefficient="20.0"/>
+            <reactivePowerVoltageDroop droop="0.05"/>
+            <virtualAdmittance resistance="0.05" reactance="0.2"/>
+            <singleSequenceCurrentControl proportionalGain="0.477465" integralGain="2.0"/>
+            <currentLimit maxCurrent="1.1"/>
+            <measurement timeConstant="0.001"/>
+            <steadyStateCurrentLimit steadyStateMaxCurrent="1.0" activeCurrentFactor="0.9" integralGain="2.0" maxSpeedDeviation="0.05"
+                                pllProportionalGain="83.2522" pllIntegralGain="832.522"/>
+            <transientDamping gain="100.0" timeConstant="0.5"/>
+            <dcVoltageDroop gain="5.0"/>
+        </gridFormingControl>
+    </extension>
+    <extension id="CBC2">
+        <averagedVscModel ratedApparentPower="800.0" phaseReactorResistance="0.003" phaseReactorReactance="0.15"
+                          dcCapacitorEnergyConstant="0.04" bridgeInductance="0.08"/>
+        <gridFollowingControl>
+            <ddsrf filterFrequency="35.3553"/>
+            <ddsrfPll proportionalGain="88.8442" integralGain="3947.84"/>
+            <dualSequenceCurrentControl proportionalGain="0.477465" integralGain="2.0">
+                <negativeSequenceSuppression/>
+            </dualSequenceCurrentControl>
+            <currentLimit maxCurrent="1.1"/>
+            <outerLoops activePowerProportionalGain="0.0" activePowerIntegralGain="50.0"
+                        dcVoltageProportionalGain="5.62973" dcVoltageIntegralGain="202.129"
+                        reactivePowerProportionalGain="0.0" reactivePowerIntegralGain="50.0"
+                        acVoltageProportionalGain="0.0" acVoltageIntegralGain="12.5" acVoltageDroop="0.05"/>
+            <faultRideThrough voltageThreshold="0.9" reactiveCurrentGain="2.0"/>
+            <measurement timeConstant="0.001"/>
+        </gridFollowingControl>
+    </extension>
+    <extension id="CBD1">
+        <averagedVscModel ratedApparentPower="1600.0" phaseReactorResistance="0.003" phaseReactorReactance="0.15"
+                          dcCapacitorEnergyConstant="0.04" bridgeInductance="0.08"/>
+        <gridFormingControl>
+            <virtualSynchronousMachine inertiaConstant="5.0" dampingCoefficient="20.0"/>
+            <reactivePowerVoltageDroop droop="0.05"/>
+            <virtualAdmittance resistance="0.05" reactance="0.2"/>
+            <singleSequenceCurrentControl proportionalGain="0.477465" integralGain="2.0"/>
+            <currentLimit maxCurrent="1.1"/>
+            <measurement timeConstant="0.001"/>
+            <steadyStateCurrentLimit steadyStateMaxCurrent="1.0" activeCurrentFactor="0.9" integralGain="2.0" maxSpeedDeviation="0.05"
+                                pllProportionalGain="83.2522" pllIntegralGain="832.522"/>
+            <transientDamping gain="100.0" timeConstant="0.5"/>
+            <dcVoltageDroop gain="5.0"/>
+        </gridFormingControl>
+    </extension>
+    <extension id="CME1">
+        <averagedVscModel ratedApparentPower="200.0" phaseReactorResistance="0.003" phaseReactorReactance="0.15"
+                          dcCapacitorEnergyConstant="0.04" bridgeInductance="0.08"/>
+        <gridFormingControl>
+            <virtualSynchronousMachine inertiaConstant="5.0" dampingCoefficient="20.0"/>
+            <reactivePowerVoltageDroop droop="0.05"/>
+            <virtualAdmittance resistance="0.05" reactance="0.2"/>
+            <singleSequenceCurrentControl proportionalGain="0.477465" integralGain="2.0"/>
+            <currentLimit maxCurrent="1.1"/>
+            <measurement timeConstant="0.001"/>
+            <steadyStateCurrentLimit steadyStateMaxCurrent="1.0" activeCurrentFactor="0.9" integralGain="2.0" maxSpeedDeviation="0.05"
+                                pllProportionalGain="83.2522" pllIntegralGain="832.522"/>
+            <transientDamping gain="100.0" timeConstant="0.5"/>
+            <dcVoltageDroop gain="5.0"/>
+        </gridFormingControl>
+    </extension>
+    <extension id="CMF1">
+        <averagedVscModel ratedApparentPower="800.0" phaseReactorResistance="0.003" phaseReactorReactance="0.15"
+                          dcCapacitorEnergyConstant="0.04" bridgeInductance="0.08"/>
+        <gridFormingControl>
+            <virtualSynchronousMachine inertiaConstant="5.0" dampingCoefficient="20.0"/>
+            <reactivePowerVoltageDroop droop="0.05"/>
+            <virtualAdmittance resistance="0.05" reactance="0.2"/>
+            <singleSequenceCurrentControl proportionalGain="0.477465" integralGain="2.0"/>
+            <currentLimit maxCurrent="1.1"/>
+            <measurement timeConstant="0.001"/>
+            <steadyStateCurrentLimit steadyStateMaxCurrent="1.0" activeCurrentFactor="0.9" integralGain="2.0" maxSpeedDeviation="0.05"
+                                pllProportionalGain="83.2522" pllIntegralGain="832.522"/>
+            <transientDamping gain="100.0" timeConstant="0.5"/>
+            <dcVoltageDroop gain="5.0"/>
+        </gridFormingControl>
+    </extension>
+    <extension id="DCA1C1">
+        <lumpedDcLineModel inductance="1.046" capacitance="2.185e-05"/>
+    </extension>
+    <extension id="DCB2B3">
+        <lumpedDcLineModel inductance="1.046" capacitance="2.185e-05"/>
+    </extension>
+    <extension id="DCB3B5">
+        <lumpedDcLineModel inductance="0.16546" capacitance="6.95e-07"/>
+    </extension>
+    <extension id="DCB5F1">
+        <lumpedDcLineModel inductance="0.523" capacitance="1.0925e-05"/>
+    </extension>
+    <extension id="DCF1E1">
+        <lumpedDcLineModel inductance="1.046" capacitance="2.185e-05"/>
+    </extension>
+    <extension id="DBA1B1A">
+        <lumpedDcLineModel inductance="0.18712" capacitance="9.84e-06"/>
+    </extension>
+    <extension id="DBA1B1B">
+        <lumpedDcLineModel inductance="0.18712" capacitance="9.84e-06"/>
+    </extension>
+    <extension id="DBA1B4">
+        <lumpedDcLineModel inductance="0.2339" capacitance="1.23e-05"/>
+    </extension>
+    <extension id="DBA1C2">
+        <lumpedDcLineModel inductance="0.2615" capacitance="7.632e-05"/>
+    </extension>
+    <extension id="DBB1B4">
+        <lumpedDcLineModel inductance="0.09356" capacitance="4.92e-06"/>
+    </extension>
+    <extension id="DBB1E1">
+        <lumpedDcLineModel inductance="0.2615" capacitance="7.632e-05"/>
+    </extension>
+    <extension id="DBB2B4A">
+        <lumpedDcLineModel inductance="0.14034" capacitance="7.38e-06"/>
+    </extension>
+    <extension id="DBB2B4B">
+        <lumpedDcLineModel inductance="0.14034" capacitance="7.38e-06"/>
+    </extension>
+    <extension id="DBC2D1">
+        <lumpedDcLineModel inductance="0.39225" capacitance="0.00011448"/>
+    </extension>
+    <extension id="DBD1E1">
+        <lumpedDcLineModel inductance="0.2615" capacitance="7.632e-05"/>
+    </extension>
+    <extension id="WTC1">
+        <wt4bModel powerFactorControl="false" reactivePowerControl="false" voltageControl="false" activePowerPriority="false"
+                   voltageFilterTimeConstant="0.01" activePowerFilterTimeConstant="0.05" reactivePowerMax="0.4" reactivePowerMin="-0.4"
+                   voltageMax="1.1" voltageMin="0.9" reactivePowerProportionalGain="2.0" reactivePowerIntegralGain="0.7"
+                   voltageProportionalGain="2.0" voltageIntegralGain="0.7" reactiveCurrentTimeConstant="0.01" voltageBias="0.0"
+                   voltageDipThreshold="0.9" voltageUpThreshold="1.1" injectionVoltageReference="0.0" injectionDeadbandLow="-0.05"
+                   injectionDeadbandHigh="0.05" injectionGain="2.0" injectionMax="1.1" injectionMin="-1.1" injectionHoldTime="0.1"
+                   frozenInjection="0.1" activePowerRateMax="2.0" activePowerRateMin="-2.0" activePowerOrderTimeConstant="0.01"
+                   activePowerMax="1.0" activePowerMin="0.0" currentMax="1.3" activeCurrentLimitHoldTime="0.0"
+                   converterTimeConstant="0.02" lvplVoltageFilterTimeConstant="0.02" activeCurrentRecoveryRate="10.0"
+                   reactiveCurrentRateMax="20.0" reactiveCurrentRateMin="-20.0" lowVoltagePowerLogic="false" lvplZeroCrossing="0.05"
+                   lvplBreakpoint="0.1" lvplGain="1.22" pllProportionalGain="3.0" pllIntegralGain="20.0" pllFrequencyMax="1.5"
+                   pllFrequencyMin="0.5">
+            <activeCurrentLimitPoint voltage="1.1" current="1.1"/>
+            <activeCurrentLimitPoint voltage="1.15" current="1.0"/>
+            <activeCurrentLimitPoint voltage="1.16" current="1.0"/>
+            <activeCurrentLimitPoint voltage="1.17" current="1.0"/>
+            <reactiveCurrentLimitPoint voltage="1.1" current="1.1"/>
+            <reactiveCurrentLimitPoint voltage="1.15" current="1.0"/>
+            <reactiveCurrentLimitPoint voltage="1.16" current="1.0"/>
+            <reactiveCurrentLimitPoint voltage="1.17" current="1.0"/>
+        </wt4bModel>
+    </extension>
+    <extension id="WTC2">
+        <wt4bModel powerFactorControl="false" reactivePowerControl="false" voltageControl="false" activePowerPriority="false"
+                   voltageFilterTimeConstant="0.01" activePowerFilterTimeConstant="0.05" reactivePowerMax="0.4" reactivePowerMin="-0.4"
+                   voltageMax="1.1" voltageMin="0.9" reactivePowerProportionalGain="2.0" reactivePowerIntegralGain="0.7"
+                   voltageProportionalGain="2.0" voltageIntegralGain="0.7" reactiveCurrentTimeConstant="0.01" voltageBias="0.0"
+                   voltageDipThreshold="0.9" voltageUpThreshold="1.1" injectionVoltageReference="0.0" injectionDeadbandLow="-0.05"
+                   injectionDeadbandHigh="0.05" injectionGain="2.0" injectionMax="1.1" injectionMin="-1.1" injectionHoldTime="0.1"
+                   frozenInjection="0.1" activePowerRateMax="2.0" activePowerRateMin="-2.0" activePowerOrderTimeConstant="0.01"
+                   activePowerMax="1.0" activePowerMin="0.0" currentMax="1.3" activeCurrentLimitHoldTime="0.0"
+                   converterTimeConstant="0.02" lvplVoltageFilterTimeConstant="0.02" activeCurrentRecoveryRate="10.0"
+                   reactiveCurrentRateMax="20.0" reactiveCurrentRateMin="-20.0" lowVoltagePowerLogic="false" lvplZeroCrossing="0.05"
+                   lvplBreakpoint="0.1" lvplGain="1.22" pllProportionalGain="3.0" pllIntegralGain="20.0" pllFrequencyMax="1.5"
+                   pllFrequencyMin="0.5">
+            <activeCurrentLimitPoint voltage="1.1" current="1.1"/>
+            <activeCurrentLimitPoint voltage="1.15" current="1.0"/>
+            <activeCurrentLimitPoint voltage="1.16" current="1.0"/>
+            <activeCurrentLimitPoint voltage="1.17" current="1.0"/>
+            <reactiveCurrentLimitPoint voltage="1.1" current="1.1"/>
+            <reactiveCurrentLimitPoint voltage="1.15" current="1.0"/>
+            <reactiveCurrentLimitPoint voltage="1.16" current="1.0"/>
+            <reactiveCurrentLimitPoint voltage="1.17" current="1.0"/>
+        </wt4bModel>
+    </extension>
+    <extension id="WTD1">
+        <wt4bModel powerFactorControl="false" reactivePowerControl="false" voltageControl="false" activePowerPriority="false"
+                   voltageFilterTimeConstant="0.01" activePowerFilterTimeConstant="0.05" reactivePowerMax="0.4" reactivePowerMin="-0.4"
+                   voltageMax="1.1" voltageMin="0.9" reactivePowerProportionalGain="2.0" reactivePowerIntegralGain="0.7"
+                   voltageProportionalGain="2.0" voltageIntegralGain="0.7" reactiveCurrentTimeConstant="0.01" voltageBias="0.0"
+                   voltageDipThreshold="0.9" voltageUpThreshold="1.1" injectionVoltageReference="0.0" injectionDeadbandLow="-0.05"
+                   injectionDeadbandHigh="0.05" injectionGain="2.0" injectionMax="1.1" injectionMin="-1.1" injectionHoldTime="0.1"
+                   frozenInjection="0.1" activePowerRateMax="2.0" activePowerRateMin="-2.0" activePowerOrderTimeConstant="0.01"
+                   activePowerMax="1.0" activePowerMin="0.0" currentMax="1.3" activeCurrentLimitHoldTime="0.0"
+                   converterTimeConstant="0.02" lvplVoltageFilterTimeConstant="0.02" activeCurrentRecoveryRate="10.0"
+                   reactiveCurrentRateMax="20.0" reactiveCurrentRateMin="-20.0" lowVoltagePowerLogic="false" lvplZeroCrossing="0.05"
+                   lvplBreakpoint="0.1" lvplGain="1.22" pllProportionalGain="3.0" pllIntegralGain="20.0" pllFrequencyMax="1.5"
+                   pllFrequencyMin="0.5">
+            <activeCurrentLimitPoint voltage="1.1" current="1.1"/>
+            <activeCurrentLimitPoint voltage="1.15" current="1.0"/>
+            <activeCurrentLimitPoint voltage="1.16" current="1.0"/>
+            <activeCurrentLimitPoint voltage="1.17" current="1.0"/>
+            <reactiveCurrentLimitPoint voltage="1.1" current="1.1"/>
+            <reactiveCurrentLimitPoint voltage="1.15" current="1.0"/>
+            <reactiveCurrentLimitPoint voltage="1.16" current="1.0"/>
+            <reactiveCurrentLimitPoint voltage="1.17" current="1.0"/>
+        </wt4bModel>
+    </extension>
+    <extension id="WTF1">
+        <wt4bModel powerFactorControl="false" reactivePowerControl="false" voltageControl="false" activePowerPriority="false"
+                   voltageFilterTimeConstant="0.01" activePowerFilterTimeConstant="0.05" reactivePowerMax="0.4" reactivePowerMin="-0.4"
+                   voltageMax="1.1" voltageMin="0.9" reactivePowerProportionalGain="2.0" reactivePowerIntegralGain="0.7"
+                   voltageProportionalGain="2.0" voltageIntegralGain="0.7" reactiveCurrentTimeConstant="0.01" voltageBias="0.0"
+                   voltageDipThreshold="0.9" voltageUpThreshold="1.1" injectionVoltageReference="0.0" injectionDeadbandLow="-0.05"
+                   injectionDeadbandHigh="0.05" injectionGain="2.0" injectionMax="1.1" injectionMin="-1.1" injectionHoldTime="0.1"
+                   frozenInjection="0.1" activePowerRateMax="2.0" activePowerRateMin="-2.0" activePowerOrderTimeConstant="0.01"
+                   activePowerMax="1.0" activePowerMin="0.0" currentMax="1.3" activeCurrentLimitHoldTime="0.0"
+                   converterTimeConstant="0.02" lvplVoltageFilterTimeConstant="0.02" activeCurrentRecoveryRate="10.0"
+                   reactiveCurrentRateMax="20.0" reactiveCurrentRateMin="-20.0" lowVoltagePowerLogic="false" lvplZeroCrossing="0.05"
+                   lvplBreakpoint="0.1" lvplGain="1.22" pllProportionalGain="3.0" pllIntegralGain="20.0" pllFrequencyMax="1.5"
+                   pllFrequencyMin="0.5">
+            <activeCurrentLimitPoint voltage="1.1" current="1.1"/>
+            <activeCurrentLimitPoint voltage="1.15" current="1.0"/>
+            <activeCurrentLimitPoint voltage="1.16" current="1.0"/>
+            <activeCurrentLimitPoint voltage="1.17" current="1.0"/>
+            <reactiveCurrentLimitPoint voltage="1.1" current="1.1"/>
+            <reactiveCurrentLimitPoint voltage="1.15" current="1.0"/>
+            <reactiveCurrentLimitPoint voltage="1.16" current="1.0"/>
+            <reactiveCurrentLimitPoint voltage="1.17" current="1.0"/>
+        </wt4bModel>
+    </extension>
+</extensions>
