@@ -169,6 +169,8 @@ final class PscadProCases {
                 new Case("cigre-dcs2-power-steps", () -> preprocessed("cigre-dcs2", false, false), List.of(new ConverterPowerStep("CMB2", 2.3, 0.125),
                         new ConverterPowerStep("CMB3", 3.5, -0.1)), new PscadSimulationSettings(20.0e-6, 5.0, 50.0, PscadEdition.PROFESSIONAL),
                         Kind.FROM_REST),
+                converters("cigre-dcs2-ac-fault-bab3", () -> preprocessed("cigre-dcs2", false, false), new BusFault("FB3", "BAB3", "ABC", true, 0.0,
+                        2.3, 2.4, FaultClearing.AT_CURRENT_ZERO)),
                 converters("cigre-dcs2-dc-fault-bmf1", PscadProCases::dcs2DcFault, new DcFault("FDC", "BMF1", 0.0, 2.3, 12.0),
                         new ConverterBlocking("CMB2", 2.302), new ConverterBlocking("CMB3", 2.302), new ConverterBlocking("WTF1", 2.302),
                         new BranchOperation("TRB2", TwoSides.ONE, 2.36, BreakerAction.OPEN, FaultClearing.AT_CURRENT_ZERO),
