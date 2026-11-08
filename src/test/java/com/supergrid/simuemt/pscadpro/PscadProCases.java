@@ -219,12 +219,13 @@ final class PscadProCases {
                 // Run 2026-11-08. Bus 16's load up 494 MW: the centre of inertia's frequency down 80 mHz with the machines, its RoCoF
                 // over 500 ms -0.075 Hz/s; 110 mHz and -0.100 Hz/s grid-following, the converters on their power, the inertia gone
                 // with the machines; 67 mHz and -0.048 Hz/s grid-forming, the converters' virtual machines (H 5 s, D 20) taking up
-                // 0.02 to 0.03 pu more each; New England against G39 at 0.60 Hz, zeta 0.23, at 0.69 Hz, zeta 0.20, and at 0.50 Hz,
+                // 0.02 to 0.03 pu more each; New England against G39 at 0.60 Hz, zeta 0.23, at 0.63 Hz, zeta 0.18, and at 0.50 Hz,
                 // zeta 0.39. A solid three-phase fault, 100 ms: with the machines, New England swinging 21 degrees against G39 at
-                // 0.60 Hz, zeta 0.17; grid-following, CL38 - bus 29, at the end of the 26-28-29 corridor, its machine gone - loses
-                // its stability at the clearing, its AC voltage swinging 0.2 to 4 pu and its power never back, at 20 us as at 50 us,
-                // the other stations recovering; grid-forming, every station riding it, CL35's AC voltage down to 0.35 pu, back on
-                // its power within 0.004 pu by 8 s, New England swinging 20 degrees at 0.46 Hz, zeta 0.30
+                // 0.60 Hz, zeta 0.17; grid-following, every station riding it - CL38's PLL slowed to 5 Hz, bus 29 too weak for the
+                // others' 10 Hz (ieee39-gfl-extensions.xml) -, back on its power within 0.02 pu 0.10 to 0.26 s after the clearing,
+                // CL38 last, but New England, with no inertia of the converters', swinging 33 degrees at 0.68 Hz, zeta 0.16;
+                // grid-forming, every station riding it, CL35's AC voltage down to 0.35 pu, the virtual machines swinging with the
+                // grid, back within 0.02 pu only 2.3 to 2.8 s after the clearing, New England swinging 20 degrees at 0.46 Hz, zeta 0.30
                 ibrCase("ieee39-sync-fault-b16", "ieee39-sync", IBR_FAULT),
                 ibrCase("ieee39-gfl-fault-b16", "ieee39-gfl", IBR_FAULT),
                 ibrCase("ieee39-gfm-fault-b16", "ieee39-gfm", IBR_FAULT),

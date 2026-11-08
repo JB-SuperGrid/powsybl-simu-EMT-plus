@@ -11,7 +11,11 @@
     simplified AVR, a PSS1A and a TGOV1 each.
 
     The CL.. stations grid-following, Ieee39DcNetwork's CS4's control: a PLL, a dual-sequence current loop within 1.1 pu, on
-    their power and their 220 kV bus's voltage, a fault ride-through below 0.9 pu - no inertia, no frequency response.
+    their power and their 220 kV bus's voltage, a fault ride-through below 0.9 pu - no inertia, no frequency response. CL38's PLL
+    at 5 Hz, ours, where CS4's is at 10 Hz (Kp 2 zeta wn, Ki wn^2, zeta 0.707): bus 29, at the end of the 26-28-29 corridor, its
+    machine gone, has some 1300 MVA of short-circuit power for CL38's 1000 MVA (a load flow's dV for a reactive step, the others'
+    4500 to 6600 MVA) - its SCR 1.3; with the 10 Hz PLL, CL38 lost its stability as a fault at bus 16 cleared, its AC voltage
+    swinging 0.2 to 4 pu, its power never back (run 2026-11-08 in PSCAD Professional, at 20 us as at 50 us); at 5 Hz it rides it.
 
     The converter sources' stations averaged as Ieee39DcNetwork's, a 15 % phase reactor on their rating (R 0.003 pu), DC
     capacitors of 40 ms, a bridge inductance for their blocking; the far ones, CR.., grid-following on the DC voltage, behind their
@@ -252,7 +256,7 @@
                           dcCapacitorEnergyConstant="0.04" bridgeInductance="0.08"/>
         <gridFollowingControl>
             <ddsrf filterFrequency="35.3553"/>
-            <ddsrfPll proportionalGain="88.8442" integralGain="3947.84"/>
+            <ddsrfPll proportionalGain="44.4290" integralGain="986.960"/>
             <dualSequenceCurrentControl proportionalGain="0.477465" integralGain="2.0">
                 <negativeSequenceSuppression/>
             </dualSequenceCurrentControl>
