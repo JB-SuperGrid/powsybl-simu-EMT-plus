@@ -24,7 +24,7 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * The IEEE 39-bus system with a high share of power electronics, as this project runs it in PSCAD Professional, in three
+ * The IEEE 39-bus system with a high share of power electronics, as this project runs it in PSCAD Professional, in five
  * variants of one AC network - {@link Ieee39DcNetwork#createAc}'s, MATPOWER's case39 - to set grid-following against
  * grid-forming converters on the same sources:
  * <ul>
@@ -32,7 +32,9 @@ import java.util.Objects;
  *   <li>{@code ieee39-gfl} and {@code ieee39-gfm}, four of New England's machines - G30, G32, G35 and G38, 2380 MW, 45 % of its nine
  *   machines' 5300 MW, 38 % with G39's - each with its step-up transformer and its bus replaced by a converter source: one {@code ieee39-ibr.xiidm}, its
  *   extensions {@code ieee39-gfl-extensions.xml} or {@code ieee39-gfm-extensions.xml}, the converters' controls the one
- *   difference.</li>
+ *   difference;</li>
+ *   <li>{@code ieee39-gfl65} and {@code ieee39-gfm65}, the same with six of them, G33 and G36 too ({@link #REPLACED_65}), 67 %:
+ *   {@code ieee39-ibr65.xiidm}, {@code ieee39-gfl65-extensions.xml} or {@code ieee39-gfm65-extensions.xml}.</li>
  * </ul>
  *
  * <p>Each converter source is a point-to-point link, this project's own: its station CL.. on the replaced machine's 345 kV
@@ -59,6 +61,12 @@ final class Ieee39IbrNetwork {
                 resource(gridForming ? "/ieee39-gfm-extensions.xml" : "/ieee39-gfl-extensions.xml"));
     }
 
+    /** Six machines replaced ({@link #REPLACED_65}), grid-forming if {@code gridForming}, else grid-following, from its flat files. */
+    static Network loadIbr65(boolean gridForming) {
+        return EmtExtensionsXmlReader.readNetwork(resource("/ieee39-ibr65.xiidm"),
+                resource(gridForming ? "/ieee39-gfm65-extensions.xml" : "/ieee39-gfl65-extensions.xml"));
+    }
+
     private static InputStream resource(String name) {
         return Objects.requireNonNull(Ieee39IbrNetwork.class.getResourceAsStream(name), "No resource " + name);
     }
@@ -73,6 +81,16 @@ final class Ieee39IbrNetwork {
             new Replaced(35, 22, 800.0),
             new Replaced(38, 29, 1000.0));
 
+    /** Six of them: {@link #REPLACED}'s and G33 and G36 - 3572 MW, 67 % of New England's nine machines' 5300 MW, G31 the slack,
+     * G34 and G37 left beside G39. */
+    static final List<Replaced> REPLACED_65 = List.of(
+            new Replaced(30, 2, 300.0),
+            new Replaced(32, 10, 800.0),
+            new Replaced(33, 19, 800.0),
+            new Replaced(35, 22, 800.0),
+            new Replaced(36, 23, 700.0),
+            new Replaced(38, 29, 1000.0));
+
     /** The DC voltage, kV. */
     private static final double DC_KV = 400.0;
     /** The links' length, km. */
@@ -85,8 +103,17 @@ final class Ieee39IbrNetwork {
 
     /** Four machines replaced by converter sources, delivering their power. */
     static Network createIbr() {
-        Network network = Ieee39DcNetwork.createAc("ieee39-ibr");
-        for (Replaced replaced : REPLACED) {
+        return createIbr("ieee39-ibr", REPLACED);
+    }
+
+    /** Six machines replaced by converter sources ({@link #REPLACED_65}), delivering their power. */
+    static Network createIbr65() {
+        return createIbr("ieee39-ibr65", REPLACED_65);
+    }
+
+    private static Network createIbr(String networkId, List<Replaced> replacedMachines) {
+        Network network = Ieee39DcNetwork.createAc(networkId);
+        for (Replaced replaced : replacedMachines) {
             int m = replaced.machineBus();
             double pMw = Arrays.stream(Ieee39DcNetwork.GENERATORS).filter(g -> (int) g[0] == m).findFirst().orElseThrow()[1];
             network.getGenerator("G" + m).remove();
