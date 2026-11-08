@@ -61,6 +61,18 @@ class Ieee39IbrNetworkTest {
         differInTheirStationsControlAlone(Ieee39IbrNetwork.loadIbr65(false), Ieee39IbrNetwork.loadIbr65(true), Ieee39IbrNetwork.REPLACED_65);
     }
 
+    /** The mixed variant: the 67 % network, CL33 grid-forming, the other CL stations grid-following. */
+    @Test
+    void theMixedVariantHasOneGridFormingStation() {
+        Network mix = Ieee39IbrNetwork.loadMix65();
+        assertThat(ids(mix)).isEqualTo(ids(Ieee39IbrNetwork.createIbr65()));
+        for (Ieee39IbrNetwork.Replaced replaced : Ieee39IbrNetwork.REPLACED_65) {
+            Object control = mix.getVoltageSourceConverter("CL" + replaced.machineBus()).getExtension(VscControlModel.class);
+            assertThat(control).as("CL%d", replaced.machineBus())
+                    .isInstanceOf(replaced.machineBus() == 33 ? GridFormingControl.class : GridFollowingControl.class);
+        }
+    }
+
     private static void differInTheirStationsControlAlone(Network gfl, Network gfm, List<Ieee39IbrNetwork.Replaced> replacedMachines) {
         for (Ieee39IbrNetwork.Replaced replaced : replacedMachines) {
             int m = replaced.machineBus();

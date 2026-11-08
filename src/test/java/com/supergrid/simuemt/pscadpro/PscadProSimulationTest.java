@@ -138,7 +138,7 @@ class PscadProSimulationTest {
      */
     @ParameterizedTest(name = "{0}")
     @ValueSource(strings = {"vsc-three-terminal-vdc-droop", "cigre-dcs2", "cigre-b4", "ieee14-dc", "kundur-dc", "ieee39-dc", "promotion-dc",
-        "ieee68-dc", "ieee39-gfl", "ieee39-gfm", "ieee39-gfl65", "ieee39-gfm65"})
+        "ieee68-dc", "ieee39-gfl", "ieee39-gfm", "ieee39-gfl65", "ieee39-gfm65", "ieee39-mix65"})
     void aMultiTerminalDcNetworkHoldsItsOperatingPoint(String bench, @TempDir Path tempDir) throws Exception {
         Network network = ExampleNetworks.withLoadFlow("vsc-three-terminal-vdc-droop".equals(bench) ? PscadProCases.dcDroop()
                 : PscadProCases.bench(bench));
