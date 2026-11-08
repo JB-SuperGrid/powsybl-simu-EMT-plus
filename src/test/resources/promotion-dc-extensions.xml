@@ -19,6 +19,11 @@
     to 1.2 to 1.7 pu; without, every station on its load flow. A braking chopper at each onshore station, A1 and B1, as D4.2's:
     1200 MW across its DC terminal, beyond its arms, conducting linearly from 1.05 to 1.1 pu. Each cable one lumped pi of the 640 kV
     conductor: 2 L and C / 2 of CIGRE B4's +-400 kV per-km pole data (2.615 mH, 0.1908 uF).
+
+    Each cable's breakers K{cable}_{station} hybrid DC breakers, as D4.2's fully selective protection has them: a 100 mH current-
+    limiting reactor a pole, 0.2 H on the one conductor, on the station's side; the energy absorber a ZnO arrester, i = 10 kA
+    (v / 960 kV)^26, its protective level 1.5 pu of 640 kV at 10 kA. The reactors in series with the cables, not with the stations,
+    A1 holds the DC voltage with them - run 2026-11-08 in PSCAD Professional, every station on its load flow.
 -->
 <extensions>
     <extension id="GA1">
@@ -137,5 +142,55 @@
     </extension>
     <extension id="CB1D2">
         <lumpedDcLineModel inductance="0.7845" capacitance="1.431e-05"/>
+    </extension>
+    <extension id="KCA1C2_A1">
+        <hybridDcBreakerModel referenceVoltage="960000.0" reactorInductance="0.2">
+            <segment coefficient="10000.0" exponent="26.0" minVoltage="0.0"/>
+        </hybridDcBreakerModel>
+    </extension>
+    <extension id="KCA1C2_C2">
+        <hybridDcBreakerModel referenceVoltage="960000.0" reactorInductance="0.2">
+            <segment coefficient="10000.0" exponent="26.0" minVoltage="0.0"/>
+        </hybridDcBreakerModel>
+    </extension>
+    <extension id="KCC2D1_C2">
+        <hybridDcBreakerModel referenceVoltage="960000.0" reactorInductance="0.2">
+            <segment coefficient="10000.0" exponent="26.0" minVoltage="0.0"/>
+        </hybridDcBreakerModel>
+    </extension>
+    <extension id="KCC2D1_D1">
+        <hybridDcBreakerModel referenceVoltage="960000.0" reactorInductance="0.2">
+            <segment coefficient="10000.0" exponent="26.0" minVoltage="0.0"/>
+        </hybridDcBreakerModel>
+    </extension>
+    <extension id="KCD1D2_D1">
+        <hybridDcBreakerModel referenceVoltage="960000.0" reactorInductance="0.2">
+            <segment coefficient="10000.0" exponent="26.0" minVoltage="0.0"/>
+        </hybridDcBreakerModel>
+    </extension>
+    <extension id="KCD1D2_D2">
+        <hybridDcBreakerModel referenceVoltage="960000.0" reactorInductance="0.2">
+            <segment coefficient="10000.0" exponent="26.0" minVoltage="0.0"/>
+        </hybridDcBreakerModel>
+    </extension>
+    <extension id="KCB1D1_B1">
+        <hybridDcBreakerModel referenceVoltage="960000.0" reactorInductance="0.2">
+            <segment coefficient="10000.0" exponent="26.0" minVoltage="0.0"/>
+        </hybridDcBreakerModel>
+    </extension>
+    <extension id="KCB1D1_D1">
+        <hybridDcBreakerModel referenceVoltage="960000.0" reactorInductance="0.2">
+            <segment coefficient="10000.0" exponent="26.0" minVoltage="0.0"/>
+        </hybridDcBreakerModel>
+    </extension>
+    <extension id="KCB1D2_B1">
+        <hybridDcBreakerModel referenceVoltage="960000.0" reactorInductance="0.2">
+            <segment coefficient="10000.0" exponent="26.0" minVoltage="0.0"/>
+        </hybridDcBreakerModel>
+    </extension>
+    <extension id="KCB1D2_D2">
+        <hybridDcBreakerModel referenceVoltage="960000.0" reactorInductance="0.2">
+            <segment coefficient="10000.0" exponent="26.0" minVoltage="0.0"/>
+        </hybridDcBreakerModel>
     </extension>
 </extensions>

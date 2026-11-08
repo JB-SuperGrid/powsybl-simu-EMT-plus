@@ -202,22 +202,31 @@ final class PscadProCases {
                 new Case("ieee39-dc-fault-b16", () -> preprocessed("ieee39-dc", false, false), List.of(new BusFault("F", "B16", "ABC", true,
                         1.0, 2.5, 2.6, FaultClearing.AT_CURRENT_ZERO)), new PscadSimulationSettings(20.0e-6, 8.0, 50.0, PscadEdition.PROFESSIONAL),
                         Kind.FROM_REST),
-                // PROMOTioN's five terminals: a solid pole-to-pole fault at D1, the most meshed node, its stations protected against
-                // their arms' overcurrent - run 2026-11-08: every station blocked, nearest first, D1 0.4 ms on, C2 8, D2 13, B1 30, A1
-                // 67, their DC currents up to 5 to 7 pu; blocked, the half-bridges' diodes feeding the fault from the AC grids, 4.7 pu
-                // from each onshore one, their PCCs down to 0.3 pu, which nothing clears: no AC breaker opens here -, the DC voltages
-                // never up to A1's and B1's choppers; a solid three-phase fault at A1's grid, the DC voltage's station, 100 ms - run
-                // 2026-11-08: A1's AC voltage down to 0.26 pu, its power gone; B1 taking what its droop can, to its current limit, the
-                // wind parks theirs still: the DC voltages up to 1.087 pu, held there by A1's and B1's choppers, 0.47 and 0.31 pu at
-                // most, conducting through the fault and 70 ms on (1.24 pu without them); cleared, A1's AC voltage up to 1.40 pu, every
-                // station back on its power, the DC voltages within 1e-3 pu of theirs before, by 3 s
+                // PROMOTioN's five terminals, each cable between two hybrid DC breakers and their 200 mH reactors: a solid pole-to-pole
+                // fault at D1, the most meshed node, its stations protected against their arms' overcurrent - run 2026-11-08: every
+                // station blocked, nearest first, D1 0.4 ms on, C2 13, D2 13, B1 36, A1 94, their DC currents up to 4.8 to 5.4 pu;
+                // blocked, the half-bridges' diodes feeding the fault from the AC grids, 4.4 to 4.8 pu from each onshore one, their PCCs
+                // down to 0.25 to 0.29 pu, which nothing clears: no breaker opens here -, the DC voltages never up to A1's and B1's
+                // choppers
                 converters("promotion-dc-fault-d1", () -> preprocessed("promotion-dc", false, true), new DcFault("FDC", "BD1", 0.0, 2.3, 12.0)),
                 // ... and cleared the non-selective way, as PROMOTioN's D4.2 has it: every station blocked on the fault's detection,
-                // 2 ms on, then its AC breaker opening, 40 ms on - run 2026-11-08: the AC voltages within 1.13 pu, the DC voltages
-                // down to -97 kV; the AC grids cut off, the DC currents freewheeling through the diodes into the fault, decaying with
-                // some 0.23 s, D1's gone in 380 ms, the others 0.1 to 0.3 pu still 0.7 s on: some 1.6 s to the 10 A D4.2's high-speed
-                // switches open at, as D4.2 finds the AC breakers' strategy's (1.1 s and more)
+                // 2 ms on, then its AC breaker opening, 40 ms on - run 2026-11-08: the AC voltages within 1.22 pu, the DC voltages
+                // down to -51 kV; the AC grids cut off, the DC currents freewheeling through the diodes into the fault, decaying with
+                // some 0.3 to 0.4 s, D1's gone in 380 ms, the others 0.2 to 0.5 pu still 0.7 s on: some 2 s to the 10 A D4.2's
+                // high-speed switches open at, as D4.2 finds the AC breakers' strategy's (1.1 s and more)
                 converters("promotion-dc-fault-d1-cleared", () -> preprocessed("promotion-dc", false, true), promotionDcFaultCleared()),
+                // ... and on cable D1-D2 at D1's end, cleared the fully selective way, as D4.2 has it: the cable's two breakers opened
+                // 3 ms on, the fault left on - run 2026-11-08: no station blocked, D1's DC current up to 3.9 pu, the others' within 1.8
+                // pu, the DC voltages within 0.87 and 1.10 pu, the AC voltages within 0.98 and 1.02 pu; the cable cut off, its D2 end
+                // ringing down, the meshed rest carrying the wind parks' power, every station on its power and its DC voltage within
+                // 1.4e-3 pu of its own before, by 3 s
+                converters("promotion-dc-fault-cd1d2", () -> preprocessed("promotion-dc", false, true), new DcFault("FDC", "BCD1D2_D1", 0.0, 2.3,
+                        12.0), DcSwitchOperation.opening("KCD1D2_D1", 2.303), DcSwitchOperation.opening("KCD1D2_D2", 2.303)),
+                // A solid three-phase fault at A1's grid, the DC voltage's station, 100 ms - run 2026-11-08: A1's AC voltage down to
+                // 0.26 pu, its power gone; B1 taking what its droop can, to its current limit, the wind parks theirs still: the DC
+                // voltages up to 1.087 pu, held there by A1's and B1's choppers, 0.49 and 0.25 pu at most, conducting through the fault
+                // and up to 85 ms after (1.24 pu without them); cleared, A1's AC voltage up to 1.41 pu, every station back on its power, the DC
+                // voltages within 1.1e-3 pu of theirs before, by 3 s
                 converters("promotion-dc-ac-fault-a1", () -> preprocessed("promotion-dc", false, false), new BusFault("F", "BGA1", "ABC", true, 1.0,
                         2.3, 2.4, FaultClearing.AT_CURRENT_ZERO)),
                 converters("cigre-b4-fault-b1", () -> preprocessed("cigre-b4", false, false), new BusFault("F", "BAB1", "ABC", true, 1.0, 2.5, 2.6,
