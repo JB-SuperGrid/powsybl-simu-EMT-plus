@@ -24,7 +24,7 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * The IEEE 39-bus system with a high share of power electronics, as this project runs it in PSCAD Professional, in five
+ * The IEEE 39-bus system with a high share of power electronics, as this project runs it in PSCAD Professional, in six
  * variants of one AC network - {@link Ieee39DcNetwork#createAc}'s, MATPOWER's case39 - to set grid-following against
  * grid-forming converters on the same sources:
  * <ul>
@@ -34,7 +34,8 @@ import java.util.Objects;
  *   extensions {@code ieee39-gfl-extensions.xml} or {@code ieee39-gfm-extensions.xml}, the converters' controls the one
  *   difference;</li>
  *   <li>{@code ieee39-gfl65} and {@code ieee39-gfm65}, the same with six of them, G33 and G36 too ({@link #REPLACED_65}), 67 %:
- *   {@code ieee39-ibr65.xiidm}, {@code ieee39-gfl65-extensions.xml} or {@code ieee39-gfm65-extensions.xml}.</li>
+ *   {@code ieee39-ibr65.xiidm}, {@code ieee39-gfl65-extensions.xml} or {@code ieee39-gfm65-extensions.xml}; and {@code
+ *   ieee39-mix65}, grid-following but for CL33, grid-forming, {@code ieee39-mix65-extensions.xml}.</li>
  * </ul>
  *
  * <p>Each converter source is a point-to-point link, this project's own: its station CL.. on the replaced machine's 345 kV
@@ -59,6 +60,12 @@ final class Ieee39IbrNetwork {
     static Network loadIbr(boolean gridForming) {
         return EmtExtensionsXmlReader.readNetwork(resource("/ieee39-ibr.xiidm"),
                 resource(gridForming ? "/ieee39-gfm-extensions.xml" : "/ieee39-gfl-extensions.xml"));
+    }
+
+    /** Six machines replaced, grid-following but for CL33, grid-forming: the least grid-forming that keeps the network through a
+     * fault at bus 16, from its flat files. */
+    static Network loadMix65() {
+        return EmtExtensionsXmlReader.readNetwork(resource("/ieee39-ibr65.xiidm"), resource("/ieee39-mix65-extensions.xml"));
     }
 
     /** Six machines replaced ({@link #REPLACED_65}), grid-forming if {@code gridForming}, else grid-following, from its flat files. */

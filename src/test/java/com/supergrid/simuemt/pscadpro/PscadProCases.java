@@ -167,6 +167,7 @@ final class PscadProCases {
                 fromRest("ieee39-gfm", () -> bench("ieee39-gfm")),
                 fromRest("ieee39-gfl65", () -> bench("ieee39-gfl65")),
                 fromRest("ieee39-gfm65", () -> bench("ieee39-gfm65")),
+                fromRest("ieee39-mix65", () -> bench("ieee39-mix65")),
                 fromRest("promotion-dc", () -> bench("promotion-dc")),
                 new Case("vsc-islanding", () -> bench("vsc-monopole-island"), List.of(ExampleNetworks.VSC_MONOPOLE_ISLANDING), SETTINGS,
                         Kind.FROM_REST),
@@ -242,6 +243,13 @@ final class PscadProCases {
                 // power within 0.02 pu 0.8 to 2.0 s after the clearing, the machines' speeds swinging within 0.005 Hz by 7 s
                 ibrCase("ieee39-gfl65-fault-b16", "ieee39-gfl65", IBR_FAULT),
                 ibrCase("ieee39-gfm65-fault-b16", "ieee39-gfm65", IBR_FAULT),
+                // ... and how much grid-forming keeps the 67 % network through the fault, one station's control changed at a time,
+                // run 2026-11-08: CL33 alone - 800 MVA, bus 19, beside the fault - and the network holds, G31 up to 1.0085 pu
+                // instead of out of step, the grid-following stations back on their power within 0.02 pu 0.11 to 0.17 s after the
+                // clearing, CL33 2.9 s, the machines' speeds swinging within 0.007 Hz by 7 s; CL38 alone, 1000 MVA at bus 29, far
+                // from it, holds it too, G31 up to 1.0071 pu; CL30 alone, 300 MVA at bus 2, does not, the network lost as without
+                // any. With CL32 and CL36 too, G31 up to 1.0057 and 1.0052 pu: a grid-forming station's size more than its place
+                ibrCase("ieee39-mix65-fault-b16", "ieee39-mix65", IBR_FAULT),
                 ibrCase("ieee39-gfl65-load-step-b16", "ieee39-gfl65", IBR_LOAD_STEP),
                 ibrCase("ieee39-gfm65-load-step-b16", "ieee39-gfm65", IBR_LOAD_STEP),
                 new Case("ieee68-dc-fault-b1", () -> preprocessed("ieee68-dc", false, false), List.of(new BusFault("F", "B1", "ABC", true,
@@ -431,6 +439,9 @@ final class PscadProCases {
         }
         if ("ieee39-gfl".equals(bench) || "ieee39-gfm".equals(bench)) {
             return Ieee39IbrNetwork.loadIbr("ieee39-gfm".equals(bench));
+        }
+        if ("ieee39-mix65".equals(bench)) {
+            return Ieee39IbrNetwork.loadMix65();
         }
         if ("ieee39-gfl65".equals(bench) || "ieee39-gfm65".equals(bench)) {
             return Ieee39IbrNetwork.loadIbr65("ieee39-gfm65".equals(bench));
