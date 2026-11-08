@@ -135,6 +135,7 @@ final class PscadProCases {
                 fromRest("twelve-bus-chain", PscadProCases::twelveBusChain),
                 // A machine's controls of the project's own, in Fortran: exciters, limiters and controllers
                 fromRest("machine-st4b", ExampleNetworks::createTwoBusNetworkWithSt4B),
+                fromRest("machine-ac6a", ExampleNetworks::createTwoBusNetworkWithAc6A),
                 fromRest("machine-ac8b", ExampleNetworks::createTwoBusNetworkWithAc8B),
                 fromRest("machine-dec1a", ExampleNetworks::createTwoBusNetworkWithDec1AVoltageLimiter),
                 fromRest("machine-pfvar-scl1c", ExampleNetworks::createTwoBusNetworkWithPfVarControllerAndScl1C),
