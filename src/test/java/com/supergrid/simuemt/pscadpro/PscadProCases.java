@@ -158,6 +158,7 @@ final class PscadProCases {
                 fromRest("cigre-dcs2", () -> bench("cigre-dcs2")),
                 fromRest("cigre-b4", () -> bench("cigre-b4")),
                 fromRest("ieee14-dc", () -> bench("ieee14-dc")),
+                fromRest("kundur-dc", () -> bench("kundur-dc")),
                 new Case("vsc-islanding", () -> bench("vsc-monopole-island"), List.of(ExampleNetworks.VSC_MONOPOLE_ISLANDING), SETTINGS,
                         Kind.FROM_REST),
                 // Converters blocked, deblocked, protected, through DC faults and DC breakers: upstream's PSCAD Professional runs
@@ -179,6 +180,11 @@ final class PscadProCases {
                 // IEEE 14-bus with its DC grid: a solid three-phase fault at bus 4, between its machines and its stations, 100 ms
                 converters("ieee14-dc-fault-b4", () -> preprocessed("ieee14-dc", false, false), new BusFault("F", "B4", "ABC", true, 1.0,
                         2.5, 2.6, FaultClearing.AT_CURRENT_ZERO)),
+                // Kundur's two areas with their DC grid: a solid three-phase fault at bus 8, the tie's middle, 100 ms; run 8 s, the
+                // inter-area swing's few periods after it
+                new Case("kundur-dc-fault-b8", () -> preprocessed("kundur-dc", false, false), List.of(new BusFault("F", "B8", "ABC", true, 1.0,
+                        2.5, 2.6, FaultClearing.AT_CURRENT_ZERO)), new PscadSimulationSettings(20.0e-6, 8.0, 50.0, PscadEdition.PROFESSIONAL),
+                        Kind.FROM_REST),
                 converters("cigre-b4-fault-b1", () -> preprocessed("cigre-b4", false, false), new BusFault("F", "BAB1", "ABC", true, 1.0, 2.5, 2.6,
                         FaultClearing.AT_CURRENT_ZERO)),
                 converters("vsc-deblocked", () -> preprocessed("vsc-monopole-infinite-buses-3", false, false), new ConverterBlocking("VSC2", 2.3),
@@ -276,8 +282,8 @@ final class PscadProCases {
     }
 
     /** A bench of powsybl-simu-emt's test resources: {@code <bench>.xiidm} with its models, {@code <bench>-extensions.xml} - but
-     * {@code cigre-b4} and {@code ieee14-dc},
-     * this project's own ({@link CigreB4Network}, {@link Ieee14DcNetwork}). */
+     * {@code cigre-b4}, {@code ieee14-dc} and {@code kundur-dc}, this project's own ({@link CigreB4Network}, {@link Ieee14DcNetwork},
+     * {@link KundurDcNetwork}). */
     static Network bench(String bench) {
         // This project's own, not upstream's.
         if ("cigre-b4".equals(bench)) {
@@ -285,6 +291,9 @@ final class PscadProCases {
         }
         if ("ieee14-dc".equals(bench)) {
             return Ieee14DcNetwork.load();
+        }
+        if ("kundur-dc".equals(bench)) {
+            return KundurDcNetwork.load();
         }
         return EmtExtensionsXmlReader.readNetwork(ExampleNetworks.resource("/" + bench + ".xiidm"),
                 ExampleNetworks.resource("/" + bench + "-extensions.xml"));
