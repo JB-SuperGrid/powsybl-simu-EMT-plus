@@ -206,7 +206,10 @@ final class PscadProCases {
                 // their arms' overcurrent - run 2026-11-08: every station blocked, nearest first, D1 0.4 ms on, C2 8, D2 13, B1 30, A1
                 // 67, their DC currents up to 5 to 7 pu; blocked, the half-bridges' diodes feeding the fault from the AC grids, 4.7 pu
                 // from each onshore one, their PCCs down to 0.3 pu, which nothing clears: no AC breaker opens here -; a solid
-                // three-phase fault at A1's grid, the DC voltage's station, 100 ms
+                // three-phase fault at A1's grid, the DC voltage's station, 100 ms - run 2026-11-08: A1's AC voltage down to 0.26 pu, its
+                // power gone; B1 taking what its droop can, to its current limit, the wind parks theirs still: the DC voltages up to
+                // 1.24 pu, nothing - no chopper, D4.2's onshore braking resistors - to take it; cleared, A1's AC voltage up to 1.42 pu,
+                // every station back on its power, the DC voltages within 1e-3 pu, by 3 s
                 converters("promotion-dc-fault-d1", () -> preprocessed("promotion-dc", false, true), new DcFault("FDC", "BD1", 0.0, 2.3, 12.0)),
                 // ... and cleared the non-selective way, as PROMOTioN's D4.2 has it: every station blocked on the fault's detection,
                 // 2 ms on, then its AC breaker opening, 40 ms on - run 2026-11-08: the AC voltages within 1.13 pu, the DC voltages
