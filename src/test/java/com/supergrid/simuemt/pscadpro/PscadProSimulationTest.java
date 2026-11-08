@@ -12,6 +12,8 @@ import com.powsybl.simuemt.extensions.hvdc.AveragedConverterModel;
 import com.powsybl.simuemt.extensions.hvdc.AveragedVscInitialState;
 import com.powsybl.simuemt.extensions.hvdc.DcVoltageDroopLaw;
 import com.powsybl.simuemt.extensions.hvdc.VoltageSourceConverterModel;
+import com.powsybl.simuemt.extensions.hvdc.control.GridFormingControl;
+import com.powsybl.simuemt.extensions.hvdc.control.VscControlModel;
 import com.powsybl.simuemt.extensions.machine.SubtransientMachineModel;
 import com.powsybl.simuemt.pscad.PscadEdition;
 import com.powsybl.simuemt.pscad.PscadFileWriter;
@@ -127,10 +129,14 @@ class PscadProSimulationTest {
      * its V_DC, 5.4 MW short of the load flow's power; the reactive powers within 0.5 Mvar; the DC voltages within 9e-5 pu. IEEE 68
      * with its DC grid, 2026-11-08, 4 s: its droops on their curves within 0.003 MW, CS16 on its V_DC, 1.2 MW past the load flow's
      * power; the reactive powers within 0.14 Mvar; the DC voltages within 3e-5 pu; its sixteen machines within 2e-6 pu of the
-     * synchronous speed.
+     * synchronous speed. IEEE 39 with four machines replaced by converter sources, 2026-11-08, 4 s: grid-following, the CL stations
+     * on their powers within 2e-4 MW, the CR ones on their V_DC, 1.3 to 4.4 MW past the load flow's power, the reactive powers
+     * within 0.14 Mvar, the DC voltages within 3e-5 pu, the six machines 9e-6 pu slow; grid-forming, the CL stations 0.05 to 0.74
+     * MW short of their powers, their virtual machines' damping on a frequency 1e-6 to 3e-5 pu off, the reactive powers within
+     * 0.53 Mvar, the DC voltages within 4e-5 pu.
      */
     @ParameterizedTest(name = "{0}")
-    @ValueSource(strings = {"vsc-three-terminal-vdc-droop", "cigre-dcs2", "cigre-b4", "ieee14-dc", "kundur-dc", "ieee39-dc", "promotion-dc", "ieee68-dc"})
+    @ValueSource(strings = {"vsc-three-terminal-vdc-droop", "cigre-dcs2", "cigre-b4", "ieee14-dc", "kundur-dc", "ieee39-dc", "promotion-dc", "ieee68-dc", "ieee39-gfl", "ieee39-gfm"})
     void aMultiTerminalDcNetworkHoldsItsOperatingPoint(String bench, @TempDir Path tempDir) throws Exception {
         Network network = ExampleNetworks.withLoadFlow("vsc-three-terminal-vdc-droop".equals(bench) ? PscadProCases.dcDroop()
                 : PscadProCases.bench(bench));
@@ -158,7 +164,12 @@ class PscadProSimulationTest {
             if (converter.getControlMode() == AcDcConverter.ControlMode.V_DC) {
                 softly.assertThat(vdc).as("%s DC voltage, pu", id).isCloseTo(lfVdc, within(1.0e-4));
             } else {
-                softly.assertThat(p).as("%s active power, MW", id).isCloseTo(expectedP, within(0.1));
+                // A grid-forming station on a meshed AC grid: its virtual machine's damping moves its power with the grid's frequency,
+                // the machines' still 1e-5 to 3e-5 pu off at 4 s, their TGOV1s bringing it back - 0.2 % of its rating.
+                double pTolerance = converter.getExtension(VscControlModel.class) instanceof GridFormingControl
+                        && converter.getTerminal1().getBusView().getBus().getConnectedComponent().getBusStream().flatMap(b -> b.getGeneratorStream())
+                        .anyMatch(g -> g.getExtension(GeneratorModel.class) instanceof SubtransientMachineModel) ? 0.002 * rating : 0.1;
+                softly.assertThat(p).as("%s active power, MW", id).isCloseTo(expectedP, within(pTolerance));
                 softly.assertThat(vdc).as("%s DC voltage, pu", id).isCloseTo(lfVdc, within(5.0e-4));
             }
             double qTolerance = Math.max(0.3, 0.003 * rating);

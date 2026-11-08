@@ -122,7 +122,7 @@ final class Ieee39DcNetwork {
         {39, 1104.0, 250.0, 1.03, -14.535256},
     };
     /** Generators: bus, Pg MW, Qg Mvar, Vg pu. */
-    private static final double[][] GENERATORS = {
+    static final double[][] GENERATORS = {
         {30, 250.0, 161.762, 1.0499},
         {31, 677.871, 221.574, 0.982},
         {32, 650.0, 206.965, 0.9841},
@@ -197,7 +197,14 @@ final class Ieee39DcNetwork {
     }
 
     static Network create() {
-        Network network = NetworkFactory.findDefault().createNetwork("ieee39-dc", "test");
+        Network network = createAc("ieee39-dc");
+        addDcGrid(network);
+        return network;
+    }
+
+    /** Its AC network alone, MATPOWER's case39 as {@link #create} builds it, under {@code networkId}. */
+    static Network createAc(String networkId) {
+        Network network = NetworkFactory.findDefault().createNetwork(networkId, "test");
         Map<Integer, Integer> substations = substations();
         for (double[] bus : BUSES) {
             int n = (int) bus[0];
@@ -218,7 +225,6 @@ final class Ieee39DcNetwork {
         for (double[] branch : BRANCHES) {
             addBranch(network, branch);
         }
-        addDcGrid(network);
         return network;
     }
 
@@ -296,11 +302,11 @@ final class Ieee39DcNetwork {
     }
 
     /** A DC line type's data per km of a pole: resistance in ohm, inductance in H, capacitance in F. */
-    private record LineType(double resistance, double inductance, double capacitance) {
+    record LineType(double resistance, double inductance, double capacitance) {
     }
 
     /** CIGRE B4's +-200 kV DC OHL and cable. */
-    private static final LineType DC_OHL = new LineType(0.0133, 0.8273e-3, 0.0139e-6);
+    static final LineType DC_OHL = new LineType(0.0133, 0.8273e-3, 0.0139e-6);
     private static final LineType DC_CABLE = new LineType(0.011, 2.615e-3, 0.2185e-6);
 
     private static void addDcGrid(Network network) {
