@@ -165,6 +165,8 @@ final class PscadProCases {
                 fromRest("ieee39-sync", () -> bench("ieee39-sync")),
                 fromRest("ieee39-gfl", () -> bench("ieee39-gfl")),
                 fromRest("ieee39-gfm", () -> bench("ieee39-gfm")),
+                fromRest("ieee39-gfl65", () -> bench("ieee39-gfl65")),
+                fromRest("ieee39-gfm65", () -> bench("ieee39-gfm65")),
                 fromRest("promotion-dc", () -> bench("promotion-dc")),
                 new Case("vsc-islanding", () -> bench("vsc-monopole-island"), List.of(ExampleNetworks.VSC_MONOPOLE_ISLANDING), SETTINGS,
                         Kind.FROM_REST),
@@ -232,6 +234,16 @@ final class PscadProCases {
                 ibrCase("ieee39-sync-load-step-b16", "ieee39-sync", IBR_LOAD_STEP),
                 ibrCase("ieee39-gfl-load-step-b16", "ieee39-gfl", IBR_LOAD_STEP),
                 ibrCase("ieee39-gfm-load-step-b16", "ieee39-gfm", IBR_LOAD_STEP),
+                // ... and with six machines replaced, 67 %, G31, G34, G37 and G39 left - run 2026-11-08. The load step: the nadir
+                // 141 mHz grid-following, its RoCoF -0.115 Hz/s, New England against G39 at 0.75 Hz, zeta 0.12; 64 mHz grid-forming,
+                // -0.038 Hz/s, zeta 0.51. The fault: grid-following, the network lost - its voltages held near 0.85 pu after the
+                // clearing, G31, the machine nearest the fault, speeding up to 1.057 pu and out of step within 0.7 s, every station
+                // then swinging past 1.3 or under 0.3 pu, at 20 us as at 50 us; grid-forming, every station riding it, back on its
+                // power within 0.02 pu 0.8 to 2.0 s after the clearing, the machines' speeds swinging within 0.005 Hz by 7 s
+                ibrCase("ieee39-gfl65-fault-b16", "ieee39-gfl65", IBR_FAULT),
+                ibrCase("ieee39-gfm65-fault-b16", "ieee39-gfm65", IBR_FAULT),
+                ibrCase("ieee39-gfl65-load-step-b16", "ieee39-gfl65", IBR_LOAD_STEP),
+                ibrCase("ieee39-gfm65-load-step-b16", "ieee39-gfm65", IBR_LOAD_STEP),
                 new Case("ieee68-dc-fault-b1", () -> preprocessed("ieee68-dc", false, false), List.of(new BusFault("F", "B1", "ABC", true,
                         1.0, 2.5, 2.6, FaultClearing.AT_CURRENT_ZERO)), new PscadSimulationSettings(50.0e-6, 8.0, 50.0, PscadEdition.PROFESSIONAL),
                         Kind.FROM_REST),
@@ -419,6 +431,9 @@ final class PscadProCases {
         }
         if ("ieee39-gfl".equals(bench) || "ieee39-gfm".equals(bench)) {
             return Ieee39IbrNetwork.loadIbr("ieee39-gfm".equals(bench));
+        }
+        if ("ieee39-gfl65".equals(bench) || "ieee39-gfm65".equals(bench)) {
+            return Ieee39IbrNetwork.loadIbr65("ieee39-gfm65".equals(bench));
         }
         return EmtExtensionsXmlReader.readNetwork(ExampleNetworks.resource("/" + bench + ".xiidm"),
                 ExampleNetworks.resource("/" + bench + "-extensions.xml"));

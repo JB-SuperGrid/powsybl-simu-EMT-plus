@@ -133,10 +133,12 @@ class PscadProSimulationTest {
      * on their powers within 2e-4 MW, the CR ones on their V_DC, 1.3 to 4.4 MW past the load flow's power, the reactive powers
      * within 0.14 Mvar, the DC voltages within 3e-5 pu, the six machines 9e-6 pu slow; grid-forming, the CL stations 0.05 to 0.74
      * MW short of their powers, their virtual machines' damping on a frequency 1e-6 to 3e-5 pu off, the reactive powers within
-     * 0.53 Mvar, the DC voltages within 4e-5 pu.
+     * 0.53 Mvar, the DC voltages within 4e-5 pu. With six machines replaced, the same: the CL stations within 0.0013 MW
+     * grid-following, 0.02 to 0.78 MW grid-forming; the reactive powers within 0.46 Mvar, the DC voltages within 3e-5 pu.
      */
     @ParameterizedTest(name = "{0}")
-    @ValueSource(strings = {"vsc-three-terminal-vdc-droop", "cigre-dcs2", "cigre-b4", "ieee14-dc", "kundur-dc", "ieee39-dc", "promotion-dc", "ieee68-dc", "ieee39-gfl", "ieee39-gfm"})
+    @ValueSource(strings = {"vsc-three-terminal-vdc-droop", "cigre-dcs2", "cigre-b4", "ieee14-dc", "kundur-dc", "ieee39-dc", "promotion-dc",
+        "ieee68-dc", "ieee39-gfl", "ieee39-gfm", "ieee39-gfl65", "ieee39-gfm65"})
     void aMultiTerminalDcNetworkHoldsItsOperatingPoint(String bench, @TempDir Path tempDir) throws Exception {
         Network network = ExampleNetworks.withLoadFlow("vsc-three-terminal-vdc-droop".equals(bench) ? PscadProCases.dcDroop()
                 : PscadProCases.bench(bench));

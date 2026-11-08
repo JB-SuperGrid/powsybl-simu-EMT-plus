@@ -29,7 +29,7 @@ import static org.assertj.core.api.Assertions.within;
 class Ieee39IbrNetworkTest {
 
     /** The flat files are what {@link Ieee39IbrNetwork} builds: the reference its ten machines; the variants six of them and four
-     * links of two stations each. */
+     * links of two stations each, or four and six. */
     @Test
     void theFlatFilesAreTheBuildersNetworks() {
         assertThat(ids(Ieee39IbrNetwork.loadSync())).isEqualTo(ids(Ieee39IbrNetwork.createSync()));
@@ -41,6 +41,13 @@ class Ieee39IbrNetworkTest {
             assertThat(read.getVoltageSourceConverterCount()).isEqualTo(8);
             assertThat(read.getDcLineCount()).isEqualTo(4);
         }
+        for (boolean gridForming : List.of(false, true)) {
+            Network read = Ieee39IbrNetwork.loadIbr65(gridForming);
+            assertThat(ids(read)).isEqualTo(ids(Ieee39IbrNetwork.createIbr65()));
+            assertThat(read.getGeneratorCount()).isEqualTo(4 + 6);
+            assertThat(read.getVoltageSourceConverterCount()).isEqualTo(12);
+            assertThat(read.getDcLineCount()).isEqualTo(6);
+        }
     }
 
     private static List<String> ids(Network network) {
@@ -50,9 +57,12 @@ class Ieee39IbrNetworkTest {
     /** The variants differ in their CL stations' control alone: grid-following or grid-forming; the CR stations grid-following both. */
     @Test
     void theVariantsDifferInTheirStationsControlAlone() {
-        Network gfl = Ieee39IbrNetwork.loadIbr(false);
-        Network gfm = Ieee39IbrNetwork.loadIbr(true);
-        for (Ieee39IbrNetwork.Replaced replaced : Ieee39IbrNetwork.REPLACED) {
+        differInTheirStationsControlAlone(Ieee39IbrNetwork.loadIbr(false), Ieee39IbrNetwork.loadIbr(true), Ieee39IbrNetwork.REPLACED);
+        differInTheirStationsControlAlone(Ieee39IbrNetwork.loadIbr65(false), Ieee39IbrNetwork.loadIbr65(true), Ieee39IbrNetwork.REPLACED_65);
+    }
+
+    private static void differInTheirStationsControlAlone(Network gfl, Network gfm, List<Ieee39IbrNetwork.Replaced> replacedMachines) {
+        for (Ieee39IbrNetwork.Replaced replaced : replacedMachines) {
             int m = replaced.machineBus();
             Object gflControl = gfl.getVoltageSourceConverter("CL" + m).getExtension(VscControlModel.class);
             Object gfmControl = gfm.getVoltageSourceConverter("CL" + m).getExtension(VscControlModel.class);
