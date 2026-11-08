@@ -193,7 +193,10 @@ final class PscadProCases {
                         2.5, 2.6, FaultClearing.AT_CURRENT_ZERO)), new PscadSimulationSettings(20.0e-6, 8.0, 50.0, PscadEdition.PROFESSIONAL),
                         Kind.FROM_REST),
                 // IEEE 39-bus with its DC grid: a solid three-phase fault at bus 16, its hub and CS16's - the DC voltage's - bus,
-                // 100 ms; run 8 s
+                // 100 ms; run 8 s. Run 2026-11-08: New England's nine machines swinging together against G39, the rest of the
+                // interconnection, up to 39 degrees at 0.6 Hz, zeta 0.02 to 0.035 - 0.17 with the PSS1As switched on, the
+                // pipeline's default, not tuned for it; CS16's AC bus down to 0.16 pu, its power reversed for a while, the DC
+                // voltages within 0.94 and 1.11 pu, every station back on its power
                 new Case("ieee39-dc-fault-b16", () -> preprocessed("ieee39-dc", false, false), List.of(new BusFault("F", "B16", "ABC", true,
                         1.0, 2.5, 2.6, FaultClearing.AT_CURRENT_ZERO)), new PscadSimulationSettings(20.0e-6, 8.0, 50.0, PscadEdition.PROFESSIONAL),
                         Kind.FROM_REST),
