@@ -16,8 +16,9 @@
     No DC reactor, where D5.1 has 50 to 150 mH a pole: on those controls, tuned for stations without one, A1 does not hold the DC
     voltage with one - run 2026-11-08 in PSCAD Professional, let go at 2 s, its DC voltage loop swinging and growing within 1 s at
     0.2 H a station (100 mH a pole, the two in series), within 1.5 s at 0.05 H, B1 driven to its current limit and the DC voltage
-    to 1.2 to 1.7 pu; without, every station on its load flow. Each cable one lumped pi of the 640 kV conductor: 2 L and C / 2 of
-    CIGRE B4's +-400 kV per-km pole data (2.615 mH, 0.1908 uF).
+    to 1.2 to 1.7 pu; without, every station on its load flow. A braking chopper at each onshore station, A1 and B1, as D4.2's:
+    1200 MW across its DC terminal, beyond its arms, conducting linearly from 1.05 to 1.1 pu. Each cable one lumped pi of the 640 kV
+    conductor: 2 L and C / 2 of CIGRE B4's +-400 kV per-km pole data (2.615 mH, 0.1908 uF).
 -->
 <extensions>
     <extension id="GA1">
@@ -36,6 +37,7 @@
         <infiniteBusGeneratorModel shortCircuitPowerMva="3800.0" xOverR="10.0"/>
     </extension>
     <extension id="CA1">
+        <averagedDcChopperModel ratedPower="1200.0" activationVoltage="1.05" fullConductionVoltage="1.1"/>
         <averagedMmcModel ratedApparentPower="1600.0" armResistance="0.003" armReactance="0.15" submoduleEnergyConstant="0.04"/>
         <gridFollowingControl>
             <ddsrf filterFrequency="35.3553"/>
@@ -53,6 +55,7 @@
         </gridFollowingControl>
     </extension>
     <extension id="CB1">
+        <averagedDcChopperModel ratedPower="1200.0" activationVoltage="1.05" fullConductionVoltage="1.1"/>
         <averagedMmcModel ratedApparentPower="1600.0" armResistance="0.003" armReactance="0.15" submoduleEnergyConstant="0.04"/>
         <gridFollowingControl>
             <ddsrf filterFrequency="35.3553"/>
