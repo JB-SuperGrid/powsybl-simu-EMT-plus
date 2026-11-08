@@ -8,8 +8,8 @@ import com.powsybl.iidm.network.AcDcConverter;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.VoltageSourceConverter;
 import com.powsybl.simuemt.extensions.GeneratorModel;
+import com.powsybl.simuemt.extensions.hvdc.AveragedConverterModel;
 import com.powsybl.simuemt.extensions.hvdc.AveragedVscInitialState;
-import com.powsybl.simuemt.extensions.hvdc.AveragedVscModel;
 import com.powsybl.simuemt.extensions.hvdc.DcVoltageDroopLaw;
 import com.powsybl.simuemt.extensions.hvdc.VoltageSourceConverterModel;
 import com.powsybl.simuemt.extensions.machine.SubtransientMachineModel;
@@ -100,7 +100,7 @@ class PscadProSimulationTest {
      * whole, its eleven stations on three DC grids, DCS3 meshed, between two meshed AC systems and four offshore islands; the IEEE
      * 14-bus network with its DC grid, its machines Dynawo's; Kundur's two areas with theirs, its machines the benchmark's, their
      * PSSs in service; the IEEE 39-bus network with its four stations, its ten machines Athay's, on PSSs too - the machines' speed back on the
-     * synchronous one within 5e-4 pu. From
+     * synchronous one within 5e-4 pu; PROMOTioN's five-terminal benchmark, its stations MMCs. From
      * rest - their AC and DC sides separate subsystems, which a snapshot restart does not patch - over 4 s: the DC side charged
      * while the controls' integrals are held, until 2 s as a template's are, then let go. In the last 40 ms, each droop
      * converter's power where its curve meets the DC voltage it settles at, as Xyce's and Kestrel's runs hold it: the load
@@ -123,9 +123,11 @@ class PscadProSimulationTest {
      * their TGOV1s' turbines (T3 10 s) still bringing those 1.75 MW back. IEEE 39 with its DC grid, 2026-11-08, 4 s in 59 s: its
      * droops on their curves within 3e-4 MW, CSW within 0.007 MW, CS16 on its V_DC, 2.3 MW short of the load flow's power; the
      * reactive powers within 0.18 Mvar; the DC voltages within 2e-5 pu; its ten machines, on their PSSs, 0.8e-5 to 1.2e-5 pu slow.
+     * PROMOTioN's benchmark, 2026-11-08, 4 s in 33 s: B1 on its curve within 0.002 MW, the offshore stations on their powers, A1 on
+     * its V_DC, 5.4 MW short of the load flow's power; the reactive powers within 0.5 Mvar; the DC voltages within 9e-5 pu.
      */
     @ParameterizedTest(name = "{0}")
-    @ValueSource(strings = {"vsc-three-terminal-vdc-droop", "cigre-dcs2", "cigre-b4", "ieee14-dc", "kundur-dc", "ieee39-dc"})
+    @ValueSource(strings = {"vsc-three-terminal-vdc-droop", "cigre-dcs2", "cigre-b4", "ieee14-dc", "kundur-dc", "ieee39-dc", "promotion-dc"})
     void aMultiTerminalDcNetworkHoldsItsOperatingPoint(String bench, @TempDir Path tempDir) throws Exception {
         Network network = ExampleNetworks.withLoadFlow("vsc-three-terminal-vdc-droop".equals(bench) ? PscadProCases.dcDroop()
                 : PscadProCases.bench(bench));
@@ -138,7 +140,7 @@ class PscadProSimulationTest {
         SoftAssertions softly = new SoftAssertions();
         for (VoltageSourceConverter converter : network.getVoltageSourceConverters()) {
             String id = converter.getId();
-            AveragedVscModel model = (AveragedVscModel) converter.getExtension(VoltageSourceConverterModel.class);
+            AveragedConverterModel model = (AveragedConverterModel) converter.getExtension(VoltageSourceConverterModel.class);
             AveragedVscInitialState initial = AveragedVscInitialState.of(converter, model);
             double rating = model.getRatedApparentPower();
             double p = run.output().mean(id + "_P", from, runEnd) * rating;

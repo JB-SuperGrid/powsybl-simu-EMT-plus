@@ -160,6 +160,7 @@ final class PscadProCases {
                 fromRest("ieee14-dc", () -> bench("ieee14-dc")),
                 fromRest("kundur-dc", () -> bench("kundur-dc")),
                 fromRest("ieee39-dc", () -> bench("ieee39-dc")),
+                fromRest("promotion-dc", () -> bench("promotion-dc")),
                 new Case("vsc-islanding", () -> bench("vsc-monopole-island"), List.of(ExampleNetworks.VSC_MONOPOLE_ISLANDING), SETTINGS,
                         Kind.FROM_REST),
                 // Converters blocked, deblocked, protected, through DC faults and DC breakers: upstream's PSCAD Professional runs
@@ -200,6 +201,11 @@ final class PscadProCases {
                 new Case("ieee39-dc-fault-b16", () -> preprocessed("ieee39-dc", false, false), List.of(new BusFault("F", "B16", "ABC", true,
                         1.0, 2.5, 2.6, FaultClearing.AT_CURRENT_ZERO)), new PscadSimulationSettings(20.0e-6, 8.0, 50.0, PscadEdition.PROFESSIONAL),
                         Kind.FROM_REST),
+                // PROMOTioN's five terminals: a solid pole-to-pole fault at D1, the most meshed node, its stations protected against
+                // their arms' overcurrent; a solid three-phase fault at A1's grid, the DC voltage's station, 100 ms
+                converters("promotion-dc-fault-d1", () -> preprocessed("promotion-dc", false, true), new DcFault("FDC", "BD1", 0.0, 2.3, 12.0)),
+                converters("promotion-dc-ac-fault-a1", () -> preprocessed("promotion-dc", false, false), new BusFault("F", "BGA1", "ABC", true, 1.0,
+                        2.3, 2.4, FaultClearing.AT_CURRENT_ZERO)),
                 converters("cigre-b4-fault-b1", () -> preprocessed("cigre-b4", false, false), new BusFault("F", "BAB1", "ABC", true, 1.0, 2.5, 2.6,
                         FaultClearing.AT_CURRENT_ZERO)),
                 converters("vsc-deblocked", () -> preprocessed("vsc-monopole-infinite-buses-3", false, false), new ConverterBlocking("VSC2", 2.3),
@@ -297,8 +303,8 @@ final class PscadProCases {
     }
 
     /** A bench of powsybl-simu-emt's test resources: {@code <bench>.xiidm} with its models, {@code <bench>-extensions.xml} - but
-     * {@code cigre-b4}, {@code ieee14-dc}, {@code kundur-dc} and {@code ieee39-dc}, this project's own ({@link CigreB4Network},
-     * {@link Ieee14DcNetwork}, {@link KundurDcNetwork}, {@link Ieee39DcNetwork}). */
+     * {@code cigre-b4}, {@code ieee14-dc}, {@code kundur-dc}, {@code ieee39-dc} and {@code promotion-dc}, this project's own ({@link
+     * CigreB4Network}, {@link Ieee14DcNetwork}, {@link KundurDcNetwork}, {@link Ieee39DcNetwork}, {@link PromotionDcNetwork}). */
     static Network bench(String bench) {
         // This project's own, not upstream's.
         if ("cigre-b4".equals(bench)) {
@@ -312,6 +318,9 @@ final class PscadProCases {
         }
         if ("ieee39-dc".equals(bench)) {
             return Ieee39DcNetwork.load();
+        }
+        if ("promotion-dc".equals(bench)) {
+            return PromotionDcNetwork.load();
         }
         return EmtExtensionsXmlReader.readNetwork(ExampleNetworks.resource("/" + bench + ".xiidm"),
                 ExampleNetworks.resource("/" + bench + "-extensions.xml"));

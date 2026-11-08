@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Copyright (c) 2026, SuperGrid Institute
+    All rights reserved. Proprietary and confidential.
+-->
+<!--
+    PROMOTioN's five-terminal meshed offshore HVDC benchmark network: complements promotion-dc.xiidm (PromotionDcNetwork.create,
+    flat).
+
+    Each AC grid a source behind the impedance of its short-circuit power, X/R 10: 30 GVA onshore, 3.8 GVA offshore, as D5.1's - the
+    offshore ones its wind parks, as D5.1 models them. Each station a half-bridge MMC, averaged (CIGRE B4.57 type 4), on its rating:
+    arms of 0.15 pu and 0.003 pu, D5.1's arm reactance and conduction losses; the submodules storing 40 ms, ours (D5.1 gives 160
+    submodules an arm, not their capacitance). Their controls grid-following, Ieee14DcNetwork's stations': A1 on its DC voltage, B1
+    on its DC voltage droop, the offshore stations on their power, as IIDM's control mode says.
+
+    No DC reactor, where D5.1 has 50 to 150 mH a pole: on those controls, tuned for stations without one, A1 does not hold the DC
+    voltage with one - run 2026-11-08 in PSCAD Professional, let go at 2 s, its DC voltage loop swinging and growing within 1 s at
+    0.2 H a station (100 mH a pole, the two in series), within 1.5 s at 0.05 H, B1 driven to its current limit and the DC voltage
+    to 1.2 to 1.7 pu; without, every station on its load flow. Each cable one lumped pi of the 640 kV conductor: 2 L and C / 2 of
+    CIGRE B4's +-400 kV per-km pole data (2.615 mH, 0.1908 uF).
+-->
+<extensions>
+    <extension id="GA1">
+        <infiniteBusGeneratorModel shortCircuitPowerMva="30000.0" xOverR="10.0"/>
+    </extension>
+    <extension id="GB1">
+        <infiniteBusGeneratorModel shortCircuitPowerMva="30000.0" xOverR="10.0"/>
+    </extension>
+    <extension id="GC2">
+        <infiniteBusGeneratorModel shortCircuitPowerMva="3800.0" xOverR="10.0"/>
+    </extension>
+    <extension id="GD1">
+        <infiniteBusGeneratorModel shortCircuitPowerMva="3800.0" xOverR="10.0"/>
+    </extension>
+    <extension id="GD2">
+        <infiniteBusGeneratorModel shortCircuitPowerMva="3800.0" xOverR="10.0"/>
+    </extension>
+    <extension id="CA1">
+        <averagedMmcModel ratedApparentPower="1600.0" armResistance="0.003" armReactance="0.15" submoduleEnergyConstant="0.04"/>
+        <gridFollowingControl>
+            <ddsrf filterFrequency="35.3553"/>
+            <ddsrfPll proportionalGain="88.8442" integralGain="3947.84"/>
+            <dualSequenceCurrentControl proportionalGain="0.477465" integralGain="2.0">
+                <negativeSequenceSuppression/>
+            </dualSequenceCurrentControl>
+            <currentLimit maxCurrent="1.1"/>
+            <outerLoops activePowerProportionalGain="0.0" activePowerIntegralGain="50.0"
+                        dcVoltageProportionalGain="5.62973" dcVoltageIntegralGain="202.129"
+                        reactivePowerProportionalGain="0.0" reactivePowerIntegralGain="50.0"
+                        acVoltageProportionalGain="0.0" acVoltageIntegralGain="12.5" acVoltageDroop="0.05"/>
+            <faultRideThrough voltageThreshold="0.9" reactiveCurrentGain="2.0"/>
+            <measurement timeConstant="0.001"/>
+        </gridFollowingControl>
+    </extension>
+    <extension id="CB1">
+        <averagedMmcModel ratedApparentPower="1600.0" armResistance="0.003" armReactance="0.15" submoduleEnergyConstant="0.04"/>
+        <gridFollowingControl>
+            <ddsrf filterFrequency="35.3553"/>
+            <ddsrfPll proportionalGain="88.8442" integralGain="3947.84"/>
+            <dualSequenceCurrentControl proportionalGain="0.477465" integralGain="2.0">
+                <negativeSequenceSuppression/>
+            </dualSequenceCurrentControl>
+            <currentLimit maxCurrent="1.1"/>
+            <outerLoops activePowerProportionalGain="0.0" activePowerIntegralGain="50.0"
+                        dcVoltageProportionalGain="5.62973" dcVoltageIntegralGain="202.129"
+                        reactivePowerProportionalGain="0.0" reactivePowerIntegralGain="50.0"
+                        acVoltageProportionalGain="0.0" acVoltageIntegralGain="12.5" acVoltageDroop="0.05"/>
+            <faultRideThrough voltageThreshold="0.9" reactiveCurrentGain="2.0"/>
+            <measurement timeConstant="0.001"/>
+        </gridFollowingControl>
+    </extension>
+    <extension id="CC2">
+        <averagedMmcModel ratedApparentPower="800.0" armResistance="0.003" armReactance="0.15" submoduleEnergyConstant="0.04"/>
+        <gridFollowingControl>
+            <ddsrf filterFrequency="35.3553"/>
+            <ddsrfPll proportionalGain="88.8442" integralGain="3947.84"/>
+            <dualSequenceCurrentControl proportionalGain="0.477465" integralGain="2.0">
+                <negativeSequenceSuppression/>
+            </dualSequenceCurrentControl>
+            <currentLimit maxCurrent="1.1"/>
+            <outerLoops activePowerProportionalGain="0.0" activePowerIntegralGain="50.0"
+                        dcVoltageProportionalGain="5.62973" dcVoltageIntegralGain="202.129"
+                        reactivePowerProportionalGain="0.0" reactivePowerIntegralGain="50.0"
+                        acVoltageProportionalGain="0.0" acVoltageIntegralGain="12.5" acVoltageDroop="0.05"/>
+            <faultRideThrough voltageThreshold="0.9" reactiveCurrentGain="2.0"/>
+            <measurement timeConstant="0.001"/>
+        </gridFollowingControl>
+    </extension>
+    <extension id="CD1">
+        <averagedMmcModel ratedApparentPower="1600.0" armResistance="0.003" armReactance="0.15" submoduleEnergyConstant="0.04"/>
+        <gridFollowingControl>
+            <ddsrf filterFrequency="35.3553"/>
+            <ddsrfPll proportionalGain="88.8442" integralGain="3947.84"/>
+            <dualSequenceCurrentControl proportionalGain="0.477465" integralGain="2.0">
+                <negativeSequenceSuppression/>
+            </dualSequenceCurrentControl>
+            <currentLimit maxCurrent="1.1"/>
+            <outerLoops activePowerProportionalGain="0.0" activePowerIntegralGain="50.0"
+                        dcVoltageProportionalGain="5.62973" dcVoltageIntegralGain="202.129"
+                        reactivePowerProportionalGain="0.0" reactivePowerIntegralGain="50.0"
+                        acVoltageProportionalGain="0.0" acVoltageIntegralGain="12.5" acVoltageDroop="0.05"/>
+            <faultRideThrough voltageThreshold="0.9" reactiveCurrentGain="2.0"/>
+            <measurement timeConstant="0.001"/>
+        </gridFollowingControl>
+    </extension>
+    <extension id="CD2">
+        <averagedMmcModel ratedApparentPower="1200.0" armResistance="0.003" armReactance="0.15" submoduleEnergyConstant="0.04"/>
+        <gridFollowingControl>
+            <ddsrf filterFrequency="35.3553"/>
+            <ddsrfPll proportionalGain="88.8442" integralGain="3947.84"/>
+            <dualSequenceCurrentControl proportionalGain="0.477465" integralGain="2.0">
+                <negativeSequenceSuppression/>
+            </dualSequenceCurrentControl>
+            <currentLimit maxCurrent="1.1"/>
+            <outerLoops activePowerProportionalGain="0.0" activePowerIntegralGain="50.0"
+                        dcVoltageProportionalGain="5.62973" dcVoltageIntegralGain="202.129"
+                        reactivePowerProportionalGain="0.0" reactivePowerIntegralGain="50.0"
+                        acVoltageProportionalGain="0.0" acVoltageIntegralGain="12.5" acVoltageDroop="0.05"/>
+            <faultRideThrough voltageThreshold="0.9" reactiveCurrentGain="2.0"/>
+            <measurement timeConstant="0.001"/>
+        </gridFollowingControl>
+    </extension>
+    <extension id="CA1C2">
+        <lumpedDcLineModel inductance="1.046" capacitance="1.908e-05"/>
+    </extension>
+    <extension id="CC2D1">
+        <lumpedDcLineModel inductance="0.7845" capacitance="1.431e-05"/>
+    </extension>
+    <extension id="CD1D2">
+        <lumpedDcLineModel inductance="0.7845" capacitance="1.431e-05"/>
+    </extension>
+    <extension id="CB1D1">
+        <lumpedDcLineModel inductance="1.3075" capacitance="2.385e-05"/>
+    </extension>
+    <extension id="CB1D2">
+        <lumpedDcLineModel inductance="0.7845" capacitance="1.431e-05"/>
+    </extension>
+</extensions>
