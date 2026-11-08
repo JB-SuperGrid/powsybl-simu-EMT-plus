@@ -1,0 +1,303 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Copyright (c) 2026, SuperGrid Institute
+    All rights reserved. Proprietary and confidential.
+-->
+<!--
+    The IEEE 39-bus system with a meshed four-terminal DC grid: complements ieee39-dc.xiidm (Ieee39DcNetwork.create, flat).
+
+    The machines Athay, Podmore and Virmani's (IEEE PAS-98, 1979, as M. A. Pai's Energy Function Analysis gives them): H, Xd, Xq,
+    X'd, X'q, Xl, T'd0 and T'q0 on 100 MVA, here on their rating - 1000 MVA, G39 10000 MVA (the rest of the eastern interconnection,
+    H 500 s on 100 MVA). The data, a two-axis transient model, have no subtransient windings nor saturation: ours, X''d = X''q
+    0.75 X'd, T''d0 0.03 s, T''q0 0.04 s, an armature resistance of 0.003 pu, unsaturated; G30's q axis, which the data give no
+    transient winding (T'q0 0), one of 0.99 Xq and a T'q0 ten times its T''q0, all but absent. Its exciters, the data's DC1, left
+    out: the simplified AVR of Ieee14DcNetwork's machines, a gain of 20 on the voltage error within +-8 pu of field voltage (a
+    1 ms lag the model needs), no stabilizer (a PSS1A switched off, the pipeline's default otherwise). Each machine on a TGOV1,
+    ours, as KundurDcNetwork's: R 5 %, T1 0.5 s, the valve within 0 and 1 pu, T2 3 s, T3 10 s, no Dt.
+
+    The DC grid's converters averaged as CIGRE DCS2's and Ieee14DcNetwork's, a 15 % phase reactor on their rating (R 0.003 pu), DC
+    capacitors of 40 ms, a bridge inductance for their blocking: CS4, CS16 and CS26 grid-following (on their DC voltage droop or DC
+    voltage, as IIDM's control mode says), CSW grid-forming (a virtual synchronous machine), its island's. The wind park WTW Dynawo's
+    WT4B example (ExampleNetworks.wt4bDynawoExample) on its own 400 MVA. Each DC line one lumped pi of its 400 kV conductor: 2 L
+    and C / 2 of CIGRE B4's +-200 kV per-km pole data (OHL 0.8273 mH, 0.0139 uF; cable 2.615 mH, 0.2185 uF).
+-->
+<extensions>
+    <extension id="G30">
+        <subtransientMachineModel inertiaConstant="4.2" damping="0.0" statorResistance="0.003"
+                               directSynchronousReactance="1" quadratureSynchronousReactance="0.69"
+                               directTransientReactance="0.31" openCircuitTransientTimeConstant="10.2"
+                               statorLeakageReactance="0.125" quadratureTransientReactance="0.6831"
+                               directSubtransientReactance="0.2325" quadratureSubtransientReactance="0.2325"
+                               quadratureOpenCircuitTransientTimeConstant="0.4"
+                               directOpenCircuitSubtransientTimeConstant="0.03"
+                               quadratureOpenCircuitSubtransientTimeConstant="0.04"
+                               fieldCurrentAirGapLine="1000.0" numberOfPoles="2"/>
+        <simplifiedAvrModel enabled="true" gain="20.0" timeConstant="0.001" voltageSetpoint="20.998"
+                            minOutput="-8.0" maxOutput="8.0"/>
+        <pss1AModel enabled="false" gain="12.0" washoutTimeConstant="9.0" leadTimeConstant="0.12"
+                    lagTimeConstant="0.06" leadTimeConstant2="0.25" lagTimeConstant2="0.03" outputLimit="0.15"/>
+        <tgov1Model enabled="true" droop="0.05" governorTimeConstant="0.5" valveMin="0.0" valveMax="1.0"
+                    turbineLeadTimeConstant="3.0" turbineLagTimeConstant="10.0" turbineDamping="0.0"/>
+    </extension>
+    <extension id="G31">
+        <subtransientMachineModel inertiaConstant="3.03" damping="0.0" statorResistance="0.003"
+                               directSynchronousReactance="2.95" quadratureSynchronousReactance="2.82"
+                               directTransientReactance="0.697" openCircuitTransientTimeConstant="6.56"
+                               statorLeakageReactance="0.35" quadratureTransientReactance="1.7"
+                               directSubtransientReactance="0.52275" quadratureSubtransientReactance="0.52275"
+                               quadratureOpenCircuitTransientTimeConstant="1.5"
+                               directOpenCircuitSubtransientTimeConstant="0.03"
+                               quadratureOpenCircuitSubtransientTimeConstant="0.04"
+                               fieldCurrentAirGapLine="1000.0" numberOfPoles="2"/>
+        <simplifiedAvrModel enabled="true" gain="20.0" timeConstant="0.001" voltageSetpoint="19.64"
+                            minOutput="-8.0" maxOutput="8.0"/>
+        <pss1AModel enabled="false" gain="12.0" washoutTimeConstant="9.0" leadTimeConstant="0.12"
+                    lagTimeConstant="0.06" leadTimeConstant2="0.25" lagTimeConstant2="0.03" outputLimit="0.15"/>
+        <tgov1Model enabled="true" droop="0.05" governorTimeConstant="0.5" valveMin="0.0" valveMax="1.0"
+                    turbineLeadTimeConstant="3.0" turbineLagTimeConstant="10.0" turbineDamping="0.0"/>
+    </extension>
+    <extension id="G32">
+        <subtransientMachineModel inertiaConstant="3.58" damping="0.0" statorResistance="0.003"
+                               directSynchronousReactance="2.495" quadratureSynchronousReactance="2.37"
+                               directTransientReactance="0.531" openCircuitTransientTimeConstant="5.7"
+                               statorLeakageReactance="0.304" quadratureTransientReactance="0.876"
+                               directSubtransientReactance="0.39825" quadratureSubtransientReactance="0.39825"
+                               quadratureOpenCircuitTransientTimeConstant="1.5"
+                               directOpenCircuitSubtransientTimeConstant="0.03"
+                               quadratureOpenCircuitSubtransientTimeConstant="0.04"
+                               fieldCurrentAirGapLine="1000.0" numberOfPoles="2"/>
+        <simplifiedAvrModel enabled="true" gain="20.0" timeConstant="0.001" voltageSetpoint="19.682"
+                            minOutput="-8.0" maxOutput="8.0"/>
+        <pss1AModel enabled="false" gain="12.0" washoutTimeConstant="9.0" leadTimeConstant="0.12"
+                    lagTimeConstant="0.06" leadTimeConstant2="0.25" lagTimeConstant2="0.03" outputLimit="0.15"/>
+        <tgov1Model enabled="true" droop="0.05" governorTimeConstant="0.5" valveMin="0.0" valveMax="1.0"
+                    turbineLeadTimeConstant="3.0" turbineLagTimeConstant="10.0" turbineDamping="0.0"/>
+    </extension>
+    <extension id="G33">
+        <subtransientMachineModel inertiaConstant="2.86" damping="0.0" statorResistance="0.003"
+                               directSynchronousReactance="2.62" quadratureSynchronousReactance="2.58"
+                               directTransientReactance="0.436" openCircuitTransientTimeConstant="5.69"
+                               statorLeakageReactance="0.295" quadratureTransientReactance="1.66"
+                               directSubtransientReactance="0.327" quadratureSubtransientReactance="0.327"
+                               quadratureOpenCircuitTransientTimeConstant="1.5"
+                               directOpenCircuitSubtransientTimeConstant="0.03"
+                               quadratureOpenCircuitSubtransientTimeConstant="0.04"
+                               fieldCurrentAirGapLine="1000.0" numberOfPoles="2"/>
+        <simplifiedAvrModel enabled="true" gain="20.0" timeConstant="0.001" voltageSetpoint="19.944"
+                            minOutput="-8.0" maxOutput="8.0"/>
+        <pss1AModel enabled="false" gain="12.0" washoutTimeConstant="9.0" leadTimeConstant="0.12"
+                    lagTimeConstant="0.06" leadTimeConstant2="0.25" lagTimeConstant2="0.03" outputLimit="0.15"/>
+        <tgov1Model enabled="true" droop="0.05" governorTimeConstant="0.5" valveMin="0.0" valveMax="1.0"
+                    turbineLeadTimeConstant="3.0" turbineLagTimeConstant="10.0" turbineDamping="0.0"/>
+    </extension>
+    <extension id="G34">
+        <subtransientMachineModel inertiaConstant="2.6" damping="0.0" statorResistance="0.003"
+                               directSynchronousReactance="6.7" quadratureSynchronousReactance="6.2"
+                               directTransientReactance="1.32" openCircuitTransientTimeConstant="5.4"
+                               statorLeakageReactance="0.54" quadratureTransientReactance="1.66"
+                               directSubtransientReactance="0.99" quadratureSubtransientReactance="0.99"
+                               quadratureOpenCircuitTransientTimeConstant="0.44"
+                               directOpenCircuitSubtransientTimeConstant="0.03"
+                               quadratureOpenCircuitSubtransientTimeConstant="0.04"
+                               fieldCurrentAirGapLine="1000.0" numberOfPoles="2"/>
+        <simplifiedAvrModel enabled="true" gain="20.0" timeConstant="0.001" voltageSetpoint="20.246"
+                            minOutput="-8.0" maxOutput="8.0"/>
+        <pss1AModel enabled="false" gain="12.0" washoutTimeConstant="9.0" leadTimeConstant="0.12"
+                    lagTimeConstant="0.06" leadTimeConstant2="0.25" lagTimeConstant2="0.03" outputLimit="0.15"/>
+        <tgov1Model enabled="true" droop="0.05" governorTimeConstant="0.5" valveMin="0.0" valveMax="1.0"
+                    turbineLeadTimeConstant="3.0" turbineLagTimeConstant="10.0" turbineDamping="0.0"/>
+    </extension>
+    <extension id="G35">
+        <subtransientMachineModel inertiaConstant="3.48" damping="0.0" statorResistance="0.003"
+                               directSynchronousReactance="2.54" quadratureSynchronousReactance="2.41"
+                               directTransientReactance="0.5" openCircuitTransientTimeConstant="7.3"
+                               statorLeakageReactance="0.224" quadratureTransientReactance="0.814"
+                               directSubtransientReactance="0.375" quadratureSubtransientReactance="0.375"
+                               quadratureOpenCircuitTransientTimeConstant="0.4"
+                               directOpenCircuitSubtransientTimeConstant="0.03"
+                               quadratureOpenCircuitSubtransientTimeConstant="0.04"
+                               fieldCurrentAirGapLine="1000.0" numberOfPoles="2"/>
+        <simplifiedAvrModel enabled="true" gain="20.0" timeConstant="0.001" voltageSetpoint="20.988"
+                            minOutput="-8.0" maxOutput="8.0"/>
+        <pss1AModel enabled="false" gain="12.0" washoutTimeConstant="9.0" leadTimeConstant="0.12"
+                    lagTimeConstant="0.06" leadTimeConstant2="0.25" lagTimeConstant2="0.03" outputLimit="0.15"/>
+        <tgov1Model enabled="true" droop="0.05" governorTimeConstant="0.5" valveMin="0.0" valveMax="1.0"
+                    turbineLeadTimeConstant="3.0" turbineLagTimeConstant="10.0" turbineDamping="0.0"/>
+    </extension>
+    <extension id="G36">
+        <subtransientMachineModel inertiaConstant="2.64" damping="0.0" statorResistance="0.003"
+                               directSynchronousReactance="2.95" quadratureSynchronousReactance="2.92"
+                               directTransientReactance="0.49" openCircuitTransientTimeConstant="5.66"
+                               statorLeakageReactance="0.322" quadratureTransientReactance="1.86"
+                               directSubtransientReactance="0.3675" quadratureSubtransientReactance="0.3675"
+                               quadratureOpenCircuitTransientTimeConstant="1.5"
+                               directOpenCircuitSubtransientTimeConstant="0.03"
+                               quadratureOpenCircuitSubtransientTimeConstant="0.04"
+                               fieldCurrentAirGapLine="1000.0" numberOfPoles="2"/>
+        <simplifiedAvrModel enabled="true" gain="20.0" timeConstant="0.001" voltageSetpoint="21.272"
+                            minOutput="-8.0" maxOutput="8.0"/>
+        <pss1AModel enabled="false" gain="12.0" washoutTimeConstant="9.0" leadTimeConstant="0.12"
+                    lagTimeConstant="0.06" leadTimeConstant2="0.25" lagTimeConstant2="0.03" outputLimit="0.15"/>
+        <tgov1Model enabled="true" droop="0.05" governorTimeConstant="0.5" valveMin="0.0" valveMax="1.0"
+                    turbineLeadTimeConstant="3.0" turbineLagTimeConstant="10.0" turbineDamping="0.0"/>
+    </extension>
+    <extension id="G37">
+        <subtransientMachineModel inertiaConstant="2.43" damping="0.0" statorResistance="0.003"
+                               directSynchronousReactance="2.9" quadratureSynchronousReactance="2.8"
+                               directTransientReactance="0.57" openCircuitTransientTimeConstant="6.7"
+                               statorLeakageReactance="0.28" quadratureTransientReactance="0.911"
+                               directSubtransientReactance="0.4275" quadratureSubtransientReactance="0.4275"
+                               quadratureOpenCircuitTransientTimeConstant="0.41"
+                               directOpenCircuitSubtransientTimeConstant="0.03"
+                               quadratureOpenCircuitSubtransientTimeConstant="0.04"
+                               fieldCurrentAirGapLine="1000.0" numberOfPoles="2"/>
+        <simplifiedAvrModel enabled="true" gain="20.0" timeConstant="0.001" voltageSetpoint="20.55"
+                            minOutput="-8.0" maxOutput="8.0"/>
+        <pss1AModel enabled="false" gain="12.0" washoutTimeConstant="9.0" leadTimeConstant="0.12"
+                    lagTimeConstant="0.06" leadTimeConstant2="0.25" lagTimeConstant2="0.03" outputLimit="0.15"/>
+        <tgov1Model enabled="true" droop="0.05" governorTimeConstant="0.5" valveMin="0.0" valveMax="1.0"
+                    turbineLeadTimeConstant="3.0" turbineLagTimeConstant="10.0" turbineDamping="0.0"/>
+    </extension>
+    <extension id="G38">
+        <subtransientMachineModel inertiaConstant="3.45" damping="0.0" statorResistance="0.003"
+                               directSynchronousReactance="2.106" quadratureSynchronousReactance="2.05"
+                               directTransientReactance="0.57" openCircuitTransientTimeConstant="4.79"
+                               statorLeakageReactance="0.298" quadratureTransientReactance="0.587"
+                               directSubtransientReactance="0.4275" quadratureSubtransientReactance="0.4275"
+                               quadratureOpenCircuitTransientTimeConstant="1.96"
+                               directOpenCircuitSubtransientTimeConstant="0.03"
+                               quadratureOpenCircuitSubtransientTimeConstant="0.04"
+                               fieldCurrentAirGapLine="1000.0" numberOfPoles="2"/>
+        <simplifiedAvrModel enabled="true" gain="20.0" timeConstant="0.001" voltageSetpoint="20.53"
+                            minOutput="-8.0" maxOutput="8.0"/>
+        <pss1AModel enabled="false" gain="12.0" washoutTimeConstant="9.0" leadTimeConstant="0.12"
+                    lagTimeConstant="0.06" leadTimeConstant2="0.25" lagTimeConstant2="0.03" outputLimit="0.15"/>
+        <tgov1Model enabled="true" droop="0.05" governorTimeConstant="0.5" valveMin="0.0" valveMax="1.0"
+                    turbineLeadTimeConstant="3.0" turbineLagTimeConstant="10.0" turbineDamping="0.0"/>
+    </extension>
+    <extension id="G39">
+        <subtransientMachineModel inertiaConstant="5" damping="0.0" statorResistance="0.003"
+                               directSynchronousReactance="2" quadratureSynchronousReactance="1.9"
+                               directTransientReactance="0.6" openCircuitTransientTimeConstant="7"
+                               statorLeakageReactance="0.3" quadratureTransientReactance="0.8"
+                               directSubtransientReactance="0.45" quadratureSubtransientReactance="0.45"
+                               quadratureOpenCircuitTransientTimeConstant="0.7"
+                               directOpenCircuitSubtransientTimeConstant="0.03"
+                               quadratureOpenCircuitSubtransientTimeConstant="0.04"
+                               fieldCurrentAirGapLine="1000.0" numberOfPoles="2"/>
+        <simplifiedAvrModel enabled="true" gain="20.0" timeConstant="0.001" voltageSetpoint="355.35"
+                            minOutput="-8.0" maxOutput="8.0"/>
+        <pss1AModel enabled="false" gain="12.0" washoutTimeConstant="9.0" leadTimeConstant="0.12"
+                    lagTimeConstant="0.06" leadTimeConstant2="0.25" lagTimeConstant2="0.03" outputLimit="0.15"/>
+        <tgov1Model enabled="true" droop="0.05" governorTimeConstant="0.5" valveMin="0.0" valveMax="1.0"
+                    turbineLeadTimeConstant="3.0" turbineLagTimeConstant="10.0" turbineDamping="0.0"/>
+    </extension>
+    <extension id="CS4">
+        <averagedVscModel ratedApparentPower="500.0" phaseReactorResistance="0.003" phaseReactorReactance="0.15"
+                          dcCapacitorEnergyConstant="0.04" bridgeInductance="0.08"/>
+        <gridFollowingControl>
+            <ddsrf filterFrequency="35.3553"/>
+            <ddsrfPll proportionalGain="88.8442" integralGain="3947.84"/>
+            <dualSequenceCurrentControl proportionalGain="0.477465" integralGain="2.0">
+                <negativeSequenceSuppression/>
+            </dualSequenceCurrentControl>
+            <currentLimit maxCurrent="1.1"/>
+            <outerLoops activePowerProportionalGain="0.0" activePowerIntegralGain="50.0"
+                        dcVoltageProportionalGain="5.62973" dcVoltageIntegralGain="202.129"
+                        reactivePowerProportionalGain="0.0" reactivePowerIntegralGain="50.0"
+                        acVoltageProportionalGain="0.0" acVoltageIntegralGain="12.5" acVoltageDroop="0.05"/>
+            <faultRideThrough voltageThreshold="0.9" reactiveCurrentGain="2.0"/>
+            <measurement timeConstant="0.001"/>
+        </gridFollowingControl>
+    </extension>
+    <extension id="CS16">
+        <averagedVscModel ratedApparentPower="500.0" phaseReactorResistance="0.003" phaseReactorReactance="0.15"
+                          dcCapacitorEnergyConstant="0.04" bridgeInductance="0.08"/>
+        <gridFollowingControl>
+            <ddsrf filterFrequency="35.3553"/>
+            <ddsrfPll proportionalGain="88.8442" integralGain="3947.84"/>
+            <dualSequenceCurrentControl proportionalGain="0.477465" integralGain="2.0">
+                <negativeSequenceSuppression/>
+            </dualSequenceCurrentControl>
+            <currentLimit maxCurrent="1.1"/>
+            <outerLoops activePowerProportionalGain="0.0" activePowerIntegralGain="50.0"
+                        dcVoltageProportionalGain="5.62973" dcVoltageIntegralGain="202.129"
+                        reactivePowerProportionalGain="0.0" reactivePowerIntegralGain="50.0"
+                        acVoltageProportionalGain="0.0" acVoltageIntegralGain="12.5" acVoltageDroop="0.05"/>
+            <faultRideThrough voltageThreshold="0.9" reactiveCurrentGain="2.0"/>
+            <measurement timeConstant="0.001"/>
+        </gridFollowingControl>
+    </extension>
+    <extension id="CS26">
+        <averagedVscModel ratedApparentPower="300.0" phaseReactorResistance="0.003" phaseReactorReactance="0.15"
+                          dcCapacitorEnergyConstant="0.04" bridgeInductance="0.08"/>
+        <gridFollowingControl>
+            <ddsrf filterFrequency="35.3553"/>
+            <ddsrfPll proportionalGain="88.8442" integralGain="3947.84"/>
+            <dualSequenceCurrentControl proportionalGain="0.477465" integralGain="2.0">
+                <negativeSequenceSuppression/>
+            </dualSequenceCurrentControl>
+            <currentLimit maxCurrent="1.1"/>
+            <outerLoops activePowerProportionalGain="0.0" activePowerIntegralGain="50.0"
+                        dcVoltageProportionalGain="5.62973" dcVoltageIntegralGain="202.129"
+                        reactivePowerProportionalGain="0.0" reactivePowerIntegralGain="50.0"
+                        acVoltageProportionalGain="0.0" acVoltageIntegralGain="12.5" acVoltageDroop="0.05"/>
+            <faultRideThrough voltageThreshold="0.9" reactiveCurrentGain="2.0"/>
+            <measurement timeConstant="0.001"/>
+        </gridFollowingControl>
+    </extension>
+    <extension id="CSW">
+        <averagedVscModel ratedApparentPower="500.0" phaseReactorResistance="0.003" phaseReactorReactance="0.15"
+                          dcCapacitorEnergyConstant="0.04" bridgeInductance="0.08"/>
+        <gridFormingControl>
+            <virtualSynchronousMachine inertiaConstant="5.0" dampingCoefficient="20.0"/>
+            <reactivePowerVoltageDroop droop="0.05"/>
+            <virtualAdmittance resistance="0.05" reactance="0.2"/>
+            <singleSequenceCurrentControl proportionalGain="0.477465" integralGain="2.0"/>
+            <currentLimit maxCurrent="1.1"/>
+            <measurement timeConstant="0.001"/>
+            <steadyStateCurrentLimit steadyStateMaxCurrent="1.0" activeCurrentFactor="0.9" integralGain="2.0" maxSpeedDeviation="0.05"
+                                pllProportionalGain="83.2522" pllIntegralGain="832.522"/>
+            <transientDamping gain="100.0" timeConstant="0.5"/>
+            <dcVoltageDroop gain="5.0"/>
+        </gridFormingControl>
+    </extension>
+    <extension id="D4_16">
+        <lumpedDcLineModel inductance="0.33092" capacitance="1.39e-06"/>
+    </extension>
+    <extension id="D16_26">
+        <lumpedDcLineModel inductance="0.24819" capacitance="1.0425e-06"/>
+    </extension>
+    <extension id="D26_4">
+        <lumpedDcLineModel inductance="0.41365" capacitance="1.7375e-06"/>
+    </extension>
+    <extension id="DW_26">
+        <lumpedDcLineModel inductance="0.523" capacitance="1.0925e-05"/>
+    </extension>
+    <extension id="DW_16">
+        <lumpedDcLineModel inductance="0.7845" capacitance="1.63875e-05"/>
+    </extension>
+    <extension id="WTW">
+        <wt4bModel powerFactorControl="false" reactivePowerControl="false" voltageControl="false" activePowerPriority="false"
+                   voltageFilterTimeConstant="0.01" activePowerFilterTimeConstant="0.05" reactivePowerMax="0.4" reactivePowerMin="-0.4"
+                   voltageMax="1.1" voltageMin="0.9" reactivePowerProportionalGain="2.0" reactivePowerIntegralGain="0.7"
+                   voltageProportionalGain="2.0" voltageIntegralGain="0.7" reactiveCurrentTimeConstant="0.01" voltageBias="0.0"
+                   voltageDipThreshold="0.9" voltageUpThreshold="1.1" injectionVoltageReference="0.0" injectionDeadbandLow="-0.05"
+                   injectionDeadbandHigh="0.05" injectionGain="2.0" injectionMax="1.1" injectionMin="-1.1" injectionHoldTime="0.1"
+                   frozenInjection="0.1" activePowerRateMax="2.0" activePowerRateMin="-2.0" activePowerOrderTimeConstant="0.01"
+                   activePowerMax="1.0" activePowerMin="0.0" currentMax="1.3" activeCurrentLimitHoldTime="0.0"
+                   converterTimeConstant="0.02" lvplVoltageFilterTimeConstant="0.02" activeCurrentRecoveryRate="10.0"
+                   reactiveCurrentRateMax="20.0" reactiveCurrentRateMin="-20.0" lowVoltagePowerLogic="false" lvplZeroCrossing="0.05"
+                   lvplBreakpoint="0.1" lvplGain="1.22" pllProportionalGain="3.0" pllIntegralGain="20.0" pllFrequencyMax="1.5"
+                   pllFrequencyMin="0.5">
+            <activeCurrentLimitPoint voltage="1.1" current="1.1"/>
+            <activeCurrentLimitPoint voltage="1.15" current="1.0"/>
+            <activeCurrentLimitPoint voltage="1.16" current="1.0"/>
+            <activeCurrentLimitPoint voltage="1.17" current="1.0"/>
+            <reactiveCurrentLimitPoint voltage="1.1" current="1.1"/>
+            <reactiveCurrentLimitPoint voltage="1.15" current="1.0"/>
+            <reactiveCurrentLimitPoint voltage="1.16" current="1.0"/>
+            <reactiveCurrentLimitPoint voltage="1.17" current="1.0"/>
+        </wt4bModel>
+    </extension>
+</extensions>

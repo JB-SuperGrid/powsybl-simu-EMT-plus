@@ -99,7 +99,8 @@ class PscadProSimulationTest {
      * PscadProCases#dcDroop}); CIGRE B4 DCS2, its DC lines meeting at BMB5, held up by its two onshore droops alone; and CIGRE B4
      * whole, its eleven stations on three DC grids, DCS3 meshed, between two meshed AC systems and four offshore islands; the IEEE
      * 14-bus network with its DC grid, its machines Dynawo's; Kundur's two areas with theirs, its machines the benchmark's, their
-     * PSSs in service - the machines' speed back on the synchronous one within 5e-4 pu. From
+     * PSSs in service; the IEEE 39-bus network with its four stations, its ten machines Athay's - the machines' speed back on the
+     * synchronous one within 5e-4 pu. From
      * rest - their AC and DC sides separate subsystems, which a snapshot restart does not patch - over 4 s: the DC side charged
      * while the controls' integrals are held, until 2 s as a template's are, then let go. In the last 40 ms, each droop
      * converter's power where its curve meets the DC voltage it settles at, as Xyce's and Kestrel's runs hold it: the load
@@ -119,10 +120,12 @@ class PscadProSimulationTest {
      * then, which G1's and G2's proportional governors take back. Kundur's two areas with their DC grid, 2026-11-08, 4 s in 37 s:
      * CS7 on its curve within 1e-4 MW, CSW within 0.004 MW, CS9 on its V_DC, 1.75 MW short of the load flow's power; CS7's
      * reactive power 0.7 Mvar off, CS9's 1.0, CSW's within 0.002; the DC voltages within 1.1e-5 pu; its machines 4e-5 pu slow,
-     * their TGOV1s' turbines (T3 10 s) still bringing those 1.75 MW back.
+     * their TGOV1s' turbines (T3 10 s) still bringing those 1.75 MW back. IEEE 39 with its DC grid, 2026-11-08, 4 s in 59 s: its
+     * droops on their curves within 3e-4 MW, CSW within 0.007 MW, CS16 on its V_DC, 2.3 MW short of the load flow's power; the
+     * reactive powers within 0.06 Mvar; the DC voltages within 2e-5 pu; its ten machines 1.4e-5 to 2.7e-5 pu slow.
      */
     @ParameterizedTest(name = "{0}")
-    @ValueSource(strings = {"vsc-three-terminal-vdc-droop", "cigre-dcs2", "cigre-b4", "ieee14-dc", "kundur-dc"})
+    @ValueSource(strings = {"vsc-three-terminal-vdc-droop", "cigre-dcs2", "cigre-b4", "ieee14-dc", "kundur-dc", "ieee39-dc"})
     void aMultiTerminalDcNetworkHoldsItsOperatingPoint(String bench, @TempDir Path tempDir) throws Exception {
         Network network = ExampleNetworks.withLoadFlow("vsc-three-terminal-vdc-droop".equals(bench) ? PscadProCases.dcDroop()
                 : PscadProCases.bench(bench));

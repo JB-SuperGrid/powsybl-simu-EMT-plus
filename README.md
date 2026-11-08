@@ -45,11 +45,12 @@ Phasor b2 = run.output().fundamentalPhasor(run.project().circuit().voltageChanne
 
 - `mvn test`: without PSCAD: every case's `.pscx` is written, the driver ships and Python compiles it, its report is read.
 - `mvn test -Ppscad`: the real PSCAD.
-  - `PscadProBuildTest` builds each case of `PscadProCases` (74: every upstream example network the backend writes, those
+  - `PscadProBuildTest` builds each case of `PscadProCases` (76: every upstream example network the backend writes, those
     past PSCAD Free's 15 electrical nodes among them, and this project's own: CIGRE B4's DC grid test system, whole
     (`CigreB4Network`, `src/test/resources/cigre-b4*`), the IEEE 14-bus network with a meshed DC grid and Dynawo's machines
     (`Ieee14DcNetwork`, `src/test/resources/ieee14-dc*`), and Kundur's two-area system with a three-terminal DC grid beside its
-    tie (`KundurDcNetwork`, `src/test/resources/kundur-dc*`):
+    tie (`KundurDcNetwork`, `src/test/resources/kundur-dc*`), and the IEEE 39-bus system with a meshed four-terminal DC grid
+    (`Ieee39DcNetwork`, `src/test/resources/ieee39-dc*`):
     sources, lines, transformers, machines and their exciters, governors, limiters and controllers, wind turbines, VSCs,
     MMCs and DC grids, arrester, motors, faults, breakers, load step, templates; and the converters' scenarios upstream runs
     in PSCAD Professional: blocked, deblocked, protected, through DC faults and DC breakers): its `.pscx` loaded, compiled and linked into
