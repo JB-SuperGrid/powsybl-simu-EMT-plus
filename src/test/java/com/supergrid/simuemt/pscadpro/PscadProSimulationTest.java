@@ -99,7 +99,7 @@ class PscadProSimulationTest {
      * PscadProCases#dcDroop}); CIGRE B4 DCS2, its DC lines meeting at BMB5, held up by its two onshore droops alone; and CIGRE B4
      * whole, its eleven stations on three DC grids, DCS3 meshed, between two meshed AC systems and four offshore islands; the IEEE
      * 14-bus network with its DC grid, its machines Dynawo's; Kundur's two areas with theirs, its machines the benchmark's, their
-     * PSSs in service; the IEEE 39-bus network with its four stations, its ten machines Athay's - the machines' speed back on the
+     * PSSs in service; the IEEE 39-bus network with its four stations, its ten machines Athay's, on PSSs too - the machines' speed back on the
      * synchronous one within 5e-4 pu. From
      * rest - their AC and DC sides separate subsystems, which a snapshot restart does not patch - over 4 s: the DC side charged
      * while the controls' integrals are held, until 2 s as a template's are, then let go. In the last 40 ms, each droop
@@ -122,7 +122,7 @@ class PscadProSimulationTest {
      * reactive power 0.7 Mvar off, CS9's 1.0, CSW's within 0.002; the DC voltages within 1.1e-5 pu; its machines 4e-5 pu slow,
      * their TGOV1s' turbines (T3 10 s) still bringing those 1.75 MW back. IEEE 39 with its DC grid, 2026-11-08, 4 s in 59 s: its
      * droops on their curves within 3e-4 MW, CSW within 0.007 MW, CS16 on its V_DC, 2.3 MW short of the load flow's power; the
-     * reactive powers within 0.06 Mvar; the DC voltages within 2e-5 pu; its ten machines 1.4e-5 to 2.7e-5 pu slow.
+     * reactive powers within 0.18 Mvar; the DC voltages within 2e-5 pu; its ten machines, on their PSSs, 0.8e-5 to 1.2e-5 pu slow.
      */
     @ParameterizedTest(name = "{0}")
     @ValueSource(strings = {"vsc-three-terminal-vdc-droop", "cigre-dcs2", "cigre-b4", "ieee14-dc", "kundur-dc", "ieee39-dc"})

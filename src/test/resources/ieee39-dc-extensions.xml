@@ -12,8 +12,10 @@
     0.75 X'd, T''d0 0.03 s, T''q0 0.04 s, an armature resistance of 0.003 pu, unsaturated; G30's q axis, which the data give no
     transient winding (T'q0 0), one of 0.99 Xq and a T'q0 ten times its T''q0, all but absent. Its exciters, the data's DC1, left
     out: the simplified AVR of Ieee14DcNetwork's machines, a gain of 20 on the voltage error within +-8 pu of field voltage (a
-    1 ms lag the model needs), no stabilizer (a PSS1A switched off, the pipeline's default otherwise). Each machine on a TGOV1,
-    ours, as KundurDcNetwork's: R 5 %, T1 0.5 s, the valve within 0 and 1 pu, T2 3 s, T3 10 s, no Dt.
+    1 ms lag the model needs), and a PSS1A on its speed, the pipeline's default (Ks 12, Tw 9 s, T1 0.12, T2 0.06, T3 0.25, T4
+    0.03 s, +-0.15 pu), not tuned for this network: without it, a fault at bus 16 leaves New England's machines swinging against
+    G39 at 0.6 Hz, zeta 0.02 to 0.035; with it, zeta 0.17 (ieee39-dc-fault-b16, run 2026-11-08 over 8 s). Each machine on a
+    TGOV1, ours, as KundurDcNetwork's: R 5 %, T1 0.5 s, the valve within 0 and 1 pu, T2 3 s, T3 10 s, no Dt.
 
     The DC grid's converters averaged as CIGRE DCS2's and Ieee14DcNetwork's, a 15 % phase reactor on their rating (R 0.003 pu), DC
     capacitors of 40 ms, a bridge inductance for their blocking: CS4, CS16 and CS26 grid-following (on their DC voltage droop or DC
@@ -34,7 +36,7 @@
                                fieldCurrentAirGapLine="1000.0" numberOfPoles="2"/>
         <simplifiedAvrModel enabled="true" gain="20.0" timeConstant="0.001" voltageSetpoint="20.998"
                             minOutput="-8.0" maxOutput="8.0"/>
-        <pss1AModel enabled="false" gain="12.0" washoutTimeConstant="9.0" leadTimeConstant="0.12"
+        <pss1AModel enabled="true" gain="12.0" washoutTimeConstant="9.0" leadTimeConstant="0.12"
                     lagTimeConstant="0.06" leadTimeConstant2="0.25" lagTimeConstant2="0.03" outputLimit="0.15"/>
         <tgov1Model enabled="true" droop="0.05" governorTimeConstant="0.5" valveMin="0.0" valveMax="1.0"
                     turbineLeadTimeConstant="3.0" turbineLagTimeConstant="10.0" turbineDamping="0.0"/>
@@ -51,7 +53,7 @@
                                fieldCurrentAirGapLine="1000.0" numberOfPoles="2"/>
         <simplifiedAvrModel enabled="true" gain="20.0" timeConstant="0.001" voltageSetpoint="19.64"
                             minOutput="-8.0" maxOutput="8.0"/>
-        <pss1AModel enabled="false" gain="12.0" washoutTimeConstant="9.0" leadTimeConstant="0.12"
+        <pss1AModel enabled="true" gain="12.0" washoutTimeConstant="9.0" leadTimeConstant="0.12"
                     lagTimeConstant="0.06" leadTimeConstant2="0.25" lagTimeConstant2="0.03" outputLimit="0.15"/>
         <tgov1Model enabled="true" droop="0.05" governorTimeConstant="0.5" valveMin="0.0" valveMax="1.0"
                     turbineLeadTimeConstant="3.0" turbineLagTimeConstant="10.0" turbineDamping="0.0"/>
@@ -68,7 +70,7 @@
                                fieldCurrentAirGapLine="1000.0" numberOfPoles="2"/>
         <simplifiedAvrModel enabled="true" gain="20.0" timeConstant="0.001" voltageSetpoint="19.682"
                             minOutput="-8.0" maxOutput="8.0"/>
-        <pss1AModel enabled="false" gain="12.0" washoutTimeConstant="9.0" leadTimeConstant="0.12"
+        <pss1AModel enabled="true" gain="12.0" washoutTimeConstant="9.0" leadTimeConstant="0.12"
                     lagTimeConstant="0.06" leadTimeConstant2="0.25" lagTimeConstant2="0.03" outputLimit="0.15"/>
         <tgov1Model enabled="true" droop="0.05" governorTimeConstant="0.5" valveMin="0.0" valveMax="1.0"
                     turbineLeadTimeConstant="3.0" turbineLagTimeConstant="10.0" turbineDamping="0.0"/>
@@ -85,7 +87,7 @@
                                fieldCurrentAirGapLine="1000.0" numberOfPoles="2"/>
         <simplifiedAvrModel enabled="true" gain="20.0" timeConstant="0.001" voltageSetpoint="19.944"
                             minOutput="-8.0" maxOutput="8.0"/>
-        <pss1AModel enabled="false" gain="12.0" washoutTimeConstant="9.0" leadTimeConstant="0.12"
+        <pss1AModel enabled="true" gain="12.0" washoutTimeConstant="9.0" leadTimeConstant="0.12"
                     lagTimeConstant="0.06" leadTimeConstant2="0.25" lagTimeConstant2="0.03" outputLimit="0.15"/>
         <tgov1Model enabled="true" droop="0.05" governorTimeConstant="0.5" valveMin="0.0" valveMax="1.0"
                     turbineLeadTimeConstant="3.0" turbineLagTimeConstant="10.0" turbineDamping="0.0"/>
@@ -102,7 +104,7 @@
                                fieldCurrentAirGapLine="1000.0" numberOfPoles="2"/>
         <simplifiedAvrModel enabled="true" gain="20.0" timeConstant="0.001" voltageSetpoint="20.246"
                             minOutput="-8.0" maxOutput="8.0"/>
-        <pss1AModel enabled="false" gain="12.0" washoutTimeConstant="9.0" leadTimeConstant="0.12"
+        <pss1AModel enabled="true" gain="12.0" washoutTimeConstant="9.0" leadTimeConstant="0.12"
                     lagTimeConstant="0.06" leadTimeConstant2="0.25" lagTimeConstant2="0.03" outputLimit="0.15"/>
         <tgov1Model enabled="true" droop="0.05" governorTimeConstant="0.5" valveMin="0.0" valveMax="1.0"
                     turbineLeadTimeConstant="3.0" turbineLagTimeConstant="10.0" turbineDamping="0.0"/>
@@ -119,7 +121,7 @@
                                fieldCurrentAirGapLine="1000.0" numberOfPoles="2"/>
         <simplifiedAvrModel enabled="true" gain="20.0" timeConstant="0.001" voltageSetpoint="20.988"
                             minOutput="-8.0" maxOutput="8.0"/>
-        <pss1AModel enabled="false" gain="12.0" washoutTimeConstant="9.0" leadTimeConstant="0.12"
+        <pss1AModel enabled="true" gain="12.0" washoutTimeConstant="9.0" leadTimeConstant="0.12"
                     lagTimeConstant="0.06" leadTimeConstant2="0.25" lagTimeConstant2="0.03" outputLimit="0.15"/>
         <tgov1Model enabled="true" droop="0.05" governorTimeConstant="0.5" valveMin="0.0" valveMax="1.0"
                     turbineLeadTimeConstant="3.0" turbineLagTimeConstant="10.0" turbineDamping="0.0"/>
@@ -136,7 +138,7 @@
                                fieldCurrentAirGapLine="1000.0" numberOfPoles="2"/>
         <simplifiedAvrModel enabled="true" gain="20.0" timeConstant="0.001" voltageSetpoint="21.272"
                             minOutput="-8.0" maxOutput="8.0"/>
-        <pss1AModel enabled="false" gain="12.0" washoutTimeConstant="9.0" leadTimeConstant="0.12"
+        <pss1AModel enabled="true" gain="12.0" washoutTimeConstant="9.0" leadTimeConstant="0.12"
                     lagTimeConstant="0.06" leadTimeConstant2="0.25" lagTimeConstant2="0.03" outputLimit="0.15"/>
         <tgov1Model enabled="true" droop="0.05" governorTimeConstant="0.5" valveMin="0.0" valveMax="1.0"
                     turbineLeadTimeConstant="3.0" turbineLagTimeConstant="10.0" turbineDamping="0.0"/>
@@ -153,7 +155,7 @@
                                fieldCurrentAirGapLine="1000.0" numberOfPoles="2"/>
         <simplifiedAvrModel enabled="true" gain="20.0" timeConstant="0.001" voltageSetpoint="20.55"
                             minOutput="-8.0" maxOutput="8.0"/>
-        <pss1AModel enabled="false" gain="12.0" washoutTimeConstant="9.0" leadTimeConstant="0.12"
+        <pss1AModel enabled="true" gain="12.0" washoutTimeConstant="9.0" leadTimeConstant="0.12"
                     lagTimeConstant="0.06" leadTimeConstant2="0.25" lagTimeConstant2="0.03" outputLimit="0.15"/>
         <tgov1Model enabled="true" droop="0.05" governorTimeConstant="0.5" valveMin="0.0" valveMax="1.0"
                     turbineLeadTimeConstant="3.0" turbineLagTimeConstant="10.0" turbineDamping="0.0"/>
@@ -170,7 +172,7 @@
                                fieldCurrentAirGapLine="1000.0" numberOfPoles="2"/>
         <simplifiedAvrModel enabled="true" gain="20.0" timeConstant="0.001" voltageSetpoint="20.53"
                             minOutput="-8.0" maxOutput="8.0"/>
-        <pss1AModel enabled="false" gain="12.0" washoutTimeConstant="9.0" leadTimeConstant="0.12"
+        <pss1AModel enabled="true" gain="12.0" washoutTimeConstant="9.0" leadTimeConstant="0.12"
                     lagTimeConstant="0.06" leadTimeConstant2="0.25" lagTimeConstant2="0.03" outputLimit="0.15"/>
         <tgov1Model enabled="true" droop="0.05" governorTimeConstant="0.5" valveMin="0.0" valveMax="1.0"
                     turbineLeadTimeConstant="3.0" turbineLagTimeConstant="10.0" turbineDamping="0.0"/>
@@ -187,7 +189,7 @@
                                fieldCurrentAirGapLine="1000.0" numberOfPoles="2"/>
         <simplifiedAvrModel enabled="true" gain="20.0" timeConstant="0.001" voltageSetpoint="355.35"
                             minOutput="-8.0" maxOutput="8.0"/>
-        <pss1AModel enabled="false" gain="12.0" washoutTimeConstant="9.0" leadTimeConstant="0.12"
+        <pss1AModel enabled="true" gain="12.0" washoutTimeConstant="9.0" leadTimeConstant="0.12"
                     lagTimeConstant="0.06" leadTimeConstant2="0.25" lagTimeConstant2="0.03" outputLimit="0.15"/>
         <tgov1Model enabled="true" droop="0.05" governorTimeConstant="0.5" valveMin="0.0" valveMax="1.0"
                     turbineLeadTimeConstant="3.0" turbineLagTimeConstant="10.0" turbineDamping="0.0"/>

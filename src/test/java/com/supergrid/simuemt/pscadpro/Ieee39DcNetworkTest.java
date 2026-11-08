@@ -15,6 +15,7 @@ import com.powsybl.simuemt.extensions.GeneratorModel;
 import com.powsybl.simuemt.extensions.governor.Tgov1Model;
 import com.powsybl.simuemt.extensions.governor.TurbineGovernorModel;
 import com.powsybl.simuemt.extensions.machine.SubtransientMachineModel;
+import com.powsybl.simuemt.extensions.pss.PssModel;
 import com.powsybl.simuemt.preprocessing.EmtNetworkPreprocessor;
 import com.powsybl.simuemt.pscad.PscadCircuit;
 import com.powsybl.simuemt.pscad.PscadComponent;
@@ -130,7 +131,7 @@ class Ieee39DcNetworkTest {
     }
 
     /**
-     * On PSCAD Professional: its ten machines, Athay's, each with its exciter and a TGOV1; its four stations' controls and its wind
+     * On PSCAD Professional: its ten machines, Athay's, each with its exciter, its PSS and a TGOV1; its four stations' controls and its wind
      * park's; the DC grid's five lines.
      */
     @Test
@@ -145,6 +146,8 @@ class Ieee39DcNetworkTest {
             Object governor = generator.getExtension(TurbineGovernorModel.class);
             assertThat(model).as("G%d", bus).isInstanceOf(SubtransientMachineModel.class);
             assertThat(governor).as("G%d governor", bus).isInstanceOf(Tgov1Model.class);
+            PssModel pss = generator.getExtension(PssModel.class);
+            assertThat(pss.isEnabled()).as("G%d PSS", bus).isTrue();
         }
         assertThat(circuit.components().stream().map(PscadComponent::definition).filter(d -> d.endsWith("_CTRL")))
                 .contains("CS4_CTRL", "CS16_CTRL", "CS26_CTRL", "CSW_CTRL", "WTW_CTRL");
