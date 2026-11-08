@@ -202,7 +202,10 @@ final class PscadProCases {
                         1.0, 2.5, 2.6, FaultClearing.AT_CURRENT_ZERO)), new PscadSimulationSettings(20.0e-6, 8.0, 50.0, PscadEdition.PROFESSIONAL),
                         Kind.FROM_REST),
                 // PROMOTioN's five terminals: a solid pole-to-pole fault at D1, the most meshed node, its stations protected against
-                // their arms' overcurrent; a solid three-phase fault at A1's grid, the DC voltage's station, 100 ms
+                // their arms' overcurrent - run 2026-11-08: every station blocked, nearest first, D1 0.4 ms on, C2 8, D2 13, B1 30, A1
+                // 67, their DC currents up to 5 to 7 pu; blocked, the half-bridges' diodes feeding the fault from the AC grids, 4.7 pu
+                // from each onshore one, their PCCs down to 0.3 pu, which nothing clears: no AC breaker opens here -; a solid
+                // three-phase fault at A1's grid, the DC voltage's station, 100 ms
                 converters("promotion-dc-fault-d1", () -> preprocessed("promotion-dc", false, true), new DcFault("FDC", "BD1", 0.0, 2.3, 12.0)),
                 converters("promotion-dc-ac-fault-a1", () -> preprocessed("promotion-dc", false, false), new BusFault("F", "BGA1", "ABC", true, 1.0,
                         2.3, 2.4, FaultClearing.AT_CURRENT_ZERO)),
