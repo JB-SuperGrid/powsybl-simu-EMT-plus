@@ -11,7 +11,9 @@
     offshore ones its wind parks, as D5.1 models them. Each station a half-bridge MMC, averaged (CIGRE B4.57 type 4), on its rating:
     arms of 0.15 pu and 0.003 pu, D5.1's arm reactance and conduction losses; the submodules storing 40 ms, ours (D5.1 gives 160
     submodules an arm, not their capacitance). Their controls grid-following, Ieee14DcNetwork's stations': A1 on its DC voltage, B1
-    on its DC voltage droop, the offshore stations on their power, as IIDM's control mode says.
+    on its DC voltage droop, the offshore stations on their power, as IIDM's control mode says. Those on their power, B1 and the
+    offshore ones, get it back after an AC fault at 2 pu/s at most (faultRideThrough's activePowerRecoveryRate), ours, upstream's
+    example 4's: D4.2 and D5.1 give none; A1, on its DC voltage, has no power to ramp.
 
     No DC reactor, where D5.1 has 50 to 150 mH a pole: on those controls, tuned for stations without one, A1 does not hold the DC
     voltage with one - run 2026-11-08 in PSCAD Professional, let go at 2 s, its DC voltage loop swinging and growing within 1 s at
@@ -73,7 +75,7 @@
                         dcVoltageProportionalGain="5.62973" dcVoltageIntegralGain="202.129"
                         reactivePowerProportionalGain="0.0" reactivePowerIntegralGain="50.0"
                         acVoltageProportionalGain="0.0" acVoltageIntegralGain="12.5" acVoltageDroop="0.05"/>
-            <faultRideThrough voltageThreshold="0.9" reactiveCurrentGain="2.0"/>
+            <faultRideThrough voltageThreshold="0.9" reactiveCurrentGain="2.0" activePowerRecoveryRate="2.0"/>
             <measurement timeConstant="0.001"/>
         </gridFollowingControl>
     </extension>
@@ -90,7 +92,7 @@
                         dcVoltageProportionalGain="5.62973" dcVoltageIntegralGain="202.129"
                         reactivePowerProportionalGain="0.0" reactivePowerIntegralGain="50.0"
                         acVoltageProportionalGain="0.0" acVoltageIntegralGain="12.5" acVoltageDroop="0.05"/>
-            <faultRideThrough voltageThreshold="0.9" reactiveCurrentGain="2.0"/>
+            <faultRideThrough voltageThreshold="0.9" reactiveCurrentGain="2.0" activePowerRecoveryRate="2.0"/>
             <measurement timeConstant="0.001"/>
         </gridFollowingControl>
     </extension>
@@ -107,7 +109,7 @@
                         dcVoltageProportionalGain="5.62973" dcVoltageIntegralGain="202.129"
                         reactivePowerProportionalGain="0.0" reactivePowerIntegralGain="50.0"
                         acVoltageProportionalGain="0.0" acVoltageIntegralGain="12.5" acVoltageDroop="0.05"/>
-            <faultRideThrough voltageThreshold="0.9" reactiveCurrentGain="2.0"/>
+            <faultRideThrough voltageThreshold="0.9" reactiveCurrentGain="2.0" activePowerRecoveryRate="2.0"/>
             <measurement timeConstant="0.001"/>
         </gridFollowingControl>
     </extension>
@@ -124,7 +126,7 @@
                         dcVoltageProportionalGain="5.62973" dcVoltageIntegralGain="202.129"
                         reactivePowerProportionalGain="0.0" reactivePowerIntegralGain="50.0"
                         acVoltageProportionalGain="0.0" acVoltageIntegralGain="12.5" acVoltageDroop="0.05"/>
-            <faultRideThrough voltageThreshold="0.9" reactiveCurrentGain="2.0"/>
+            <faultRideThrough voltageThreshold="0.9" reactiveCurrentGain="2.0" activePowerRecoveryRate="2.0"/>
             <measurement timeConstant="0.001"/>
         </gridFollowingControl>
     </extension>

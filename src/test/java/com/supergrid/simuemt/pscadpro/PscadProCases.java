@@ -241,6 +241,15 @@ final class PscadProCases {
                 // voltages within 1.1e-3 pu of theirs before, by 3 s
                 converters("promotion-dc-ac-fault-a1", () -> preprocessed("promotion-dc", false, false), new BusFault("F", "BGA1", "ABC", true, 1.0,
                         2.3, 2.4, FaultClearing.AT_CURRENT_ZERO)),
+                // ... and at B1's grid, the droop's station, 100 ms; run 4 s. Run 2026-11-08: B1's AC voltage down to 0.25 pu, its power
+                // gone, A1 at its current limit, the DC voltages up to 1.11 pu, B1's chopper burning the surplus; cleared, B1's power
+                // back along its 2 pu/s recovery ramp - slower, 0.8 pu/s on average, the droop's reference rising with the DC voltage -,
+                // within 0.02 pu of its own 1.38 s after the clearing (0.5 s without the ramp), A1 at its limit until 0.8 s after it
+                // (0.08 s without), B1's chopper burning 0.28 pu s (0.064 without); every station on its power, the DC voltages within
+                // 6e-4 pu of theirs before, by 4 s
+                new Case("promotion-dc-ac-fault-b1", () -> preprocessed("promotion-dc", false, false), List.of(new BusFault("F", "BGB1", "ABC", true,
+                        1.0, 2.3, 2.4, FaultClearing.AT_CURRENT_ZERO)), new PscadSimulationSettings(20.0e-6, 4.0, 50.0, PscadEdition.PROFESSIONAL),
+                        Kind.FROM_REST),
                 converters("cigre-b4-fault-b1", () -> preprocessed("cigre-b4", false, false), new BusFault("F", "BAB1", "ABC", true, 1.0, 2.5, 2.6,
                         FaultClearing.AT_CURRENT_ZERO)),
                 converters("vsc-deblocked", () -> preprocessed("vsc-monopole-infinite-buses-3", false, false), new ConverterBlocking("VSC2", 2.3),
