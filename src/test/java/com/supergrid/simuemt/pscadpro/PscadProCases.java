@@ -185,6 +185,12 @@ final class PscadProCases {
                 new Case("kundur-dc-fault-b8", () -> preprocessed("kundur-dc", false, false), List.of(new BusFault("F", "B8", "ABC", true, 1.0,
                         2.5, 2.6, FaultClearing.AT_CURRENT_ZERO)), new PscadSimulationSettings(20.0e-6, 8.0, 50.0, PscadEdition.PROFESSIONAL),
                         Kind.FROM_REST),
+                // ... and at bus 7, area 1's load and CS7's bus, at the tie's end: the inter-area mode excited more than from its middle -
+                // run 2026-11-08, area 1 swinging 20 degrees against area 2 (under 1 from bus 8), at 0.6 Hz, zeta 0.025 without the PSSs,
+                // 0.2 with them; the DC voltages within 0.94 and 1.06 pu, CS7 back on its power
+                new Case("kundur-dc-fault-b7", () -> preprocessed("kundur-dc", false, false), List.of(new BusFault("F", "B7", "ABC", true, 1.0,
+                        2.5, 2.6, FaultClearing.AT_CURRENT_ZERO)), new PscadSimulationSettings(20.0e-6, 8.0, 50.0, PscadEdition.PROFESSIONAL),
+                        Kind.FROM_REST),
                 converters("cigre-b4-fault-b1", () -> preprocessed("cigre-b4", false, false), new BusFault("F", "BAB1", "ABC", true, 1.0, 2.5, 2.6,
                         FaultClearing.AT_CURRENT_ZERO)),
                 converters("vsc-deblocked", () -> preprocessed("vsc-monopole-infinite-buses-3", false, false), new ConverterBlocking("VSC2", 2.3),
