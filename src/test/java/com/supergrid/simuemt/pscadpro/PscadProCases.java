@@ -44,6 +44,7 @@ import com.powsybl.simuemt.pscad.PscadSwitching;
 import com.powsybl.simuemt.testresources.ExampleNetworks;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
@@ -158,6 +159,9 @@ final class PscadProCases {
                 fromRest("cigre-dcs2", () -> bench("cigre-dcs2")),
                 fromRest("cigre-b4", () -> bench("cigre-b4")),
                 fromRest("ieee14-dc", () -> bench("ieee14-dc")),
+                fromRest("kundur-dc", () -> bench("kundur-dc")),
+                fromRest("ieee39-dc", () -> bench("ieee39-dc")),
+                fromRest("promotion-dc", () -> bench("promotion-dc")),
                 new Case("vsc-islanding", () -> bench("vsc-monopole-island"), List.of(ExampleNetworks.VSC_MONOPOLE_ISLANDING), SETTINGS,
                         Kind.FROM_REST),
                 // Converters blocked, deblocked, protected, through DC faults and DC breakers: upstream's PSCAD Professional runs
@@ -179,6 +183,43 @@ final class PscadProCases {
                 // IEEE 14-bus with its DC grid: a solid three-phase fault at bus 4, between its machines and its stations, 100 ms
                 converters("ieee14-dc-fault-b4", () -> preprocessed("ieee14-dc", false, false), new BusFault("F", "B4", "ABC", true, 1.0,
                         2.5, 2.6, FaultClearing.AT_CURRENT_ZERO)),
+                // Kundur's two areas with their DC grid: a solid three-phase fault at bus 8, the tie's middle, 100 ms; run 8 s, the
+                // inter-area swing's few periods after it
+                new Case("kundur-dc-fault-b8", () -> preprocessed("kundur-dc", false, false), List.of(new BusFault("F", "B8", "ABC", true, 1.0,
+                        2.5, 2.6, FaultClearing.AT_CURRENT_ZERO)), new PscadSimulationSettings(20.0e-6, 8.0, 50.0, PscadEdition.PROFESSIONAL),
+                        Kind.FROM_REST),
+                // ... and at bus 7, area 1's load and CS7's bus, at the tie's end: the inter-area mode excited more than from its middle -
+                // run 2026-11-08, area 1 swinging 20 degrees against area 2 (under 1 from bus 8), at 0.6 Hz, zeta 0.025 without the PSSs,
+                // 0.2 with them; the DC voltages within 0.94 and 1.06 pu, CS7 back on its power
+                new Case("kundur-dc-fault-b7", () -> preprocessed("kundur-dc", false, false), List.of(new BusFault("F", "B7", "ABC", true, 1.0,
+                        2.5, 2.6, FaultClearing.AT_CURRENT_ZERO)), new PscadSimulationSettings(20.0e-6, 8.0, 50.0, PscadEdition.PROFESSIONAL),
+                        Kind.FROM_REST),
+                // IEEE 39-bus with its DC grid: a solid three-phase fault at bus 16, its hub and CS16's - the DC voltage's - bus,
+                // 100 ms; run 8 s. Run 2026-11-08: New England's nine machines swinging together against G39, the rest of the
+                // interconnection, up to 33 degrees at 0.6 Hz, zeta 0.17 on their PSS1As - the pipeline's default, not tuned for it
+                // (0.02 to 0.035 and 39 degrees with them switched off); CS16's AC bus down to 0.16 pu, its power reversed for a
+                // while, the DC voltages within 0.94 and 1.11 pu, every station back on its power
+                new Case("ieee39-dc-fault-b16", () -> preprocessed("ieee39-dc", false, false), List.of(new BusFault("F", "B16", "ABC", true,
+                        1.0, 2.5, 2.6, FaultClearing.AT_CURRENT_ZERO)), new PscadSimulationSettings(20.0e-6, 8.0, 50.0, PscadEdition.PROFESSIONAL),
+                        Kind.FROM_REST),
+                // PROMOTioN's five terminals: a solid pole-to-pole fault at D1, the most meshed node, its stations protected against
+                // their arms' overcurrent - run 2026-11-08: every station blocked, nearest first, D1 0.4 ms on, C2 8, D2 13, B1 30, A1
+                // 67, their DC currents up to 5 to 7 pu; blocked, the half-bridges' diodes feeding the fault from the AC grids, 4.7 pu
+                // from each onshore one, their PCCs down to 0.3 pu, which nothing clears: no AC breaker opens here -, the DC voltages
+                // never up to A1's and B1's choppers; a solid three-phase fault at A1's grid, the DC voltage's station, 100 ms - run
+                // 2026-11-08: A1's AC voltage down to 0.26 pu, its power gone; B1 taking what its droop can, to its current limit, the
+                // wind parks theirs still: the DC voltages up to 1.087 pu, held there by A1's and B1's choppers, 0.47 and 0.31 pu at
+                // most, conducting through the fault and 70 ms on (1.24 pu without them); cleared, A1's AC voltage up to 1.40 pu, every
+                // station back on its power, the DC voltages within 1e-3 pu of theirs before, by 3 s
+                converters("promotion-dc-fault-d1", () -> preprocessed("promotion-dc", false, true), new DcFault("FDC", "BD1", 0.0, 2.3, 12.0)),
+                // ... and cleared the non-selective way, as PROMOTioN's D4.2 has it: every station blocked on the fault's detection,
+                // 2 ms on, then its AC breaker opening, 40 ms on - run 2026-11-08: the AC voltages within 1.13 pu, the DC voltages
+                // down to -97 kV; the AC grids cut off, the DC currents freewheeling through the diodes into the fault, decaying with
+                // some 0.23 s, D1's gone in 380 ms, the others 0.1 to 0.3 pu still 0.7 s on: some 1.6 s to the 10 A D4.2's high-speed
+                // switches open at, as D4.2 finds the AC breakers' strategy's (1.1 s and more)
+                converters("promotion-dc-fault-d1-cleared", () -> preprocessed("promotion-dc", false, true), promotionDcFaultCleared()),
+                converters("promotion-dc-ac-fault-a1", () -> preprocessed("promotion-dc", false, false), new BusFault("F", "BGA1", "ABC", true, 1.0,
+                        2.3, 2.4, FaultClearing.AT_CURRENT_ZERO)),
                 converters("cigre-b4-fault-b1", () -> preprocessed("cigre-b4", false, false), new BusFault("F", "BAB1", "ABC", true, 1.0, 2.5, 2.6,
                         FaultClearing.AT_CURRENT_ZERO)),
                 converters("vsc-deblocked", () -> preprocessed("vsc-monopole-infinite-buses-3", false, false), new ConverterBlocking("VSC2", 2.3),
@@ -255,6 +296,19 @@ final class PscadProCases {
         return network;
     }
 
+    /** PROMOTioN's pole-to-pole fault at D1, cleared the non-selective way of its D4.2: every station blocked on the fault's detection,
+     * 2 ms on, then its AC breaker - its transformer's grid side - opening 40 ms on, D4.2's opening time, at its current's zero. Not
+     * blocked first, A1, far from the fault, is still running when its breaker opens, 105 ms before its arms' overcurrent blocks it:
+     * run so, its AC voltage rose to 2.7 pu and its DC voltage to -900 kV. */
+    private static EmtEvent[] promotionDcFaultCleared() {
+        List<EmtEvent> events = new ArrayList<>(List.of(new DcFault("FDC", "BD1", 0.0, 2.3, 12.0)));
+        for (String station : List.of("A1", "B1", "C2", "D1", "D2")) {
+            events.add(new ConverterBlocking("C" + station, 2.302));
+            events.add(new BranchOperation("T" + station, TwoSides.ONE, 2.34, BreakerAction.OPEN, FaultClearing.AT_CURRENT_ZERO));
+        }
+        return events.toArray(EmtEvent[]::new);
+    }
+
     /** Example 4 with its DC breaker DCB, its stations protected, VSC3 alone with a DC reactor, as upstream's selective clearing has it. */
     private static Network dcBreaker() {
         Network network = bench("vsc-three-terminal-dc-breaker");
@@ -276,8 +330,8 @@ final class PscadProCases {
     }
 
     /** A bench of powsybl-simu-emt's test resources: {@code <bench>.xiidm} with its models, {@code <bench>-extensions.xml} - but
-     * {@code cigre-b4} and {@code ieee14-dc},
-     * this project's own ({@link CigreB4Network}, {@link Ieee14DcNetwork}). */
+     * {@code cigre-b4}, {@code ieee14-dc}, {@code kundur-dc}, {@code ieee39-dc} and {@code promotion-dc}, this project's own ({@link
+     * CigreB4Network}, {@link Ieee14DcNetwork}, {@link KundurDcNetwork}, {@link Ieee39DcNetwork}, {@link PromotionDcNetwork}). */
     static Network bench(String bench) {
         // This project's own, not upstream's.
         if ("cigre-b4".equals(bench)) {
@@ -285,6 +339,15 @@ final class PscadProCases {
         }
         if ("ieee14-dc".equals(bench)) {
             return Ieee14DcNetwork.load();
+        }
+        if ("kundur-dc".equals(bench)) {
+            return KundurDcNetwork.load();
+        }
+        if ("ieee39-dc".equals(bench)) {
+            return Ieee39DcNetwork.load();
+        }
+        if ("promotion-dc".equals(bench)) {
+            return PromotionDcNetwork.load();
         }
         return EmtExtensionsXmlReader.readNetwork(ExampleNetworks.resource("/" + bench + ".xiidm"),
                 ExampleNetworks.resource("/" + bench + "-extensions.xml"));
