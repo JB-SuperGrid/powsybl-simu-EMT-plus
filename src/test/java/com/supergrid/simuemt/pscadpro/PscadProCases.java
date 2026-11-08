@@ -161,6 +161,7 @@ final class PscadProCases {
                 fromRest("ieee14-dc", () -> bench("ieee14-dc")),
                 fromRest("kundur-dc", () -> bench("kundur-dc")),
                 fromRest("ieee39-dc", () -> bench("ieee39-dc")),
+                fromRest("ieee68-dc", () -> bench("ieee68-dc")),
                 fromRest("promotion-dc", () -> bench("promotion-dc")),
                 new Case("vsc-islanding", () -> bench("vsc-monopole-island"), List.of(ExampleNetworks.VSC_MONOPOLE_ISLANDING), SETTINGS,
                         Kind.FROM_REST),
@@ -201,6 +202,17 @@ final class PscadProCases {
                 // while, the DC voltages within 0.94 and 1.11 pu, every station back on its power
                 new Case("ieee39-dc-fault-b16", () -> preprocessed("ieee39-dc", false, false), List.of(new BusFault("F", "B16", "ABC", true,
                         1.0, 2.5, 2.6, FaultClearing.AT_CURRENT_ZERO)), new PscadSimulationSettings(20.0e-6, 8.0, 50.0, PscadEdition.PROFESSIONAL),
+                        Kind.FROM_REST),
+                // IEEE 68-bus with its DC grid: a solid three-phase fault at bus 1, New England's end of its ties to New York, 100 ms -
+                // the benchmark's own, PST's; run 8 s at 50 us. Run 2026-11-08: on the data's PSSs, every machine's speed swinging
+                // within 0.004 Hz peak to peak by 7 s, the inter-area swings at 0.57 to 0.71 Hz damped at zeta 0.15 to 0.21 - New
+                // England against New York up to 3.8 degrees, area 5 against New York 3.1; with them switched off, the data's fast
+                // static exciters (a gain of 100) leave its local modes undamped, G61's speed swinging wider and wider (0.10 Hz peak to
+                // peak 1 s after the fault, 0.22 Hz 5 s after), G62's and G63's still 0.34 and 0.40 Hz, New England against New York
+                // up to 7.8 degrees. Either way the DC grid rides it: CS33's AC bus down to 0.70 pu, the DC voltages within 0.984 and
+                // 1.008 pu, every station back on its power
+                new Case("ieee68-dc-fault-b1", () -> preprocessed("ieee68-dc", false, false), List.of(new BusFault("F", "B1", "ABC", true,
+                        1.0, 2.5, 2.6, FaultClearing.AT_CURRENT_ZERO)), new PscadSimulationSettings(50.0e-6, 8.0, 50.0, PscadEdition.PROFESSIONAL),
                         Kind.FROM_REST),
                 // PROMOTioN's five terminals, each cable between two hybrid DC breakers and their 200 mH reactors: a solid pole-to-pole
                 // fault at D1, the most meshed node, its stations protected against their arms' overcurrent - run 2026-11-08: every
@@ -357,6 +369,9 @@ final class PscadProCases {
         }
         if ("promotion-dc".equals(bench)) {
             return PromotionDcNetwork.load();
+        }
+        if ("ieee68-dc".equals(bench)) {
+            return Ieee68DcNetwork.load();
         }
         return EmtExtensionsXmlReader.readNetwork(ExampleNetworks.resource("/" + bench + ".xiidm"),
                 ExampleNetworks.resource("/" + bench + "-extensions.xml"));

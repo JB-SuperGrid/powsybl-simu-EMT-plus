@@ -124,10 +124,13 @@ class PscadProSimulationTest {
      * droops on their curves within 3e-4 MW, CSW within 0.007 MW, CS16 on its V_DC, 2.3 MW short of the load flow's power; the
      * reactive powers within 0.18 Mvar; the DC voltages within 2e-5 pu; its ten machines, on their PSSs, 0.8e-5 to 1.2e-5 pu slow.
      * PROMOTioN's benchmark, 2026-11-08, 4 s in 33 s: B1 on its curve within 0.002 MW, the offshore stations on their powers, A1 on
-     * its V_DC, 5.4 MW short of the load flow's power; the reactive powers within 0.5 Mvar; the DC voltages within 9e-5 pu.
+     * its V_DC, 5.4 MW short of the load flow's power; the reactive powers within 0.5 Mvar; the DC voltages within 9e-5 pu. IEEE 68
+     * with its DC grid, 2026-11-08, 4 s: its droops on their curves within 0.003 MW, CS16 on its V_DC, 1.2 MW past the load flow's
+     * power; the reactive powers within 0.14 Mvar; the DC voltages within 3e-5 pu; its sixteen machines within 2e-6 pu of the
+     * synchronous speed.
      */
     @ParameterizedTest(name = "{0}")
-    @ValueSource(strings = {"vsc-three-terminal-vdc-droop", "cigre-dcs2", "cigre-b4", "ieee14-dc", "kundur-dc", "ieee39-dc", "promotion-dc"})
+    @ValueSource(strings = {"vsc-three-terminal-vdc-droop", "cigre-dcs2", "cigre-b4", "ieee14-dc", "kundur-dc", "ieee39-dc", "promotion-dc", "ieee68-dc"})
     void aMultiTerminalDcNetworkHoldsItsOperatingPoint(String bench, @TempDir Path tempDir) throws Exception {
         Network network = ExampleNetworks.withLoadFlow("vsc-three-terminal-vdc-droop".equals(bench) ? PscadProCases.dcDroop()
                 : PscadProCases.bench(bench));
