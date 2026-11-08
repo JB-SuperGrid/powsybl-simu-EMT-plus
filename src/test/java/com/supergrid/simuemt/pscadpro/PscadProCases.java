@@ -162,6 +162,9 @@ final class PscadProCases {
                 fromRest("kundur-dc", () -> bench("kundur-dc")),
                 fromRest("ieee39-dc", () -> bench("ieee39-dc")),
                 fromRest("ieee68-dc", () -> bench("ieee68-dc")),
+                fromRest("ieee39-sync", () -> bench("ieee39-sync")),
+                fromRest("ieee39-gfl", () -> bench("ieee39-gfl")),
+                fromRest("ieee39-gfm", () -> bench("ieee39-gfm")),
                 fromRest("promotion-dc", () -> bench("promotion-dc")),
                 new Case("vsc-islanding", () -> bench("vsc-monopole-island"), List.of(ExampleNetworks.VSC_MONOPOLE_ISLANDING), SETTINGS,
                         Kind.FROM_REST),
@@ -211,6 +214,23 @@ final class PscadProCases {
                 // peak 1 s after the fault, 0.22 Hz 5 s after), G62's and G63's still 0.34 and 0.40 Hz, New England against New York
                 // up to 7.8 degrees. Either way the DC grid rides it: CS33's AC bus down to 0.70 pu, the DC voltages within 0.984 and
                 // 1.008 pu, every station back on its power
+                // IEEE 39 with a high share of power electronics (Ieee39IbrNetwork): its machines, then four of them replaced by
+                // grid-following, then by grid-forming converter sources, through a load step and a fault at bus 16; run 8 s at 50 us.
+                // Run 2026-11-08. Bus 16's load up 494 MW: the centre of inertia's frequency down 80 mHz with the machines, its RoCoF
+                // over 500 ms -0.075 Hz/s; 110 mHz and -0.100 Hz/s grid-following, the converters on their power, the inertia gone
+                // with the machines; 67 mHz and -0.048 Hz/s grid-forming, the converters' virtual machines (H 5 s, D 20) taking up
+                // 0.02 to 0.03 pu more each; New England against G39 at 0.60 Hz, zeta 0.23, at 0.69 Hz, zeta 0.20, and at 0.50 Hz,
+                // zeta 0.39. A solid three-phase fault, 100 ms: with the machines, New England swinging 21 degrees against G39 at
+                // 0.60 Hz, zeta 0.17; grid-following, CL38 - bus 29, at the end of the 26-28-29 corridor, its machine gone - loses
+                // its stability at the clearing, its AC voltage swinging 0.2 to 4 pu and its power never back, at 20 us as at 50 us,
+                // the other stations recovering; grid-forming, every station riding it, CL35's AC voltage down to 0.35 pu, back on
+                // its power within 0.004 pu by 8 s, New England swinging 20 degrees at 0.46 Hz, zeta 0.30
+                ibrCase("ieee39-sync-fault-b16", "ieee39-sync", IBR_FAULT),
+                ibrCase("ieee39-gfl-fault-b16", "ieee39-gfl", IBR_FAULT),
+                ibrCase("ieee39-gfm-fault-b16", "ieee39-gfm", IBR_FAULT),
+                ibrCase("ieee39-sync-load-step-b16", "ieee39-sync", IBR_LOAD_STEP),
+                ibrCase("ieee39-gfl-load-step-b16", "ieee39-gfl", IBR_LOAD_STEP),
+                ibrCase("ieee39-gfm-load-step-b16", "ieee39-gfm", IBR_LOAD_STEP),
                 new Case("ieee68-dc-fault-b1", () -> preprocessed("ieee68-dc", false, false), List.of(new BusFault("F", "B1", "ABC", true,
                         1.0, 2.5, 2.6, FaultClearing.AT_CURRENT_ZERO)), new PscadSimulationSettings(50.0e-6, 8.0, 50.0, PscadEdition.PROFESSIONAL),
                         Kind.FROM_REST),
@@ -287,6 +307,17 @@ final class PscadProCases {
     }
 
     /** A converters' scenario, from rest at {@link #CONVERTERS}' settings. */
+    /** IEEE 39's high power electronics variants' events: a solid three-phase fault at bus 16, 100 ms; bus 16's load stepped up 2.5
+     * times, by 494 MW. */
+    private static final EmtEvent IBR_FAULT = new BusFault("F", "B16", "ABC", true, 1.0, 2.5, 2.6, FaultClearing.AT_CURRENT_ZERO);
+    private static final EmtEvent IBR_LOAD_STEP = new LoadStep("L16", 2.5, 2.5);
+
+    /** One of IEEE 39's high power electronics variants ({@link Ieee39IbrNetwork}) through {@code event}: run 8 s at 50 us. */
+    private static Case ibrCase(String name, String bench, EmtEvent event) {
+        return new Case(name, () -> preprocessed(bench, false, false), List.of(event), new PscadSimulationSettings(50.0e-6, 8.0, 50.0,
+                PscadEdition.PROFESSIONAL), Kind.FROM_REST);
+    }
+
     private static Case converters(String name, Supplier<Network> network, EmtEvent... events) {
         return new Case(name, network, List.of(events), CONVERTERS, Kind.FROM_REST);
     }
@@ -381,6 +412,12 @@ final class PscadProCases {
         }
         if ("ieee68-dc".equals(bench)) {
             return Ieee68DcNetwork.load();
+        }
+        if ("ieee39-sync".equals(bench)) {
+            return Ieee39IbrNetwork.loadSync();
+        }
+        if ("ieee39-gfl".equals(bench) || "ieee39-gfm".equals(bench)) {
+            return Ieee39IbrNetwork.loadIbr("ieee39-gfm".equals(bench));
         }
         return EmtExtensionsXmlReader.readNetwork(ExampleNetworks.resource("/" + bench + ".xiidm"),
                 ExampleNetworks.resource("/" + bench + "-extensions.xml"));
