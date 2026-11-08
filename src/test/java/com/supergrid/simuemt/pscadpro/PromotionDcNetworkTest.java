@@ -41,6 +41,7 @@ class PromotionDcNetworkTest {
 
         assertThat(ids(read)).isEqualTo(ids(built));
         assertThat(read.getDcLineCount()).isEqualTo(5);
+        assertThat(read.getDcSwitchCount()).isEqualTo(10);
         assertThat(read.getVoltageSourceConverterCount()).isEqualTo(5);
         assertThat(read.getGeneratorCount()).isEqualTo(5);
     }

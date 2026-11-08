@@ -1,25 +1,45 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<iidm:network xmlns:iidm="http://www.powsybl.org/schema/iidm/1_18" xmlns:t2f="http://www.powsybl.org/schema/iidm/ext/two_windings_transformer_fortescue/1_1" xmlns:apc="http://www.powsybl.org/schema/iidm/ext/active_power_control/1_2" id="promotion-dc" caseDate="2026-11-08T10:48:42.797Z" forecastDistance="0" sourceFormat="test" minimumValidationLevel="STEADY_STATE_HYPOTHESIS">
+<iidm:network xmlns:iidm="http://www.powsybl.org/schema/iidm/1_18" xmlns:t2f="http://www.powsybl.org/schema/iidm/ext/two_windings_transformer_fortescue/1_1" xmlns:apc="http://www.powsybl.org/schema/iidm/ext/active_power_control/1_2" id="promotion-dc" caseDate="2026-11-08T14:15:54.931Z" forecastDistance="0" sourceFormat="test" minimumValidationLevel="STEADY_STATE_HYPOTHESIS">
     <iidm:dcNode id="BA1" nominalV="640.0"/>
     <iidm:dcNode id="BB1" nominalV="640.0"/>
     <iidm:dcNode id="BC2" nominalV="640.0"/>
     <iidm:dcNode id="BD1" nominalV="640.0"/>
     <iidm:dcNode id="BD2" nominalV="640.0"/>
+    <iidm:dcNode id="BCA1C2_A1" nominalV="640.0"/>
+    <iidm:dcNode id="BCA1C2_C2" nominalV="640.0"/>
+    <iidm:dcNode id="BCC2D1_C2" nominalV="640.0"/>
+    <iidm:dcNode id="BCC2D1_D1" nominalV="640.0"/>
+    <iidm:dcNode id="BCD1D2_D1" nominalV="640.0"/>
+    <iidm:dcNode id="BCD1D2_D2" nominalV="640.0"/>
+    <iidm:dcNode id="BCB1D1_B1" nominalV="640.0"/>
+    <iidm:dcNode id="BCB1D1_D1" nominalV="640.0"/>
+    <iidm:dcNode id="BCB1D2_B1" nominalV="640.0"/>
+    <iidm:dcNode id="BCB1D2_D2" nominalV="640.0"/>
     <iidm:dcNode id="BA1G" nominalV="640.0"/>
     <iidm:dcNode id="BB1G" nominalV="640.0"/>
     <iidm:dcNode id="BC2G" nominalV="640.0"/>
     <iidm:dcNode id="BD1G" nominalV="640.0"/>
     <iidm:dcNode id="BD2G" nominalV="640.0"/>
+    <iidm:dcSwitch id="KCA1C2_A1" dcNode1="BA1" dcNode2="BCA1C2_A1" kind="BREAKER" open="false" r="0.0"/>
+    <iidm:dcSwitch id="KCA1C2_C2" dcNode1="BC2" dcNode2="BCA1C2_C2" kind="BREAKER" open="false" r="0.0"/>
+    <iidm:dcSwitch id="KCC2D1_C2" dcNode1="BC2" dcNode2="BCC2D1_C2" kind="BREAKER" open="false" r="0.0"/>
+    <iidm:dcSwitch id="KCC2D1_D1" dcNode1="BD1" dcNode2="BCC2D1_D1" kind="BREAKER" open="false" r="0.0"/>
+    <iidm:dcSwitch id="KCD1D2_D1" dcNode1="BD1" dcNode2="BCD1D2_D1" kind="BREAKER" open="false" r="0.0"/>
+    <iidm:dcSwitch id="KCD1D2_D2" dcNode1="BD2" dcNode2="BCD1D2_D2" kind="BREAKER" open="false" r="0.0"/>
+    <iidm:dcSwitch id="KCB1D1_B1" dcNode1="BB1" dcNode2="BCB1D1_B1" kind="BREAKER" open="false" r="0.0"/>
+    <iidm:dcSwitch id="KCB1D1_D1" dcNode1="BD1" dcNode2="BCB1D1_D1" kind="BREAKER" open="false" r="0.0"/>
+    <iidm:dcSwitch id="KCB1D2_B1" dcNode1="BB1" dcNode2="BCB1D2_B1" kind="BREAKER" open="false" r="0.0"/>
+    <iidm:dcSwitch id="KCB1D2_D2" dcNode1="BD2" dcNode2="BCB1D2_D2" kind="BREAKER" open="false" r="0.0"/>
     <iidm:dcGround id="DGA1" dcNode="BA1G" r="0.0" connected="true"/>
     <iidm:dcGround id="DGB1" dcNode="BB1G" r="0.0" connected="true"/>
     <iidm:dcGround id="DGC2" dcNode="BC2G" r="0.0" connected="true"/>
     <iidm:dcGround id="DGD1" dcNode="BD1G" r="0.0" connected="true"/>
     <iidm:dcGround id="DGD2" dcNode="BD2G" r="0.0" connected="true"/>
-    <iidm:dcLine id="CA1C2" dcNode1="BA1" dcNode2="BC2" r="4.3999999999999995" connected1="true" connected2="true"/>
-    <iidm:dcLine id="CC2D1" dcNode1="BC2" dcNode2="BD1" r="3.3" connected1="true" connected2="true"/>
-    <iidm:dcLine id="CD1D2" dcNode1="BD1" dcNode2="BD2" r="3.3" connected1="true" connected2="true"/>
-    <iidm:dcLine id="CB1D1" dcNode1="BB1" dcNode2="BD1" r="5.5" connected1="true" connected2="true"/>
-    <iidm:dcLine id="CB1D2" dcNode1="BB1" dcNode2="BD2" r="3.3" connected1="true" connected2="true"/>
+    <iidm:dcLine id="CA1C2" dcNode1="BCA1C2_A1" dcNode2="BCA1C2_C2" r="4.3999999999999995" connected1="true" connected2="true"/>
+    <iidm:dcLine id="CC2D1" dcNode1="BCC2D1_C2" dcNode2="BCC2D1_D1" r="3.3" connected1="true" connected2="true"/>
+    <iidm:dcLine id="CD1D2" dcNode1="BCD1D2_D1" dcNode2="BCD1D2_D2" r="3.3" connected1="true" connected2="true"/>
+    <iidm:dcLine id="CB1D1" dcNode1="BCB1D1_B1" dcNode2="BCB1D1_D1" r="5.5" connected1="true" connected2="true"/>
+    <iidm:dcLine id="CB1D2" dcNode1="BCB1D2_B1" dcNode2="BCB1D2_D2" r="3.3" connected1="true" connected2="true"/>
     <iidm:substation id="SA1">
         <iidm:voltageLevel id="VGA1" nominalV="400.0" topologyKind="BUS_BREAKER">
             <iidm:busBreakerTopology>

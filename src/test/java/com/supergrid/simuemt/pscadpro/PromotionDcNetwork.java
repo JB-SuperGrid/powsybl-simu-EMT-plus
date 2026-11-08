@@ -5,6 +5,7 @@
 package com.supergrid.simuemt.pscadpro;
 
 import com.powsybl.iidm.network.AcDcConverter;
+import com.powsybl.iidm.network.DcSwitchKind;
 import com.powsybl.iidm.network.Generator;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.NetworkFactory;
@@ -48,7 +49,9 @@ import java.util.Objects;
  * <p>Ours, where D5.1 gives none or the backend has none: its bipoles balanced, each as one 640 kV conductor - its two poles in
  * series, as a symmetric monopole's, its neutral carrying nothing -, so that no pole-to-ground fault of a bipole, D5.1's own, can be
  * studied here, only pole-to-pole ones; its cables CIGRE B4's +-400 kV type, the data D5.1 adapts but does not give, 0.011 ohm,
- * 2.615 mH and 0.1908 uF a pole and a km - 2 R and 2 L, half the C, as one conductor. B1 holds no reactive power at its PCC, at its
+ * 2.615 mH and 0.1908 uF a pole and a km - 2 R and 2 L, half the C, as one conductor. Each cable between two DC breakers, one at
+ * each end, as D4.2's fully selective protection has them: K{cable}_{station}, from the station's node B{station} to the cable's end
+ * B{cable}_{station}. B1 holds no reactive power at its PCC, at its
  * rating; A1 its 333 kV bus at 1 pu; the offshore stations none at their PCC.
  *
  * @author Jean-Baptiste Heyberger : jean-baptiste.heyberger@supergrid-institute.com
@@ -90,8 +93,11 @@ final class PromotionDcNetwork {
         for (String node : List.of("BA1", "BB1", "BC2", "BD1", "BD2")) {
             network.newDcNode().setId(node).setNominalV(DC_KV).add();
         }
+        // Each cable between two DC breakers, one at each end, on its own node (D4.2's fully selective protection).
         for (Cable cable : CABLES) {
-            network.newDcLine().setId(cable.id()).setDcNode1(cable.node1()).setDcNode2(cable.node2()).setR(2 * CABLE_R * cable.km()).add();
+            String end1 = breakerAt(network, cable, cable.node1());
+            String end2 = breakerAt(network, cable, cable.node2());
+            network.newDcLine().setId(cable.id()).setDcNode1(end1).setDcNode2(end2).setR(2 * CABLE_R * cable.km()).add();
         }
         // The onshore grids taking what the DC grid delivers, about: OpenLoadFlow never changes a generator's sign.
         VoltageSourceConverter a1 = addStation(network, "A1", 400.0, 30000.0, 1600.0, -1070.0);
@@ -109,6 +115,25 @@ final class PromotionDcNetwork {
         d1.setTargetP(1200.0);
         d2.setTargetP(900.0);
         return network;
+    }
+
+    /** The DC breaker at {@code bus}'s end of {@code cable}, from the bus to the cable's end node, which it returns. */
+    private static String breakerAt(Network network, Cable cable, String bus) {
+        String cableEnd = cableEnd(cable.id(), bus);
+        network.newDcNode().setId(cableEnd).setNominalV(DC_KV).add();
+        network.newDcSwitch().setId(breaker(cable.id(), bus)).setKind(DcSwitchKind.BREAKER).setDcNode1(bus).setDcNode2(cableEnd)
+                .setOpen(false).setR(0.0).add();
+        return cableEnd;
+    }
+
+    /** The DC breaker at {@code bus}'s end of cable {@code cableId}: K{cable}_{station}, as KCD1D2_D1. */
+    static String breaker(String cableId, String bus) {
+        return "K" + cableId + "_" + bus.substring(1);
+    }
+
+    /** The node between the DC breaker at {@code bus}'s end of cable {@code cableId} and the cable: B{cable}_{station}. */
+    static String cableEnd(String cableId, String bus) {
+        return "B" + cableId + "_" + bus.substring(1);
     }
 
     /**
