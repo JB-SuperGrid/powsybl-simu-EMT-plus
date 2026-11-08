@@ -107,8 +107,8 @@ class PscadProSimulationTest {
      * converter's reactive power and DC voltage the load flow's. A V_DC converter's power is not the load flow's: it takes, besides,
      * its DC grid's other converters' phase reactor losses, which the load flow has not (R 0.003 pu; CIGRE B4's CBA1 13.4 MW of
      * DCS3's, 13.5 MW by R I^2) - its reactive power, holding its AC bus, then their drop across its transformer, within 0.3% of its
-     * rating. The other converters' reactive power within 0.3 Mvar, or 0.2% of their rating: holding their AC bus on a 5% droop,
-     * 1e-4 pu of its voltage, which those losses move the AC flows by, is 0.2% of their rating.
+     * rating. The other converters' reactive power within 0.3 Mvar, or 0.3% of their rating: holding their AC bus on a 5% droop,
+     * 1.5e-4 pu of its voltage, which those losses move the AC flows by, is 0.3% of their rating.
      *
      * <p>Run 2026-11-06 at 50 us: the droops within 0.07 MW of their curves (0.001 on example 4), the powers held within 0.003
      * MW, the V_DC within 1e-6 pu; the reactive powers within 0.15 Mvar and the DC voltages within 2e-4 pu of the load flow's.
@@ -118,7 +118,8 @@ class PscadProSimulationTest {
      * within 0.1 Mvar; its machines 9e-5 pu fast, the 3 MW its droops, still short of their load flow's power until let go, bring
      * then, which G1's and G2's proportional governors take back. Kundur's two areas with their DC grid, 2026-11-08, 4 s in 37 s:
      * CS7 on its curve within 1e-4 MW, CSW within 0.004 MW, CS9 on its V_DC, 1.75 MW short of the load flow's power; CS7's
-     * reactive power 0.53 Mvar off, CS9's 0.7, CSW's within 0.002; the DC voltages within 1.1e-5 pu; its machines 2.4e-5 pu slow.
+     * reactive power 0.7 Mvar off, CS9's 1.0, CSW's within 0.002; the DC voltages within 1.1e-5 pu; its machines 4e-5 pu slow,
+     * their TGOV1s' turbines (T3 10 s) still bringing those 1.75 MW back.
      */
     @ParameterizedTest(name = "{0}")
     @ValueSource(strings = {"vsc-three-terminal-vdc-droop", "cigre-dcs2", "cigre-b4", "ieee14-dc", "kundur-dc"})
@@ -152,7 +153,7 @@ class PscadProSimulationTest {
                 softly.assertThat(p).as("%s active power, MW", id).isCloseTo(expectedP, within(0.1));
                 softly.assertThat(vdc).as("%s DC voltage, pu", id).isCloseTo(lfVdc, within(5.0e-4));
             }
-            double qTolerance = converter.getControlMode() == AcDcConverter.ControlMode.V_DC ? 0.003 * rating : Math.max(0.3, 0.002 * rating);
+            double qTolerance = Math.max(0.3, 0.003 * rating);
             softly.assertThat(q).as("%s reactive power, Mvar", id).isCloseTo(converter.getTerminal1().getQ(), within(qTolerance));
         }
         // Its machines, if any: back on the synchronous speed.

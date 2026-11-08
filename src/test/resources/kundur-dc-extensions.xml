@@ -12,8 +12,12 @@
     excess field current Asat exp(Bsat (psi - psiT1)) on psi. Its thyristor exciter, a gain of 200 behind a 10 ms transducer lag,
     the simplified AVR (a field voltage within +-5 pu, ours); its PSS, Kundur's KSTAB 20, TW 10 s, T1 0.05, T2 0.02, T3 3, T4
     5.4 s, on the speed's deviation (an output limit of 0.2 pu, ours): without it, the high-gain exciter leaves the inter-area mode
-    with little or no damping. The benchmark holds its mechanical power: here each machine on a proportional governor of 5 %
-    droop (KGover 20 on 900 MW), ours, so that the DC grid's droop and the load flow's small mismatches settle on a frequency.
+    with little or no damping. The benchmark holds its mechanical power: here each machine on a TGOV1, ours, so that the DC
+    grid's droop and the load flow's small mismatches settle on a frequency - the usual data, R 5 % on 900 MW, T1 0.5 s, the
+    valve within 0 and 1 pu, T2 3 s, T3 10 s, no Dt. Not a proportional governor without lag: each one a damping torque of 20 pu
+    on its machine's speed, it damps the inter-area mode as much as the PSSs do (zeta 0.25 without them). With the TGOV1s, a
+    fault at bus 8 (kundur-dc-fault-b8, run 2026-11-08 over 8 s): the inter-area mode at 0.6 Hz, zeta 0.04 without the PSSs,
+    0.2 with them - as with no governor at all.
 
     The DC grid's converters averaged as CIGRE DCS2's and Ieee14DcNetwork's, a 15 % phase reactor on their rating (R 0.003 pu), DC
     capacitors of 40 ms, a bridge inductance for their blocking: CS7 and CS9 grid-following (on their DC voltage droop and DC
@@ -37,7 +41,8 @@
                             minOutput="-5.0" maxOutput="5.0"/>
         <pss1AModel enabled="true" gain="20.0" washoutTimeConstant="10.0" leadTimeConstant="0.05"
                     lagTimeConstant="0.02" leadTimeConstant2="3.0" lagTimeConstant2="5.4" outputLimit="0.2"/>
-        <goverProportionalModel enabled="true" gain="20.0" powerMaxMw="900.0" powerMinMw="0.0" nominalPowerMw="900.0"/>
+        <tgov1Model enabled="true" droop="0.05" governorTimeConstant="0.5" valveMin="0.0" valveMax="1.0"
+                    turbineLeadTimeConstant="3.0" turbineLagTimeConstant="10.0" turbineDamping="0.0"/>
     </extension>
     <extension id="G2">
         <subtransientMachineModel inertiaConstant="6.5" damping="0.0" statorResistance="0.0025"
@@ -54,7 +59,8 @@
                             minOutput="-5.0" maxOutput="5.0"/>
         <pss1AModel enabled="true" gain="20.0" washoutTimeConstant="10.0" leadTimeConstant="0.05"
                     lagTimeConstant="0.02" leadTimeConstant2="3.0" lagTimeConstant2="5.4" outputLimit="0.2"/>
-        <goverProportionalModel enabled="true" gain="20.0" powerMaxMw="900.0" powerMinMw="0.0" nominalPowerMw="900.0"/>
+        <tgov1Model enabled="true" droop="0.05" governorTimeConstant="0.5" valveMin="0.0" valveMax="1.0"
+                    turbineLeadTimeConstant="3.0" turbineLagTimeConstant="10.0" turbineDamping="0.0"/>
     </extension>
     <extension id="G3">
         <subtransientMachineModel inertiaConstant="6.175" damping="0.0" statorResistance="0.0025"
@@ -71,7 +77,8 @@
                             minOutput="-5.0" maxOutput="5.0"/>
         <pss1AModel enabled="true" gain="20.0" washoutTimeConstant="10.0" leadTimeConstant="0.05"
                     lagTimeConstant="0.02" leadTimeConstant2="3.0" lagTimeConstant2="5.4" outputLimit="0.2"/>
-        <goverProportionalModel enabled="true" gain="20.0" powerMaxMw="900.0" powerMinMw="0.0" nominalPowerMw="900.0"/>
+        <tgov1Model enabled="true" droop="0.05" governorTimeConstant="0.5" valveMin="0.0" valveMax="1.0"
+                    turbineLeadTimeConstant="3.0" turbineLagTimeConstant="10.0" turbineDamping="0.0"/>
     </extension>
     <extension id="G4">
         <subtransientMachineModel inertiaConstant="6.175" damping="0.0" statorResistance="0.0025"
@@ -88,7 +95,8 @@
                             minOutput="-5.0" maxOutput="5.0"/>
         <pss1AModel enabled="true" gain="20.0" washoutTimeConstant="10.0" leadTimeConstant="0.05"
                     lagTimeConstant="0.02" leadTimeConstant2="3.0" lagTimeConstant2="5.4" outputLimit="0.2"/>
-        <goverProportionalModel enabled="true" gain="20.0" powerMaxMw="900.0" powerMinMw="0.0" nominalPowerMw="900.0"/>
+        <tgov1Model enabled="true" droop="0.05" governorTimeConstant="0.5" valveMin="0.0" valveMax="1.0"
+                    turbineLeadTimeConstant="3.0" turbineLagTimeConstant="10.0" turbineDamping="0.0"/>
     </extension>
     <extension id="CS7">
         <averagedVscModel ratedApparentPower="300.0" phaseReactorResistance="0.003" phaseReactorReactance="0.15"

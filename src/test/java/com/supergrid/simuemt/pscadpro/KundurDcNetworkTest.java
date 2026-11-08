@@ -11,6 +11,7 @@ import com.powsybl.iidm.network.Identifiable;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.loadflow.LoadFlow;
 import com.powsybl.simuemt.extensions.GeneratorModel;
+import com.powsybl.simuemt.extensions.governor.Tgov1Model;
 import com.powsybl.simuemt.extensions.governor.TurbineGovernorModel;
 import com.powsybl.simuemt.extensions.machine.SubtransientMachineModel;
 import com.powsybl.simuemt.extensions.pss.PssModel;
@@ -114,7 +115,7 @@ class KundurDcNetworkTest {
     }
 
     /**
-     * On PSCAD Professional: its four machines, Kundur's, each with its exciter, its PSS and a governor; its three stations' controls
+     * On PSCAD Professional: its four machines, Kundur's, each with its exciter, its PSS and a TGOV1; its three stations' controls
      * and its wind park's; the DC grid's three lines.
      */
     @Test
@@ -130,7 +131,7 @@ class KundurDcNetworkTest {
             Object governor = generator.getExtension(TurbineGovernorModel.class);
             assertThat(model).as("G%d", machine).isInstanceOf(SubtransientMachineModel.class);
             assertThat(pss.isEnabled()).as("G%d PSS", machine).isTrue();
-            assertThat(governor).as("G%d governor", machine).isNotNull();
+            assertThat(governor).as("G%d governor", machine).isInstanceOf(Tgov1Model.class);
         }
         assertThat(circuit.components().stream().map(PscadComponent::definition).filter(d -> d.endsWith("_CTRL")))
                 .contains("CS7_CTRL", "CS9_CTRL", "CSW_CTRL", "WTW_CTRL");
