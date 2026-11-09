@@ -13,6 +13,8 @@ import com.powsybl.simuemt.extensions.hvdc.AveragedConverterModel;
 import com.powsybl.simuemt.extensions.hvdc.AveragedVscInitialState;
 import com.powsybl.simuemt.extensions.hvdc.DcVoltageDroopLaw;
 import com.powsybl.simuemt.extensions.hvdc.VoltageSourceConverterModel;
+import com.powsybl.simuemt.extensions.hvdc.control.GridFormingControl;
+import com.powsybl.simuemt.extensions.hvdc.control.VscControlModel;
 import com.powsybl.simuemt.extensions.machine.SubtransientMachineModel;
 import com.powsybl.simuemt.pscad.PscadOutput;
 import com.powsybl.simuemt.pscad.PscadSimulationSettings;
@@ -62,6 +64,15 @@ import static org.assertj.core.api.Assertions.within;
  * grid and at B1's, run 5 s: the DC voltages within 0.966 and 1.087 pu, and 0.991 and 1.110; on cable D1-D2 at D1, its two
  * breakers opened 3 ms on, run 5 s: within 0.866 and 1.099 pu, B1 on its droop at the DC voltage the cut grid settles to, 1.2e-3 pu
  * under its own before. Every station of every case on its law within 1e-4 of its rating.
+ *
+ * <p>IEEE 39 with a high share of power electronics, run 8 s at 50 us, the fault or bus 16's load up 494 MW at 2.5 s - the runs of
+ * 2026-11-08 again. The fault: New England against G39 21.4 degrees at 0.594 Hz, zeta 0.173, with its machines; 33.2 degrees at
+ * 0.680 Hz, zeta 0.160, four of them grid-following, no inertia of the converters'; 20.3 degrees at 0.464 Hz, zeta 0.296,
+ * grid-forming, their virtual machines back within 0.0015 of their power; six replaced, 15.8 degrees grid-forming, 30.4 mixed (CL33
+ * alone grid-forming) - six grid-following, the network is lost, G31 out of step: left out. The load step: the centre of inertia's
+ * nadir 80, 110 and 67 mHz, its RoCoF over 500 ms -0.075, -0.100 and -0.048 Hz/s, with the machines, grid-following and
+ * grid-forming; 141 and 64 mHz, -0.115 and -0.038 Hz/s, six replaced; the grid-forming stations' virtual machines taking up 0.024 to
+ * 0.027 of their rating for good, New England settling on its new angle without swinging.
  * Every channel is written, a sample a millisecond, to {@code target/fault-swing/<case>.csv}. About 3 minutes a case;
  * {@code -Dpscad.faults=ieee68-dc-fault-b1,...} runs only those.
  *
@@ -82,19 +93,30 @@ class PscadProFaultSwingTest {
     /** For how long, at the end of the run, the machines' speeds are held settled, s. */
     private static final double SETTLED = 1.0;
 
-    /** One swing, {@code area1}'s centre of inertia against {@code area2}'s, its largest angle in degrees within {@code [min, max]};
-     * its frequency and damping ratio, {@code NaN} for a swing too small to read them off. */
+    /** One swing, {@code area1}'s centre of inertia against {@code area2}'s - {@code area1} empty for every other machine of the
+     * network's -, its largest angle in degrees within {@code [min, max]}; its frequency and damping ratio, {@code NaN} for a swing too
+     * small to read them off. */
     record Swing(String label, List<String> area1, List<String> area2, double min, double max, double frequency, double damping) {
     }
 
+    /** The frequency of every machine's centre of inertia after the event, from where it was over the 100 ms before: its nadir, mHz,
+     * within {@code [nadirMin, nadirMax]}, and its RoCoF over the first 500 ms, Hz/s, within {@code [rocofMin, rocofMax]}. */
+    record Frequency(double nadirMin, double nadirMax, double rocofMin, double rocofMax) {
+    }
+
     /**
-     * A fault's case: when its fault starts, s; how long it runs, s, {@code NaN} for the case's own; its swings, none in a network
-     * without machines; its DC voltages' bounds from the fault on; the largest peak-to-peak speed any machine of the network's is
-     * left with over the run's last {@link #SETTLED}, Hz, {@code NaN} not to hold it; and how close every station is back, at the
-     * end, to its power before the fault, of its rating, and to its DC voltage, pu.
+     * A case: when its fault or its load step comes, s; how long it runs, s, {@code NaN} for the case's own; its swings, none in a
+     * network without machines; its DC voltages' bounds from the event on; the largest peak-to-peak speed any machine of the network's
+     * is left with over the run's last {@link #SETTLED}, Hz, {@code NaN} not to hold it; how close every station is back on its law at
+     * the end, of its rating or pu - a grid-forming one's, {@code gridFormingRecovery}, its virtual machine taking up its share of a
+     * load step for good; and its centre of inertia's frequency, {@code null} not to hold it.
      */
     record Expected(String name, double fault, double runEnd, List<Swing> swings, double vdcMin, double vdcMax, double settledHz,
-                    double recovery) {
+                    double recovery, double gridFormingRecovery, Frequency frequency) {
+
+        Expected(String name, double fault, double runEnd, List<Swing> swings, double vdcMin, double vdcMax, double settledHz, double recovery) {
+            this(name, fault, runEnd, swings, vdcMin, vdcMax, settledHz, recovery, recovery, null);
+        }
 
         @Override
         public String toString() {
@@ -108,7 +130,7 @@ class PscadProFaultSwingTest {
         // IEEE 68's areas: New England's nine machines, New York's four, and areas 3, 4 and 5, one equivalent machine each.
         List<String> newEngland68 = List.of("G53", "G54", "G55", "G56", "G57", "G58", "G59", "G60", "G61");
         List<String> newYork = List.of("G62", "G63", "G64", "G65");
-        return Stream.of(
+        return Stream.concat(Stream.of(
                 new Expected("kundur-dc-fault-b7", 2.5, Double.NaN, List.of(new Swing("area 1 against area 2", kundur1, kundur2, 18.0, 23.0, 0.595,
                         0.20)), 0.93, 1.07, Double.NaN, 1.0e-3),
                 new Expected("kundur-dc-fault-b8", 2.5, Double.NaN, List.of(new Swing("area 1 against area 2", kundur1, kundur2, 0.0, 1.5, Double.NaN,
@@ -127,7 +149,42 @@ class PscadProFaultSwingTest {
                 new Expected("promotion-dc-ac-fault-a1", 2.3, 5.0, List.of(), 0.95, 1.10, Double.NaN, 1.0e-3),
                 new Expected("promotion-dc-ac-fault-b1", 2.3, 5.0, List.of(), 0.975, 1.125, Double.NaN, 1.0e-3),
                 new Expected("promotion-dc-fault-cd1d2", 2.3, 5.0, List.of(), 0.85, 1.115, Double.NaN, 1.0e-3)
-        ).filter(PscadProFaultSwingTest::selected).map(Arguments::of);
+        ), ieee39Ibr()).filter(PscadProFaultSwingTest::selected).map(Arguments::of);
+    }
+
+    /**
+     * IEEE 39 with a high share of power electronics ({@link Ieee39IbrNetwork}): its machines, then four, then six of them replaced by
+     * grid-following, grid-forming or mixed converter sources, through a fault and a load step at bus 16 - but the six replaced
+     * grid-following through the fault, where the network is lost, G31 out of step. Every machine left against G39.
+     */
+    private static Stream<Expected> ieee39Ibr() {
+        List<String> g39 = List.of("G39");
+        String label = "New England against G39";
+        double nan = Double.NaN;
+        return Stream.of(
+                // A solid three-phase fault, 100 ms
+                new Expected("ieee39-sync-fault-b16", 2.5, nan, List.of(new Swing(label, List.of(), g39, 19.0, 24.0, 0.594, 0.173)), 0.0, 9.0, 0.03,
+                        1.0e-3),
+                new Expected("ieee39-gfl-fault-b16", 2.5, nan, List.of(new Swing(label, List.of(), g39, 29.5, 37.0, 0.680, 0.160)), 0.85, 1.12, 0.07,
+                        1.0e-3),
+                new Expected("ieee39-gfm-fault-b16", 2.5, nan, List.of(new Swing(label, List.of(), g39, 18.0, 22.5, 0.464, 0.296)), 0.86, 1.115, 0.006,
+                        1.0e-3, 0.005, null),
+                // Six machines replaced, the swings no decaying sine's past the first: their damping held through every machine's speed.
+                new Expected("ieee39-gfm65-fault-b16", 2.5, nan, List.of(new Swing(label, List.of(), g39, 14.0, 17.5, nan, nan)), 0.86, 1.11, 0.007,
+                        1.0e-3, 0.005, null),
+                new Expected("ieee39-mix65-fault-b16", 2.5, nan, List.of(new Swing(label, List.of(), g39, 27.0, 34.0, nan, nan)), 0.85, 1.115, 0.01,
+                        1.0e-3, 0.005, null),
+                // Bus 16's load up 494 MW. Grid-forming, New England settles on its new angle without swinging: its amplitude alone.
+                new Expected("ieee39-sync-load-step-b16", 2.5, nan, List.of(new Swing(label, List.of(), g39, 6.2, 7.8, 0.600, 0.228)), 0.0, 9.0, 0.005,
+                        1.0e-3, 1.0e-3, new Frequency(-87.0, -74.0, -0.083, -0.068)),
+                new Expected("ieee39-gfl-load-step-b16", 2.5, nan, List.of(new Swing(label, List.of(), g39, 8.8, 11.0, 0.687, 0.201)), 0.97, 1.01, 0.01,
+                        1.0e-3, 1.0e-3, new Frequency(-119.0, -102.0, -0.110, -0.090)),
+                new Expected("ieee39-gfm-load-step-b16", 2.5, nan, List.of(new Swing(label, List.of(), g39, 4.3, 5.5, nan, nan)), 0.97, 1.01, 0.002,
+                        1.0e-3, 0.035, new Frequency(-73.0, -62.0, -0.053, -0.043)),
+                new Expected("ieee39-gfl65-load-step-b16", 2.5, nan, List.of(new Swing(label, List.of(), g39, 10.0, 12.3, 0.784, 0.133)), 0.97, 1.01,
+                        0.02, 1.0e-3, 1.0e-3, new Frequency(-152.0, -130.0, -0.127, -0.104)),
+                new Expected("ieee39-gfm65-load-step-b16", 2.5, nan, List.of(new Swing(label, List.of(), g39, 3.0, 3.8, nan, nan)), 0.97, 1.01, 0.0015,
+                        1.0e-3, 0.035, new Frequency(-69.0, -59.0, -0.042, -0.034)));
     }
 
     /** All the faults, or those {@code -Dpscad.faults=kundur-dc-fault-b7,...} names. */
@@ -157,7 +214,9 @@ class PscadProFaultSwingTest {
         double[] time = times(curves);
         SoftAssertions softly = new SoftAssertions();
         for (Swing expectedSwing : expected.swings()) {
-            double[] swing = swing(network, curves, time, expectedSwing.area1(), expectedSwing.area2(), expected.fault());
+            List<String> area1 = expectedSwing.area1().isEmpty() ? machines(network).stream().filter(m -> !expectedSwing.area2().contains(m)).toList()
+                    : expectedSwing.area1();
+            double[] swing = swing(network, curves, time, area1, expectedSwing.area2(), expected.fault());
             List<double[]> extremes = extremes(time, swing, expected.fault() + FAULT_DURATION);
             double largest = 0.0;
             for (int i = 0; i < time.length; i++) {
@@ -176,9 +235,38 @@ class PscadProFaultSwingTest {
             }
         }
         double runEnd = time[time.length - 1];
+        if (expected.frequency() != null) {
+            double[] centre = centreOfInertia(network, curves, machines(network));
+            double before = 0.0;
+            int count = 0;
+            double nadir = 0.0;
+            double atEvent = Double.NaN;
+            double afterHalfSecond = Double.NaN;
+            for (int i = 0; i < time.length; i++) {
+                if (time[i] >= expected.fault() - 0.1 && time[i] < expected.fault()) {
+                    before += centre[i];
+                    count++;
+                }
+            }
+            before /= count;
+            for (int i = 0; i < time.length; i++) {
+                double deviation = (centre[i] - before) * FREQUENCY * 1.0e3;
+                if (time[i] >= expected.fault()) {
+                    nadir = Math.min(nadir, deviation);
+                    atEvent = Double.isNaN(atEvent) ? deviation : atEvent;
+                }
+                if (time[i] >= expected.fault() + 0.5 && Double.isNaN(afterHalfSecond)) {
+                    afterHalfSecond = deviation;
+                }
+            }
+            double rocof = (afterHalfSecond - atEvent) / 0.5 / 1.0e3;
+            System.out.printf(Locale.ROOT, "%s: centre of inertia's nadir %.1f mHz, RoCoF over 500 ms %.4f Hz/s%n", expected.name(), nadir, rocof);
+            softly.assertThat(nadir).as("the centre of inertia's nadir, mHz").isBetween(expected.frequency().nadirMin(), expected.frequency().nadirMax());
+            softly.assertThat(rocof).as("the centre of inertia's RoCoF over 500 ms, Hz/s").isBetween(expected.frequency().rocofMin(),
+                    expected.frequency().rocofMax());
+        }
         if (!Double.isNaN(expected.settledHz())) {
-            for (String machine : network.getGeneratorStream().filter(g -> g.getExtension(GeneratorModel.class) instanceof SubtransientMachineModel)
-                    .map(Generator::getId).toList()) {
+            for (String machine : machines(network)) {
                 double[] w = curves.get(machine + "_W").toArray();
                 double low = Double.MAX_VALUE;
                 double high = -Double.MAX_VALUE;
@@ -227,11 +315,19 @@ class PscadProFaultSwingTest {
                 double pExpected = (converter.getTerminal1().getP() - DcVoltageDroopLaw.of(converter, initial)
                         .map(law -> law.powerReduction(vdcEnd) * initial.baseApparentPower()).orElse(0.0)) / rating;
                 System.out.printf(Locale.ROOT, "%s %s: P %.4f expected at the end%n", expected.name(), station, pExpected);
+                double tolerance = converter.getExtension(VscControlModel.class) instanceof GridFormingControl ? expected.gridFormingRecovery()
+                        : expected.recovery();
                 softly.assertThat(pEnd).as("%s's power at the end against the load flow's along its droop, of its rating", station)
-                        .isCloseTo(pExpected, within(expected.recovery()));
+                        .isCloseTo(pExpected, within(tolerance));
             }
         }
         softly.assertAll();
+    }
+
+    /** Every machine of {@code network}'s. */
+    private static List<String> machines(Network network) {
+        return network.getGeneratorStream().filter(g -> g.getExtension(GeneratorModel.class) instanceof SubtransientMachineModel)
+                .map(Generator::getId).toList();
     }
 
     /** The angle of {@code area1}'s centre of inertia against {@code area2}'s, degrees, from the fault on. */
