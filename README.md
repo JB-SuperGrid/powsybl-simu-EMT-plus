@@ -62,5 +62,10 @@ Phasor b2 = run.output().fundamentalPhasor(run.project().circuit().voltageChanne
   - `PscadProBeyondFreeTest` runs what upstream writes for the Professional edition only, past Free's 15 nodes, and holds it
     to what upstream holds ATP, Xyce and Kestrel to: the four phase-shifter benches on the load flow, a line put back into
     service, a three-winding transformer's leg closed, an open-ended energization with and without its arrester.
+  - `PscadProFaultSwingTest` runs large networks' faults, past PSCAD Free, and holds them to their physics: Kundur's two
+    areas with their DC grid, faulted at bus 7 and bus 8, IEEE 39 with its DC grid, faulted at bus 16, and IEEE 68 with its DC
+    grid, faulted at bus 1 - the swing between their areas (its amplitude, frequency and damping, or the machines settled), the
+    DC voltages within their bounds, every station back on its power. About 3 minutes a case;
+    `-Dpscad.faults=ieee68-dc-fault-b1,...` runs only those.
   - `PscadProAc6ALimiterTest` runs upstream's AC6A field current limiter bench, whose PSCAD gap upstream documents, at 20, 10
     and 5 us, and writes its channels around the fault to `target/ac6a-limiter/<step>us.csv`.
