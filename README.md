@@ -63,6 +63,9 @@ Phasor b2 = run.output().fundamentalPhasor(run.project().circuit().voltageChanne
     to what upstream holds ATP, Xyce and Kestrel to: the four phase-shifter benches on the load flow, a line put back into
     service, a three-winding transformer's leg closed, and left open from rest, an open-ended energization with and without
     its arrester, and a chain of twelve buses on the load flow.
+  - `PscadProCigreDcs2Test` runs CIGRE B4 DCS2's four scenarios live - its droops' power steps, its wind park's loss, an onshore
+    AC fault and a DC fault cleared through the onshore breakers - and holds them to what ATP, Xyce and Kestrel share, the
+    criteria upstream holds its stored PSCAD runs of them to.
   - `PscadProFaultSwingTest` runs large networks' faults, past PSCAD Free, and holds them to their physics: Kundur's two
     areas with their DC grid, faulted at bus 7 and bus 8, IEEE 39, IEEE 68 and IEEE 14 with theirs, faulted at bus 16, 1 and 4,
     CIGRE B4 whole, faulted at BAB1, and PROMOTioN's benchmark through an AC fault at A1 and at B1 and a fault on cable D1-D2
