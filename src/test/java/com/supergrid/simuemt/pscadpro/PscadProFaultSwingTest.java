@@ -4,11 +4,18 @@
  */
 package com.supergrid.simuemt.pscadpro;
 
+import com.powsybl.iidm.network.AcDcConverter;
 import com.powsybl.iidm.network.Generator;
 import com.powsybl.iidm.network.Network;
+import com.powsybl.iidm.network.VoltageSourceConverter;
 import com.powsybl.simuemt.extensions.GeneratorModel;
+import com.powsybl.simuemt.extensions.hvdc.AveragedConverterModel;
+import com.powsybl.simuemt.extensions.hvdc.AveragedVscInitialState;
+import com.powsybl.simuemt.extensions.hvdc.DcVoltageDroopLaw;
+import com.powsybl.simuemt.extensions.hvdc.VoltageSourceConverterModel;
 import com.powsybl.simuemt.extensions.machine.SubtransientMachineModel;
 import com.powsybl.simuemt.pscad.PscadOutput;
+import com.powsybl.simuemt.pscad.PscadSimulationSettings;
 import com.powsybl.simuemt.testresources.ExampleNetworks;
 import com.powsybl.timeseries.DoubleTimeSeries;
 import com.powsybl.timeseries.TimeSeriesIndex;
@@ -33,12 +40,14 @@ import static org.assertj.core.api.Assertions.within;
 /**
  * The large networks' faults of {@link PscadProCases}, past PSCAD Free's 15 nodes, run in PSCAD Professional and held to what
  * their runs by hand showed on 2026-11-08 - no other backend runs them here, so each check is the network's physics: the swing
- * between its two areas, the DC grid riding the fault, every station back on its power.
+ * between its areas, if it has machines, the DC grid riding the fault, every station back on its own law.
  *
  * <p>The swing is the angle between the two areas' centres of inertia, each machine weighted by {@code H S}, integrated from their
  * speeds from the fault on; its frequency and damping from its successive extremes after the clearing, the damping ratio from the
  * logarithmic decrement of their peak-to-peak amplitudes a period apart. The DC voltages within their bounds from the fault to the
- * end, and at the end every station back on its power before the fault within 1e-3 of its rating, its DC voltage within 1e-3 pu.
+ * end. At the end each station back on its law, from the load flow - a run from rest is not always settled when the fault comes,
+ * CIGRE B4's DC voltages still moving by 6e-4 pu at 2.5 s: the DC voltage's on its voltage within 1e-3 pu, the others on their power
+ * within 1e-3 of their rating, along their droop from where the DC voltage settles - elsewhere when a cable is cut.
  *
  * <p>Run 2026-11-09, at 20 us, 8 s, from rest, the fault at 2.5 s cleared at 2.6 s: Kundur's two areas, the fault at bus 7, area 1
  * swinging 20.4 degrees against area 2 at 0.595 Hz, zeta 0.201 on the PSSs, the DC voltages within 0.944 and 1.053 pu; at bus 8,
@@ -47,6 +56,12 @@ import static org.assertj.core.api.Assertions.within;
  * reversed (-0.51 to +0.54 of its rating), the DC voltages within 0.944 and 1.115 pu. IEEE 68, the fault at bus 1, at 50 us: New
  * England 2.60 degrees against New York, area 5 2.86 - several modes mixed, the extremes no decaying sine's -, every machine's
  * speed within 0.004 Hz peak to peak from 7 s (G67's; New England's within 0.0002), the DC voltages within 0.984 and 1.008 pu.
+ * IEEE 14, the fault at bus 4, run 8 s: the DC voltages within 0.986 and 1.011 pu, the machines within 0.0065 Hz peak to peak over
+ * the last second, the synchronous condensers G6 and G8 still 0.030 and 0.024 Hz, their 1.4 Hz mode a tenth of what it was 1 s
+ * after the fault. CIGRE B4, the fault at BAB1, run 8 s: the DC voltages within 0.914 and 1.071 pu. PROMOTioN, the fault at A1's
+ * grid and at B1's, run 5 s: the DC voltages within 0.966 and 1.087 pu, and 0.991 and 1.110; on cable D1-D2 at D1, its two
+ * breakers opened 3 ms on, run 5 s: within 0.866 and 1.099 pu, B1 on its droop at the DC voltage the cut grid settles to, 1.2e-3 pu
+ * under its own before. Every station of every case on its law within 1e-4 of its rating.
  * Every channel is written, a sample a millisecond, to {@code target/fault-swing/<case>.csv}. About 3 minutes a case;
  * {@code -Dpscad.faults=ieee68-dc-fault-b1,...} runs only those.
  *
@@ -58,23 +73,28 @@ import static org.assertj.core.api.Assertions.within;
 class PscadProFaultSwingTest {
 
     private static final double FREQUENCY = 50.0;
-    private static final double FAULT = 2.5;
-    private static final double CLEARING = 2.6;
+    /** A fault's duration, s: every case's is cleared 100 ms on. */
+    private static final double FAULT_DURATION = 0.1;
     /** Every channel, one sample a millisecond, to {@code target/fault-swing/<case>.csv}. */
     private static final double CSV_STEP = 1.0e-3;
     /** Two extremes of the swing closer than this are one: a few ripples on a crest. */
     private static final double HALF_PERIOD_MIN = 0.3;
-    /** From when the machines' speeds are held settled, s. */
-    private static final double SETTLED = 7.0;
+    /** For how long, at the end of the run, the machines' speeds are held settled, s. */
+    private static final double SETTLED = 1.0;
 
     /** One swing, {@code area1}'s centre of inertia against {@code area2}'s, its largest angle in degrees within {@code [min, max]};
      * its frequency and damping ratio, {@code NaN} for a swing too small to read them off. */
     record Swing(String label, List<String> area1, List<String> area2, double min, double max, double frequency, double damping) {
     }
 
-    /** A fault's case, its swings, its DC voltages' bounds from the fault on, and the largest peak-to-peak speed any machine is
-     * left with from {@link #SETTLED} on, every machine of the network's, Hz - {@code NaN} not to hold it. */
-    record Expected(String name, List<Swing> swings, double vdcMin, double vdcMax, double settledHz) {
+    /**
+     * A fault's case: when its fault starts, s; how long it runs, s, {@code NaN} for the case's own; its swings, none in a network
+     * without machines; its DC voltages' bounds from the fault on; the largest peak-to-peak speed any machine of the network's is
+     * left with over the run's last {@link #SETTLED}, Hz, {@code NaN} not to hold it; and how close every station is back, at the
+     * end, to its power before the fault, of its rating, and to its DC voltage, pu.
+     */
+    record Expected(String name, double fault, double runEnd, List<Swing> swings, double vdcMin, double vdcMax, double settledHz,
+                    double recovery) {
 
         @Override
         public String toString() {
@@ -89,17 +109,24 @@ class PscadProFaultSwingTest {
         List<String> newEngland68 = List.of("G53", "G54", "G55", "G56", "G57", "G58", "G59", "G60", "G61");
         List<String> newYork = List.of("G62", "G63", "G64", "G65");
         return Stream.of(
-                new Expected("kundur-dc-fault-b7", List.of(new Swing("area 1 against area 2", kundur1, kundur2, 18.0, 23.0, 0.595, 0.20)), 0.93, 1.07,
-                        Double.NaN),
-                new Expected("kundur-dc-fault-b8", List.of(new Swing("area 1 against area 2", kundur1, kundur2, 0.0, 1.5, Double.NaN, Double.NaN)),
-                        0.97, 1.05, Double.NaN),
-                new Expected("ieee39-dc-fault-b16", List.of(new Swing("New England against G39",
+                new Expected("kundur-dc-fault-b7", 2.5, Double.NaN, List.of(new Swing("area 1 against area 2", kundur1, kundur2, 18.0, 23.0, 0.595,
+                        0.20)), 0.93, 1.07, Double.NaN, 1.0e-3),
+                new Expected("kundur-dc-fault-b8", 2.5, Double.NaN, List.of(new Swing("area 1 against area 2", kundur1, kundur2, 0.0, 1.5, Double.NaN,
+                        Double.NaN)), 0.97, 1.05, Double.NaN, 1.0e-3),
+                new Expected("ieee39-dc-fault-b16", 2.5, Double.NaN, List.of(new Swing("New England against G39",
                         List.of("G30", "G31", "G32", "G33", "G34", "G35", "G36", "G37", "G38"), List.of("G39"), 18.5, 23.5, 0.60, 0.165)), 0.93, 1.13,
-                        Double.NaN),
+                        Double.NaN, 1.0e-3),
                 // Its swings mix several modes, their extremes not a decaying sine's: their damping held through every machine's speed.
-                new Expected("ieee68-dc-fault-b1", List.of(
+                new Expected("ieee68-dc-fault-b1", 2.5, Double.NaN, List.of(
                         new Swing("New England against New York", newEngland68, newYork, 2.0, 3.3, Double.NaN, Double.NaN),
-                        new Swing("area 5 against New York", List.of("G68"), newYork, 2.2, 3.6, Double.NaN, Double.NaN)), 0.98, 1.012, 0.006)
+                        new Swing("area 5 against New York", List.of("G68"), newYork, 2.2, 3.6, Double.NaN, Double.NaN)), 0.98, 1.012, 0.006, 1.0e-3),
+                // Run 8 s and 5 s, not the converters' scenarios' 3, for their machines and stations to settle; IEEE 14's synchronous
+                // condensers G6 and G8 swing at 1.4 Hz, slower to die out.
+                new Expected("ieee14-dc-fault-b4", 2.5, 8.0, List.of(), 0.975, 1.025, 0.04, 1.0e-3),
+                new Expected("cigre-b4-fault-b1", 2.5, 8.0, List.of(), 0.90, 1.085, Double.NaN, 1.0e-3),
+                new Expected("promotion-dc-ac-fault-a1", 2.3, 5.0, List.of(), 0.95, 1.10, Double.NaN, 1.0e-3),
+                new Expected("promotion-dc-ac-fault-b1", 2.3, 5.0, List.of(), 0.975, 1.125, Double.NaN, 1.0e-3),
+                new Expected("promotion-dc-fault-cd1d2", 2.3, 5.0, List.of(), 0.85, 1.115, Double.NaN, 1.0e-3)
         ).filter(PscadProFaultSwingTest::selected).map(Arguments::of);
     }
 
@@ -116,7 +143,13 @@ class PscadProFaultSwingTest {
         Network network = ExampleNetworks.withLoadFlow(fault.network().get());
         Path workDir = Files.createDirectories(Path.of("target", "fault-swing", expected.name()));
 
-        PscadProSimulation.PscadProRun run = PscadProSimulation.run(network, workDir, fault.settings(), fault.events(), PscadProSettings.defaults());
+        PscadSimulationSettings settings = fault.settings();
+        if (!Double.isNaN(expected.runEnd())) {
+            settings = new PscadSimulationSettings(settings.timeStepSeconds(), expected.runEnd(), settings.nominalFrequencyHz(), settings.edition(),
+                    settings.switching());
+        }
+
+        PscadProSimulation.PscadProRun run = PscadProSimulation.run(network, workDir, settings, fault.events(), PscadProSettings.defaults());
 
         PscadOutput output = run.output();
         Map<String, DoubleTimeSeries> curves = output.curves();
@@ -124,11 +157,11 @@ class PscadProFaultSwingTest {
         double[] time = times(curves);
         SoftAssertions softly = new SoftAssertions();
         for (Swing expectedSwing : expected.swings()) {
-            double[] swing = swing(network, curves, time, expectedSwing.area1(), expectedSwing.area2());
-            List<double[]> extremes = extremes(time, swing);
+            double[] swing = swing(network, curves, time, expectedSwing.area1(), expectedSwing.area2(), expected.fault());
+            List<double[]> extremes = extremes(time, swing, expected.fault() + FAULT_DURATION);
             double largest = 0.0;
             for (int i = 0; i < time.length; i++) {
-                largest = time[i] >= FAULT ? Math.max(largest, Math.abs(swing[i])) : largest;
+                largest = time[i] >= expected.fault() ? Math.max(largest, Math.abs(swing[i])) : largest;
             }
             String label = expectedSwing.label();
             System.out.printf(Locale.ROOT, "%s, %s: swing %.2f degrees, extremes %s%n", expected.name(), label, largest,
@@ -142,6 +175,7 @@ class PscadProFaultSwingTest {
                 softly.assertThat(damping).as("%s, damping ratio", label).isCloseTo(expectedSwing.damping(), within(0.03));
             }
         }
+        double runEnd = time[time.length - 1];
         if (!Double.isNaN(expected.settledHz())) {
             for (String machine : network.getGeneratorStream().filter(g -> g.getExtension(GeneratorModel.class) instanceof SubtransientMachineModel)
                     .map(Generator::getId).toList()) {
@@ -149,49 +183,66 @@ class PscadProFaultSwingTest {
                 double low = Double.MAX_VALUE;
                 double high = -Double.MAX_VALUE;
                 for (int i = 0; i < time.length; i++) {
-                    if (time[i] >= SETTLED) {
+                    if (time[i] >= runEnd - SETTLED) {
                         low = Math.min(low, w[i]);
                         high = Math.max(high, w[i]);
                     }
                 }
                 double peakToPeak = (high - low) * FREQUENCY;
-                System.out.printf(Locale.ROOT, "%s %s: speed %.4f Hz peak to peak from %.0f s%n", expected.name(), machine, peakToPeak, SETTLED);
-                softly.assertThat(peakToPeak).as("%s's speed peak to peak from %.0f s, Hz", machine, SETTLED).isLessThan(expected.settledHz());
+                System.out.printf(Locale.ROOT, "%s %s: speed %.4f Hz peak to peak over the last %.0f s%n", expected.name(), machine, peakToPeak,
+                        SETTLED);
+                softly.assertThat(peakToPeak).as("%s's speed peak to peak over the last %.0f s, Hz", machine, SETTLED).isLessThan(expected.settledHz());
             }
         }
-        for (String station : network.getVoltageSourceConverterStream().map(c -> c.getId()).toList()) {
+        for (VoltageSourceConverter converter : network.getVoltageSourceConverters()) {
+            String station = converter.getId();
             double vdcLow = Double.MAX_VALUE;
             double vdcHigh = -Double.MAX_VALUE;
             double[] vdc = curves.get(station + "_VDC").toArray();
             for (int i = 0; i < time.length; i++) {
-                if (time[i] >= FAULT) {
+                if (time[i] >= expected.fault()) {
                     vdcLow = Math.min(vdcLow, vdc[i]);
                     vdcHigh = Math.max(vdcHigh, vdc[i]);
                 }
             }
-            double runEnd = time[time.length - 1];
-            double pBefore = output.mean(station + "_P", FAULT - 0.1, FAULT);
+            double pBefore = output.mean(station + "_P", expected.fault() - 0.1, expected.fault());
             double pEnd = output.mean(station + "_P", runEnd - 0.04, runEnd);
-            double vdcBefore = output.mean(station + "_VDC", FAULT - 0.1, FAULT);
+            double vdcBefore = output.mean(station + "_VDC", expected.fault() - 0.1, expected.fault());
             double vdcEnd = output.mean(station + "_VDC", runEnd - 0.04, runEnd);
             System.out.printf(Locale.ROOT, "%s %s: V_DC %.4f to %.4f pu, %.5f before, %.5f at the end; P %.4f before, %.4f at the end%n",
                     expected.name(), station, vdcLow, vdcHigh, vdcBefore, vdcEnd, pBefore, pEnd);
             softly.assertThat(vdcLow).as("%s's lowest DC voltage, pu", station).isGreaterThan(expected.vdcMin());
             softly.assertThat(vdcHigh).as("%s's highest DC voltage, pu", station).isLessThan(expected.vdcMax());
-            softly.assertThat(pEnd).as("%s's power at the end against before the fault, of its rating", station).isCloseTo(pBefore, within(1.0e-3));
-            softly.assertThat(vdcEnd).as("%s's DC voltage at the end against before the fault, pu", station).isCloseTo(vdcBefore, within(1.0e-3));
+            // Each station back on its own law, from the load flow - a run from rest not always settled yet when the fault comes: the DC
+            // voltage's on its voltage, the others on their power, along their droop, if any, from where the DC voltage settles, which a
+            // grid cut short of a cable settles elsewhere.
+            AveragedConverterModel model = (AveragedConverterModel) converter.getExtension(VoltageSourceConverterModel.class);
+            AveragedVscInitialState initial = AveragedVscInitialState.of(converter, model);
+            double rating = model.getRatedApparentPower();
+            if (converter.getControlMode() == AcDcConverter.ControlMode.V_DC) {
+                double lfVdc = initial.dcVoltage() / initial.dcNominalVoltage();
+                softly.assertThat(vdcEnd).as("%s's DC voltage at the end against the load flow's, pu", station).isCloseTo(lfVdc,
+                        within(expected.recovery()));
+            } else {
+                double pExpected = (converter.getTerminal1().getP() - DcVoltageDroopLaw.of(converter, initial)
+                        .map(law -> law.powerReduction(vdcEnd) * initial.baseApparentPower()).orElse(0.0)) / rating;
+                System.out.printf(Locale.ROOT, "%s %s: P %.4f expected at the end%n", expected.name(), station, pExpected);
+                softly.assertThat(pEnd).as("%s's power at the end against the load flow's along its droop, of its rating", station)
+                        .isCloseTo(pExpected, within(expected.recovery()));
+            }
         }
         softly.assertAll();
     }
 
     /** The angle of {@code area1}'s centre of inertia against {@code area2}'s, degrees, from the fault on. */
-    private static double[] swing(Network network, Map<String, DoubleTimeSeries> curves, double[] time, List<String> area1, List<String> area2) {
+    private static double[] swing(Network network, Map<String, DoubleTimeSeries> curves, double[] time, List<String> area1, List<String> area2,
+                                  double fault) {
         double[] speed1 = centreOfInertia(network, curves, area1);
         double[] speed2 = centreOfInertia(network, curves, area2);
         double[] angle = new double[time.length];
         for (int i = 1; i < time.length; i++) {
             double slip = 0.5 * (speed1[i] - speed2[i] + speed1[i - 1] - speed2[i - 1]);
-            angle[i] = time[i] <= FAULT ? 0.0 : angle[i - 1] + slip * 360.0 * FREQUENCY * (time[i] - time[i - 1]);
+            angle[i] = time[i] <= fault ? 0.0 : angle[i - 1] + slip * 360.0 * FREQUENCY * (time[i] - time[i - 1]);
         }
         return angle;
     }
@@ -218,7 +269,7 @@ class PscadProFaultSwingTest {
 
     /** The swing's extremes after the clearing, {time, angle}: the samples, a millisecond apart, highest or lowest within half
      * {@link #HALF_PERIOD_MIN} on either side, each at least {@link #HALF_PERIOD_MIN} after the one before. */
-    private static List<double[]> extremes(double[] time, double[] swing) {
+    private static List<double[]> extremes(double[] time, double[] swing, double clearing) {
         List<Integer> kept = new ArrayList<>();
         double next = 0.0;
         for (int i = 0; i < time.length; i++) {
@@ -238,7 +289,7 @@ class PscadProFaultSwingTest {
                 highest &= swing[kept.get(j)] <= value;
                 lowest &= swing[kept.get(j)] >= value;
             }
-            if (t > CLEARING + 0.05 && (highest || lowest) && (extremes.isEmpty() || t - extremes.get(extremes.size() - 1)[0] > HALF_PERIOD_MIN)) {
+            if (t > clearing + 0.05 && (highest || lowest) && (extremes.isEmpty() || t - extremes.get(extremes.size() - 1)[0] > HALF_PERIOD_MIN)) {
                 extremes.add(new double[] {t, value});
             }
         }
