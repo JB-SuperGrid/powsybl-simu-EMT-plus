@@ -44,8 +44,11 @@ import static org.assertj.core.api.Assertions.within;
  * swinging 20.4 degrees against area 2 at 0.595 Hz, zeta 0.201 on the PSSs, the DC voltages within 0.944 and 1.053 pu; at bus 8,
  * the tie's middle, under 1 degree, the DC voltages within 0.980 and 1.040 pu. IEEE 39, the fault at bus 16: New England's nine
  * machines 20.6 degrees against G39 at 0.601 Hz, zeta 0.165 (G34 alone 33.4 degrees), CS16's AC bus down to 0.14 pu, its power
- * reversed (-0.51 to +0.54 of its rating), the DC voltages within 0.944 and 1.115 pu. Every channel is written, a sample a
- * millisecond, to {@code target/fault-swing/<case>.csv}. About 3 minutes a case.
+ * reversed (-0.51 to +0.54 of its rating), the DC voltages within 0.944 and 1.115 pu. IEEE 68, the fault at bus 1, at 50 us: New
+ * England 2.60 degrees against New York, area 5 2.86 - several modes mixed, the extremes no decaying sine's -, every machine's
+ * speed within 0.004 Hz peak to peak from 7 s (G67's; New England's within 0.0002), the DC voltages within 0.984 and 1.008 pu.
+ * Every channel is written, a sample a millisecond, to {@code target/fault-swing/<case>.csv}. About 3 minutes a case;
+ * {@code -Dpscad.faults=ieee68-dc-fault-b1,...} runs only those.
  *
  * <p>Tagged {@code pscad}: run with {@code mvn test -Ppscad}.
  *
@@ -61,10 +64,17 @@ class PscadProFaultSwingTest {
     private static final double CSV_STEP = 1.0e-3;
     /** Two extremes of the swing closer than this are one: a few ripples on a crest. */
     private static final double HALF_PERIOD_MIN = 0.3;
+    /** From when the machines' speeds are held settled, s. */
+    private static final double SETTLED = 7.0;
 
-    /** A fault's case, its two areas, and what its swing and its DC grid are held to; a {@code NaN} frequency for a swing too small to read. */
-    record Expected(String name, List<String> area1, List<String> area2, double swingMin, double swingMax, double frequency, double damping,
-                    double vdcMin, double vdcMax) {
+    /** One swing, {@code area1}'s centre of inertia against {@code area2}'s, its largest angle in degrees within {@code [min, max]};
+     * its frequency and damping ratio, {@code NaN} for a swing too small to read them off. */
+    record Swing(String label, List<String> area1, List<String> area2, double min, double max, double frequency, double damping) {
+    }
+
+    /** A fault's case, its swings, its DC voltages' bounds from the fault on, and the largest peak-to-peak speed any machine is
+     * left with from {@link #SETTLED} on, every machine of the network's, Hz - {@code NaN} not to hold it. */
+    record Expected(String name, List<Swing> swings, double vdcMin, double vdcMax, double settledHz) {
 
         @Override
         public String toString() {
@@ -73,12 +83,30 @@ class PscadProFaultSwingTest {
     }
 
     static Stream<Arguments> faults() {
-        List<String> newEngland = List.of("G30", "G31", "G32", "G33", "G34", "G35", "G36", "G37", "G38");
+        List<String> kundur1 = List.of("G1", "G2");
+        List<String> kundur2 = List.of("G3", "G4");
+        // IEEE 68's areas: New England's nine machines, New York's four, and areas 3, 4 and 5, one equivalent machine each.
+        List<String> newEngland68 = List.of("G53", "G54", "G55", "G56", "G57", "G58", "G59", "G60", "G61");
+        List<String> newYork = List.of("G62", "G63", "G64", "G65");
         return Stream.of(
-                new Expected("kundur-dc-fault-b7", List.of("G1", "G2"), List.of("G3", "G4"), 18.0, 23.0, 0.595, 0.20, 0.93, 1.07),
-                new Expected("kundur-dc-fault-b8", List.of("G1", "G2"), List.of("G3", "G4"), 0.0, 1.5, Double.NaN, Double.NaN, 0.97, 1.05),
-                new Expected("ieee39-dc-fault-b16", newEngland, List.of("G39"), 18.5, 23.5, 0.60, 0.165, 0.93, 1.13)
-        ).map(Arguments::of);
+                new Expected("kundur-dc-fault-b7", List.of(new Swing("area 1 against area 2", kundur1, kundur2, 18.0, 23.0, 0.595, 0.20)), 0.93, 1.07,
+                        Double.NaN),
+                new Expected("kundur-dc-fault-b8", List.of(new Swing("area 1 against area 2", kundur1, kundur2, 0.0, 1.5, Double.NaN, Double.NaN)),
+                        0.97, 1.05, Double.NaN),
+                new Expected("ieee39-dc-fault-b16", List.of(new Swing("New England against G39",
+                        List.of("G30", "G31", "G32", "G33", "G34", "G35", "G36", "G37", "G38"), List.of("G39"), 18.5, 23.5, 0.60, 0.165)), 0.93, 1.13,
+                        Double.NaN),
+                // Its swings mix several modes, their extremes not a decaying sine's: their damping held through every machine's speed.
+                new Expected("ieee68-dc-fault-b1", List.of(
+                        new Swing("New England against New York", newEngland68, newYork, 2.0, 3.3, Double.NaN, Double.NaN),
+                        new Swing("area 5 against New York", List.of("G68"), newYork, 2.2, 3.6, Double.NaN, Double.NaN)), 0.98, 1.012, 0.006)
+        ).filter(PscadProFaultSwingTest::selected).map(Arguments::of);
+    }
+
+    /** All the faults, or those {@code -Dpscad.faults=kundur-dc-fault-b7,...} names. */
+    private static boolean selected(Expected expected) {
+        String names = System.getProperty("pscad.faults", "");
+        return names.isBlank() || List.of(names.split(",")).contains(expected.name());
     }
 
     @ParameterizedTest(name = "{0}")
@@ -94,22 +122,42 @@ class PscadProFaultSwingTest {
         Map<String, DoubleTimeSeries> curves = output.curves();
         writeCsv(curves, workDir.resolveSibling(expected.name() + ".csv"));
         double[] time = times(curves);
-        double[] swing = swing(network, curves, time, expected.area1(), expected.area2());
-        List<double[]> extremes = extremes(time, swing);
-        double largest = 0.0;
-        for (int i = 0; i < time.length; i++) {
-            largest = time[i] >= FAULT ? Math.max(largest, Math.abs(swing[i])) : largest;
-        }
         SoftAssertions softly = new SoftAssertions();
-        System.out.printf(Locale.ROOT, "%s: swing %.2f degrees, extremes %s%n", expected.name(), largest,
-                extremes.stream().map(e -> String.format(Locale.ROOT, "%.3f s %+.2f", e[0], e[1])).toList());
-        softly.assertThat(largest).as("the areas' swing, degrees").isBetween(expected.swingMin(), expected.swingMax());
-        if (!Double.isNaN(expected.frequency())) {
-            double frequency = (extremes.size() - 1) / (2.0 * (extremes.get(extremes.size() - 1)[0] - extremes.get(0)[0]));
-            double damping = damping(extremes);
-            System.out.printf(Locale.ROOT, "%s: %.3f Hz, zeta %.3f%n", expected.name(), frequency, damping);
-            softly.assertThat(frequency).as("the swing's frequency, Hz").isCloseTo(expected.frequency(), within(0.03));
-            softly.assertThat(damping).as("the swing's damping ratio").isCloseTo(expected.damping(), within(0.03));
+        for (Swing expectedSwing : expected.swings()) {
+            double[] swing = swing(network, curves, time, expectedSwing.area1(), expectedSwing.area2());
+            List<double[]> extremes = extremes(time, swing);
+            double largest = 0.0;
+            for (int i = 0; i < time.length; i++) {
+                largest = time[i] >= FAULT ? Math.max(largest, Math.abs(swing[i])) : largest;
+            }
+            String label = expectedSwing.label();
+            System.out.printf(Locale.ROOT, "%s, %s: swing %.2f degrees, extremes %s%n", expected.name(), label, largest,
+                    extremes.stream().map(e -> String.format(Locale.ROOT, "%.3f s %+.2f", e[0], e[1])).toList());
+            softly.assertThat(largest).as("%s, degrees", label).isBetween(expectedSwing.min(), expectedSwing.max());
+            if (!Double.isNaN(expectedSwing.frequency())) {
+                double frequency = (extremes.size() - 1) / (2.0 * (extremes.get(extremes.size() - 1)[0] - extremes.get(0)[0]));
+                double damping = damping(extremes);
+                System.out.printf(Locale.ROOT, "%s, %s: %.3f Hz, zeta %.3f%n", expected.name(), label, frequency, damping);
+                softly.assertThat(frequency).as("%s, frequency, Hz", label).isCloseTo(expectedSwing.frequency(), within(0.03));
+                softly.assertThat(damping).as("%s, damping ratio", label).isCloseTo(expectedSwing.damping(), within(0.03));
+            }
+        }
+        if (!Double.isNaN(expected.settledHz())) {
+            for (String machine : network.getGeneratorStream().filter(g -> g.getExtension(GeneratorModel.class) instanceof SubtransientMachineModel)
+                    .map(Generator::getId).toList()) {
+                double[] w = curves.get(machine + "_W").toArray();
+                double low = Double.MAX_VALUE;
+                double high = -Double.MAX_VALUE;
+                for (int i = 0; i < time.length; i++) {
+                    if (time[i] >= SETTLED) {
+                        low = Math.min(low, w[i]);
+                        high = Math.max(high, w[i]);
+                    }
+                }
+                double peakToPeak = (high - low) * FREQUENCY;
+                System.out.printf(Locale.ROOT, "%s %s: speed %.4f Hz peak to peak from %.0f s%n", expected.name(), machine, peakToPeak, SETTLED);
+                softly.assertThat(peakToPeak).as("%s's speed peak to peak from %.0f s, Hz", machine, SETTLED).isLessThan(expected.settledHz());
+            }
         }
         for (String station : network.getVoltageSourceConverterStream().map(c -> c.getId()).toList()) {
             double vdcLow = Double.MAX_VALUE;
