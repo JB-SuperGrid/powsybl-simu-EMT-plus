@@ -65,8 +65,10 @@ Phasor b2 = run.output().fundamentalPhasor(run.project().circuit().voltageChanne
   - `PscadProFaultSwingTest` runs large networks' faults, past PSCAD Free, and holds them to their physics: Kundur's two
     areas with their DC grid, faulted at bus 7 and bus 8, IEEE 39, IEEE 68 and IEEE 14 with theirs, faulted at bus 16, 1 and 4,
     CIGRE B4 whole, faulted at BAB1, and PROMOTioN's benchmark through an AC fault at A1 and at B1 and a fault on cable D1-D2
-    its breakers cut off - the swing between their areas (its amplitude, frequency and damping, or the machines settled), the
-    DC voltages within their bounds, every station back on its law from the load flow. About 3 minutes a case;
+    its breakers cut off, and IEEE 39 with a high share of power electronics (its machines, four or six replaced by
+    grid-following, grid-forming or mixed converter sources) through a fault and a load step at bus 16 - the swing between their
+    areas (its amplitude, frequency and damping, or the machines settled), the centre of inertia's nadir and RoCoF after a load
+    step, the DC voltages within their bounds, every station back on its law from the load flow. About 3 minutes a case;
     `-Dpscad.faults=ieee68-dc-fault-b1,...` runs only those.
   - `PscadProAc6ALimiterTest` runs upstream's AC6A field current limiter bench, whose PSCAD gap upstream documents, at 20, 10
     and 5 us, and writes its channels around the fault to `target/ac6a-limiter/<step>us.csv`.
