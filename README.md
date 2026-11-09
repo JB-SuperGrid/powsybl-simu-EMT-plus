@@ -61,7 +61,8 @@ Phasor b2 = run.output().fundamentalPhasor(run.project().circuit().voltageChanne
     the multi-terminal DC grids to their load flow and droop curves.
   - `PscadProBeyondFreeTest` runs what upstream writes for the Professional edition only, past Free's 15 nodes, and holds it
     to what upstream holds ATP, Xyce and Kestrel to: the four phase-shifter benches on the load flow, a line put back into
-    service, a three-winding transformer's leg closed, an open-ended energization with and without its arrester.
+    service, a three-winding transformer's leg closed, and left open from rest, an open-ended energization with and without
+    its arrester, and a chain of twelve buses on the load flow.
   - `PscadProFaultSwingTest` runs large networks' faults, past PSCAD Free, and holds them to their physics: Kundur's two
     areas with their DC grid, faulted at bus 7 and bus 8, IEEE 39, IEEE 68 and IEEE 14 with theirs, faulted at bus 16, 1 and 4,
     CIGRE B4 whole, faulted at BAB1, and PROMOTioN's benchmark through an AC fault at A1 and at B1 and a fault on cable D1-D2
