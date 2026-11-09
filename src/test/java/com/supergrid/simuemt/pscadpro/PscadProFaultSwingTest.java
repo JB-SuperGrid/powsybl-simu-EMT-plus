@@ -81,6 +81,16 @@ import static org.assertj.core.api.Assertions.within;
  * machine's speed within 0.004 Hz peak to peak over the last second. A station on its current limit is held to it instead of its
  * law; the station lost to none of its power from 0.2 s on.
  *
+ * <p>The same, the V_DC station lost - nothing holding the DC voltage any more, the droops left to settle it where they balance the
+ * power, as their laws have it. Kundur's CS9, area 2's 400 MW: CS7, its only droop, reversed from taking 0.613 of its rating to
+ * delivering 0.644, the wind's 200 MW, the DC voltage up to 1.131 pu, 1.175 at most; area 1 swinging 42.2 degrees against area 2 at
+ * 0.527 Hz, zeta 0.21. IEEE 39's CS16: CS4 up from 0.654 to 0.962 of its rating, CS26 down from 0.633 to 0.311, the DC voltage up to
+ * 1.026 to 1.038 pu; New England 1.3 degrees against G39 at 0.609 Hz, zeta 0.175. IEEE 68's CS16, at 50 us: the DC voltage down to
+ * 0.977 pu, CS41 exporting more, CS33 and CS52 importing less; New England 5.9 degrees against New York, area 5 5.1, drifting to
+ * their new angles. The nadir 9.2, 2.2 and 10.2 mHz. CSW, grid-forming, answers the DC overvoltage on its own DC voltage droop, its
+ * island speeding up - to 1.026 pu by 8 s on Kundur -, the wind park deaf to it: CSW left 0.017 of its rating under the wind's power
+ * there, the island's losses at that frequency.
+ *
  * <p>IEEE 39 with a high share of power electronics, run 8 s at 50 us, the fault or bus 16's load up 494 MW at 2.5 s - the runs of
  * 2026-11-08 again. The fault: New England against G39 21.4 degrees at 0.594 Hz, zeta 0.173, with its machines; 33.2 degrees at
  * 0.680 Hz, zeta 0.160, four of them grid-following, no inertia of the converters'; 20.3 degrees at 0.464 Hz, zeta 0.296,
@@ -188,7 +198,21 @@ class PscadProFaultSwingTest {
                 new Expected("ieee68-dc-loss-cs33", 2.5, Double.NaN, List.of(
                         new Swing("New England against New York", newEngland68, newYork, 4.3, 5.9, Double.NaN, Double.NaN),
                         new Swing("area 5 against New York", List.of("G68"), newYork, 2.9, 4.1, Double.NaN, Double.NaN)), 0.98, 1.045, 0.003, 1.0e-3,
-                        1.0e-3, unmoved));
+                        1.0e-3, unmoved),
+                // Their V_DC stations lost: the DC voltage left to the droops. CSW, grid-forming, answers the DC overvoltage along its own
+                // DC voltage droop by lowering its power reference: its island, the wind park deaf to frequency, speeding up instead - 1.026
+                // pu by the end on Kundur, still rising -, CSW left on the wind's power less the island's losses at that frequency.
+                new Expected("kundur-dc-loss-cs9", 2.5, Double.NaN, List.of(new Swing("area 1 against area 2", List.of("G1", "G2"), List.of("G3", "G4"),
+                        37.0, 47.0, 0.527, 0.21)), 0.99, 1.19, 0.012, 1.0e-3, 0.025, new Frequency(-14.0, 0.0, -0.05, 0.13)),
+                new Expected("ieee39-dc-loss-cs16", 2.5, Double.NaN, List.of(new Swing("New England against G39",
+                        List.of("G30", "G31", "G32", "G33", "G34", "G35", "G36", "G37", "G38"), List.of("G39"), 1.0, 1.6, 0.609, 0.175)), 0.98, 1.07,
+                        0.003, 1.0e-3, 6.0e-3, unmoved),
+                // New York's import lost with it: New England and area 5 drifting slowly to their new angles against it, too few extremes
+                // in 8 s to read a frequency off.
+                new Expected("ieee68-dc-loss-cs16", 2.5, Double.NaN, List.of(
+                        new Swing("New England against New York", newEngland68, newYork, 5.0, 6.9, Double.NaN, Double.NaN),
+                        new Swing("area 5 against New York", List.of("G68"), newYork, 4.3, 5.9, Double.NaN, Double.NaN)), 0.94, 1.01, 0.003, 1.0e-3,
+                        1.0e-3, new Frequency(-15.0, 0.0, -0.05, 0.05)));
     }
 
     /**
