@@ -271,6 +271,12 @@ final class PscadProCases {
                 stationLoss("kundur-dc-loss-cs7", "kundur-dc", "7", 20.0e-6),
                 stationLoss("ieee39-dc-loss-cs4", "ieee39-dc", "4", 20.0e-6),
                 stationLoss("ieee68-dc-loss-cs33", "ieee68-dc", "33", 50.0e-6),
+                // ... and each its V_DC station: nothing holding the DC voltage any more, the droops left to settle it where they
+                // balance the power. Kundur's CS9, area 2's 400 MW: CS7, its only droop, reversed to deliver the wind's 200 MW to area
+                // 1 instead, some 53 kV up; IEEE 39's CS16 and IEEE 68's, their transit shared by the others along their droops
+                stationLoss("kundur-dc-loss-cs9", "kundur-dc", "9", 20.0e-6),
+                stationLoss("ieee39-dc-loss-cs16", "ieee39-dc", "16", 20.0e-6),
+                stationLoss("ieee68-dc-loss-cs16", "ieee68-dc", "16", 50.0e-6),
                 // PROMOTioN's five terminals, each cable between two hybrid DC breakers and their 200 mH reactors: a solid pole-to-pole
                 // fault at D1, the most meshed node, its stations protected against their arms' overcurrent - run 2026-11-08: every
                 // station blocked, nearest first, D1 0.4 ms on, C2 13, D2 13, B1 36, A1 94, their DC currents up to 4.8 to 5.4 pu;
