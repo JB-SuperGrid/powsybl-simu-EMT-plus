@@ -230,6 +230,70 @@ class PscadProBeyondFreeTest {
         softly.assertAll();
     }
 
+    /**
+     * A chain of twelve buses, ten 400 kV lines on from B2 of the two-bus network fed by its infinite bus, each open at its far end,
+     * from its steady state: in the first period and in the last 60 ms of 0.2 s, every bus at the load flow's voltage within 1e-4 pu
+     * and at its angle from B1 within 0.01 degree, as the phase shifters'.
+     *
+     * <p>Run 2026-11-09: every bus 8.1e-6 to 8.2e-6 pu under the load flow and 2.8e-4 to 3.1e-4 degree off, in the first period as at
+     * the end.
+     */
+    @Test
+    void aChainOfTwelveBusesSitsOnTheLoadFlow(@TempDir Path tempDir) {
+        Network network = ExampleNetworks.withLoadFlow(PscadProCases.all().filter(c -> "twelve-bus-chain".equals(c.name())).findFirst().orElseThrow()
+                .network().get());
+        double runEnd = 0.2;
+
+        PscadProSimulation.PscadProRun run = PscadProSimulation.runFromSteadyState(network, tempDir, settings(runEnd), List.of(), PRO);
+
+        Bus b1 = network.getBusBreakerView().getBus("B1");
+        SoftAssertions softly = new SoftAssertions();
+        for (double[] window : new double[][] {{TIME_STEP, TIME_STEP + 1.0 / FREQUENCY}, {runEnd - 0.06, runEnd}}) {
+            for (Bus bus : network.getBusBreakerView().getBuses()) {
+                if (bus == b1) {
+                    continue;
+                }
+                double nominal = bus.getVoltageLevel().getNominalV();
+                double puError = magnitude(run, bus.getId(), 'A', window) / (nominal * 1.0e3 * SQRT_TWO_THIRDS) - bus.getV() / nominal;
+                double angleError = Math.IEEEremainder(angleFrom(run, "B1", bus.getId(), window) - (bus.getAngle() - b1.getAngle()), 360.0);
+                System.out.printf("twelve-bus chain %s from %.5f s: %.3e pu, %.3e degree%n", bus.getId(), window[0], puError, angleError);
+                softly.assertThat(puError).as("|V(%s)| against the load flow's, pu, from %.5f s", bus.getId(), window[0]).isCloseTo(0.0, within(1.0e-4));
+                softly.assertThat(angleError).as("V(%s)'s angle from V(B1) against the load flow's, degrees, from %.5f s", bus.getId(), window[0])
+                        .isCloseTo(0.0, within(0.01));
+            }
+        }
+        softly.assertAll();
+    }
+
+    /**
+     * {@link #aThreeWindingTransformerLegIsClosed}'s transformer, its leg left open, run from rest rather than from its steady state:
+     * in the last 60 ms of 0.4 s, B4 dead, the leg's end at the star point's voltage on its ratio within 1e-3 - the state its closing
+     * starts from, settled to from rest.
+     *
+     * <p>Run 2026-11-09: B4 at 0 V, the leg's end within 1e-7 of the star point's voltage, as from the steady state.
+     */
+    @Test
+    void aThreeWindingTransformerLegLeftOpenSettlesFromRest(@TempDir Path tempDir) {
+        Network network = ExampleNetworks.withLoadFlow(ExampleNetworks.createThreeBusNetworkWithThreeWindingsTransformerOpenAtLegThree());
+        double runEnd = 0.4;
+        ThreeWindingsTransformer transformer = network.getThreeWindingsTransformer("T2_3_4");
+        double star = Double.parseDouble(transformer.getProperty("v")) * 1.0e3 * transformer.getLeg3().getRatedU() / transformer.getRatedU0()
+                * SQRT_TWO_THIRDS;
+
+        PscadProSimulation.PscadProRun run = PscadProSimulation.run(network, tempDir, settings(runEnd), List.of(), PRO);
+
+        double[] last = {runEnd - 0.06, runEnd};
+        SoftAssertions softly = new SoftAssertions();
+        for (char phase : "ABC".toCharArray()) {
+            double b4Dead = magnitude(run, "B4", phase, last);
+            double legEnd = relative(magnitude(run, "BL_T2_3_4_3", phase, last), star);
+            System.out.printf("leg left open from rest, phase %s: B4 dead %.2e V, leg end %.1e%n", phase, b4Dead, legEnd);
+            softly.assertThat(b4Dead).as("B4%s, V", phase).isLessThan(DEAD_VOLTS);
+            softly.assertThat(legEnd).as("the leg's end against the star point's voltage on its ratio, phase %s", phase).isLessThan(1.0e-3);
+        }
+        softly.assertAll();
+    }
+
     private static PscadSimulationSettings settings(double runEnd) {
         return new PscadSimulationSettings(TIME_STEP, runEnd, FREQUENCY, PscadEdition.PROFESSIONAL);
     }
