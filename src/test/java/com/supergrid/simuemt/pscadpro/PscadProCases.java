@@ -24,6 +24,7 @@ import com.powsybl.simuemt.extensions.event.EmtEvent;
 import com.powsybl.simuemt.extensions.event.FaultClearing;
 import com.powsybl.simuemt.extensions.event.LoadStep;
 import com.powsybl.simuemt.extensions.event.SwitchOperation;
+import com.powsybl.simuemt.extensions.excitation.ExcitationSystemModel;
 import com.powsybl.simuemt.extensions.hvdc.AveragedVscModel;
 import com.powsybl.simuemt.extensions.hvdc.OvercurrentProtection;
 import com.powsybl.simuemt.extensions.hvdc.VoltageSourceConverterModel;
@@ -321,7 +322,9 @@ final class PscadProCases {
                 // The template of a steady-state run: its snapshot, and its events after it
                 new Case("template-fault", ExampleNetworks::createTwoBusNetworkWithInfiniteBusGenerator,
                         List.of(new BusFault("FLTA", "B2", 'A', 0.1, 0.15, FaultClearing.AT_ORDER)), ON_TIME_STEP, Kind.TEMPLATE),
-                new Case("template-machine", ExampleNetworks::createTwoBusNetworkWithAc1A, List.of(), SETTINGS, Kind.TEMPLATE));
+                new Case("template-machine", ExampleNetworks::createTwoBusNetworkWithAc1A, List.of(), SETTINGS, Kind.TEMPLATE),
+                new Case("template-machine-ac6a-limiter", PscadProCases::ac6aLimiterSwingBench, events("fault-b2-a-1.5-1.6"),
+                        new PscadSimulationSettings(20.0e-6, 3.0, 50.0, PscadEdition.PROFESSIONAL, PscadSwitching.ON_TIME_STEP), Kind.TEMPLATE));
     }
 
     private static Case fromRest(String name, Supplier<Network> network) {
@@ -471,6 +474,25 @@ final class PscadProCases {
     }
 
     /** The two-bus bench carried on to B12 by a line a bus: a circuit whose layout needs a page larger than the smallest. */
+    /**
+     * Upstream's cross-backend swing bench under an AC6A whose field current limiter acts ({@link
+     * ExampleNetworks#ac6AModelWithFieldCurrentLimit}): the two-bus network, its line charged with 2.5e-4 S at each end and each end
+     * compensated by a bare reactor of the same susceptance - which only a run restarted from a patched snapshot takes a fault on.
+     */
+    private static Network ac6aLimiterSwingBench() {
+        Network network = EmtExtensionsXmlReader.readNetwork(ExampleNetworks.resource("/two-bus.xiidm"), ExampleNetworks.resource("/two-bus-extensions.xml"));
+        double charging = 2.5e-4;
+        network.getLine("L1_2").setB1(charging).setB2(charging);
+        for (String busId : List.of("B1", "B2")) {
+            network.getBusBreakerView().getBus(busId).getVoltageLevel().newShuntCompensator().setId("REACTOR_" + busId).setBus(busId)
+                    .setConnectableBus(busId).setSectionCount(1)
+                    .newLinearModel().setBPerSection(-charging).setGPerSection(0.0).setMaximumSectionCount(1).add()
+                    .add();
+        }
+        network.getGenerator("GEN").addExtension(ExcitationSystemModel.class, ExampleNetworks.ac6AModelWithFieldCurrentLimit());
+        return network;
+    }
+
     private static Network twelveBusChain() {
         Network network = ExampleNetworks.createTwoBusNetworkWithInfiniteBusGenerator();
         for (int i = 3; i <= 12; i++) {
