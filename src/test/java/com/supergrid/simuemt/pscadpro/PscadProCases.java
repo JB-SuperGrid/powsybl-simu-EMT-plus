@@ -211,6 +211,13 @@ final class PscadProCases {
                 new Case("ieee39-dc-fault-b16", () -> preprocessed("ieee39-dc", false, false), List.of(new BusFault("F", "B16", "ABC", true,
                         1.0, 2.5, 2.6, FaultClearing.AT_CURRENT_ZERO)), new PscadSimulationSettings(20.0e-6, 8.0, 50.0, PscadEdition.PROFESSIONAL),
                         Kind.FROM_REST),
+                // ... and its DC grid faulted: a solid pole-to-ground fault at BD16, its hub and CS16's DC node, CS16 with a DC reactor,
+                // its stations protected
+                // against their arms' overcurrent; no DC breaker, it is cleared the non-selective way PROMOTioN's D4.2 has it: every
+                // station and the wind park blocked on the fault's detection, 2 ms on, then the stations' AC breakers opening, 40 ms
+                // on - the whole DC grid lost to New England, its wind park's 400 MW and its stations' transits; run 8 s
+                new Case("ieee39-dc-dc-fault-bd16-cleared", PscadProCases::ieee39DcFault, ieee39DcFaultCleared(),
+                        new PscadSimulationSettings(20.0e-6, 8.0, 50.0, PscadEdition.PROFESSIONAL), Kind.FROM_REST),
                 // IEEE 68-bus with its DC grid: a solid three-phase fault at bus 1, New England's end of its ties to New York, 100 ms -
                 // the benchmark's own, PST's; run 8 s at 50 us. Run 2026-11-08: on the data's PSSs, every machine's speed swinging
                 // within 0.004 Hz peak to peak by 7 s, the inter-area swings at 0.57 to 0.71 Hz damped at zeta 0.15 to 0.21 - New
@@ -373,6 +380,16 @@ final class PscadProCases {
                 model.getPhaseReactorReactance(), model.getDcCapacitorEnergyConstant(), 0.1, model.getBridgeInductance()));
     }
 
+    /** IEEE 39 with its DC grid, its stations protected, CS16 - the faulted node's - with a DC reactor, as CIGRE DCS2's DC fault has
+     * CMF1: without one its capacitor discharges into the solid fault at its terminals unbounded. */
+    private static Network ieee39DcFault() {
+        Network network = bench("ieee39-dc");
+        withDcReactor(network.getVoltageSourceConverter("CS16"));
+        network.getVoltageSourceConverters().forEach(converter -> converter.addExtension(VscProtectionModel.class, new OvercurrentProtection(2.0, 0.0)));
+        EmtNetworkPreprocessor.preprocess(network, LocalComputationManager.getDefault());
+        return network;
+    }
+
     /** CIGRE DCS2, its stations protected, CMF1 - the faulted node's - with a DC reactor, as upstream's DC fault at BMF1 has it. */
     private static Network dcs2DcFault() {
         Network network = bench("cigre-dcs2");
@@ -386,6 +403,17 @@ final class PscadProCases {
      * 2 ms on, then its AC breaker - its transformer's grid side - opening 40 ms on, D4.2's opening time, at its current's zero. Not
      * blocked first, A1, far from the fault, is still running when its breaker opens, 105 ms before its arms' overcurrent blocks it:
      * run so, its AC voltage rose to 2.7 pu and its DC voltage to -900 kV. */
+    /** IEEE 39's DC grid faulted at BD16 from 2.5 s, every station and the wind park blocked 2 ms on, the stations' AC breakers
+     * ordered open 40 ms on. */
+    private static List<EmtEvent> ieee39DcFaultCleared() {
+        List<EmtEvent> events = new ArrayList<>(List.of(new DcFault("FDC", "BD16", 0.0, 2.5, 12.0), new ConverterBlocking("WTW", 2.502)));
+        for (String station : List.of("4", "16", "26", "W")) {
+            events.add(new ConverterBlocking("CS" + station, 2.502));
+            events.add(new BranchOperation("TC" + station, TwoSides.ONE, 2.54, BreakerAction.OPEN, FaultClearing.AT_CURRENT_ZERO));
+        }
+        return events;
+    }
+
     private static EmtEvent[] promotionDcFaultCleared() {
         List<EmtEvent> events = new ArrayList<>(List.of(new DcFault("FDC", "BD1", 0.0, 2.3, 12.0)));
         for (String station : List.of("A1", "B1", "C2", "D1", "D2")) {
