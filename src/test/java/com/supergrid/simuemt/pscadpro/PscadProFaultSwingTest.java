@@ -475,6 +475,104 @@ class PscadProFaultSwingTest {
         softly.assertAll();
     }
 
+    /**
+     * IEEE 39 with its DC grid through a solid pole-to-ground fault at BD16, its hub, from 2.5 s - no DC breaker: every station and
+     * the wind park blocked 2 ms on, the stations' AC breakers opening 40 ms on, the whole DC grid lost to New England. The DC side:
+     * every station blocked within 5 ms of the fault and passing no power from 0.2 s on, its AC side dead once its breaker is open;
+     * the healthy stations' DC voltages gone; CS16's DC current through its reactor up to 12 to 20 pu, then freewheeling through its
+     * diodes into the fault, which nothing clears on the DC side, decaying. The AC side: New England short of the DC grid's 400 MW of
+     * wind and its stations' transits, its centre of inertia's frequency down to its nadir and settling lower on its governors'
+     * droops; New England swinging against G39 to its new angle; every machine settled by the end.
+     *
+     * <p>Run 2026-11-09: CS16 blocked by its own protection 1.94 ms on, the others on their order, 2.02 ms; CS16's DC current up to
+     * 15.9 pu, 9.7 at 2.7 s, 3.2 at the end; the healthy stations' DC voltages down to -0.31 pu, then gone; the centre of inertia's
+     * nadir 88 mHz at 4.2 s, its RoCoF over 500 ms -0.080 Hz/s, 68 mHz down at the end; New England swinging 8.0 degrees against G39, settling near -3;
+     * every machine within 0.0045 Hz peak to peak over the last second.
+     */
+    @Test
+    void ieee39LosesItsDcGridThroughADcFault() throws IOException {
+        String name = "ieee39-dc-dc-fault-bd16-cleared";
+        PscadProCases.Case fault = PscadProCases.all().filter(c -> c.name().equals(name)).findFirst().orElseThrow();
+        Network network = ExampleNetworks.withLoadFlow(fault.network().get());
+        Path workDir = Files.createDirectories(Path.of("target", "fault-swing", name));
+
+        PscadProSimulation.PscadProRun run = PscadProSimulation.run(network, workDir, fault.settings(), fault.events(), PscadProSettings.defaults());
+
+        PscadOutput output = run.output();
+        Map<String, DoubleTimeSeries> curves = output.curves();
+        writeCsv(curves, workDir.resolveSibling(name + ".csv"));
+        double[] time = times(curves);
+        double faultTime = 2.5;
+        double end = time[time.length - 1];
+        SoftAssertions softly = new SoftAssertions();
+        // The DC side.
+        for (String station : List.of("CS4", "CS16", "CS26", "CSW")) {
+            double blocked = (output.firstTimeBelow(station + "_RUN", 0.5, 2.4) - faultTime) * 1.0e3;
+            double power = output.peakAbsolute(station + "_P", faultTime + 0.2, end);
+            double vacEnd = output.mean(station + "_VAC", end - 0.02, end);
+            double vdcEnd = output.mean(station + "_VDC", end - 0.02, end);
+            System.out.printf(Locale.ROOT, "%s %s: blocked %.2f ms on, |P| up to %.2e pu from 0.2 s on, V_AC %.4f and V_DC %.5f pu at the end%n", name,
+                    station, blocked, power, vacEnd, vdcEnd);
+            softly.assertThat(blocked).as("%s blocked, ms after the fault", station).isBetween(0.0, 5.0);
+            softly.assertThat(power).as("%s's power from 0.2 s after the fault, pu", station).isLessThan(1.0e-4);
+            softly.assertThat(vacEnd).as("%s's AC side at the end, its breaker open, pu", station).isLessThan(0.01);
+            if (!"CS16".equals(station)) {
+                softly.assertThat(Math.abs(vdcEnd)).as("%s's DC voltage at the end, pu", station).isLessThan(0.01);
+            }
+        }
+        double cs16Peak = output.peakAbsolute("CS16_IDC", faultTime, end);
+        double cs16Early = output.mean("CS16_IDC", 2.69, 2.71);
+        double cs16End = output.mean("CS16_IDC", end - 0.02, end);
+        System.out.printf(Locale.ROOT, "%s CS16: I_DC up to %.2f pu, %.3f at 2.7 s, %.3f at the end%n", name, cs16Peak, cs16Early, cs16End);
+        softly.assertThat(cs16Peak).as("CS16's DC current's peak through its reactor, pu").isBetween(12.0, 20.0);
+        softly.assertThat(cs16End).as("CS16's DC current freewheeling into the fault at the end, pu").isBetween(1.0, 6.0).isLessThan(cs16Early);
+        // The AC side.
+        double[] centre = centreOfInertia(network, curves, machines(network));
+        double before = 0.0;
+        int count = 0;
+        for (int i = 0; i < time.length; i++) {
+            if (time[i] >= faultTime - 0.1 && time[i] < faultTime) {
+                before += centre[i];
+                count++;
+            }
+        }
+        before /= count;
+        double nadir = 0.0;
+        double atFault = Double.NaN;
+        double halfSecond = Double.NaN;
+        for (int i = 0; i < time.length; i++) {
+            double deviation = (centre[i] - before) * FREQUENCY * 1.0e3;
+            if (time[i] >= faultTime) {
+                nadir = Math.min(nadir, deviation);
+                atFault = Double.isNaN(atFault) ? deviation : atFault;
+            }
+            halfSecond = time[i] >= faultTime + 0.5 && Double.isNaN(halfSecond) ? deviation : halfSecond;
+        }
+        double rocof = (halfSecond - atFault) / 0.5 / 1.0e3;
+        double settled = (output.mean("G39_W", end - 0.5, end) - before) * FREQUENCY * 1.0e3;
+        double[] swing = swing(network, curves, time, machines(network).stream().filter(m -> !"G39".equals(m)).toList(), List.of("G39"), faultTime);
+        double largest = Arrays.stream(swing).map(Math::abs).max().orElseThrow();
+        System.out.printf(Locale.ROOT, "%s: nadir %.1f mHz, RoCoF %.4f Hz/s, %.1f mHz at the end; New England %.2f degrees against G39%n", name, nadir,
+                rocof, settled, largest);
+        softly.assertThat(nadir).as("the centre of inertia's nadir, mHz").isBetween(-96.0, -80.0);
+        softly.assertThat(rocof).as("the centre of inertia's RoCoF over 500 ms, Hz/s").isBetween(-0.088, -0.072);
+        softly.assertThat(settled).as("the frequency at the end, mHz from before").isBetween(-75.0, -61.0);
+        softly.assertThat(largest).as("New England against G39, degrees").isBetween(7.0, 9.0);
+        for (String machine : machines(network)) {
+            double[] w = curves.get(machine + "_W").toArray();
+            double low = Double.MAX_VALUE;
+            double high = -Double.MAX_VALUE;
+            for (int i = 0; i < time.length; i++) {
+                if (time[i] >= end - SETTLED) {
+                    low = Math.min(low, w[i]);
+                    high = Math.max(high, w[i]);
+                }
+            }
+            softly.assertThat((high - low) * FREQUENCY).as("%s's speed peak to peak over the last second, Hz", machine).isLessThan(0.007);
+        }
+        softly.assertAll();
+    }
+
     /** Every machine of {@code network}'s. */
     private static List<String> machines(Network network) {
         return network.getGeneratorStream().filter(g -> g.getExtension(GeneratorModel.class) instanceof SubtransientMachineModel)

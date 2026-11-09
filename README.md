@@ -45,7 +45,7 @@ Phasor b2 = run.output().fundamentalPhasor(run.project().circuit().voltageChanne
 
 - `mvn test`: without PSCAD: every case's `.pscx` is written, the driver ships and Python compiles it, its report is read.
 - `mvn test -Ppscad`: the real PSCAD.
-  - `PscadProBuildTest` builds each case of `PscadProCases` (103: every upstream example network the backend writes, those
+  - `PscadProBuildTest` builds each case of `PscadProCases` (104: every upstream example network the backend writes, those
     past PSCAD Free's 15 electrical nodes among them, and this project's own: CIGRE B4's DC grid test system, whole
     (`CigreB4Network`, `src/test/resources/cigre-b4*`), the IEEE 14-bus network with a meshed DC grid and Dynawo's machines
     (`Ieee14DcNetwork`, `src/test/resources/ieee14-dc*`), and Kundur's two-area system with a three-terminal DC grid beside its
@@ -74,7 +74,8 @@ Phasor b2 = run.output().fundamentalPhasor(run.project().circuit().voltageChanne
     areas (its amplitude, frequency and damping, or the machines settled), the centre of inertia's nadir and RoCoF after a load
     step, the DC voltages within their bounds, every station back on its law from the load flow; and PROMOTioN's DC fault at D1,
     every station blocked, nearest first, its stations protected and nothing clearing it, or cleared by the AC breakers; and
-    IEEE 39 with six grid-following sources lost through its fault, G31 out of step. About 3 minutes a case;
+    IEEE 39 with six grid-following sources lost through its fault, G31 out of step; and IEEE 39 losing its whole DC grid
+    through a DC fault at BD16 the AC breakers clear. About 3 minutes a case;
     `-Dpscad.faults=ieee68-dc-fault-b1,...` runs only those.
   - `PscadProAc6ALimiterTest` runs upstream's AC6A field current limiter bench at 20, 10 and 5 us, holds the limiter to ATP's,
     Xyce's and Kestrel's - within 0.5 at their 20 us, as upstream does -, and writes its channels around the fault to
