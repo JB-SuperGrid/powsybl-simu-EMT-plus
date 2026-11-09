@@ -26,12 +26,14 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.IOException;
 import java.io.Writer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -320,6 +322,96 @@ class PscadProFaultSwingTest {
                 softly.assertThat(pEnd).as("%s's power at the end against the load flow's along its droop, of its rating", station)
                         .isCloseTo(pExpected, within(tolerance));
             }
+        }
+        softly.assertAll();
+    }
+
+    /** When a station blocks, ms after a DC fault, within {@code [min, max]}. */
+    record Blocking(String station, double min, double max) {
+    }
+
+    /**
+     * PROMOTioN's five terminals through a solid pole-to-pole fault at D1, the most meshed node, from 2.3 s, run 3 s - no station back
+     * on its law, every one blocked; held to their runs by hand of 2026-11-08.
+     *
+     * <p>Its stations protected against their arms' overcurrent, nothing clearing it: every station blocks on its own overcurrent,
+     * nearest first, its DC current up to 4.8 to 5.4 pu - run 2026-11-09, D1 0.4 ms on, C2 12.6, D2 13.3, B1 35.8, A1 93.6 - then the
+     * half-bridges' diodes feed the fault from the AC grids, the onshore PCCs down to 0.22 and 0.29 pu and staying under 0.4, the DC
+     * voltages down under 0.16 pu, never up to A1's and B1's choppers.
+     *
+     * <p>Cleared the non-selective way, as PROMOTioN's D4.2 has it: every station blocked on the fault's detection, 2 ms on, then
+     * its AC breaker opening, 40 ms on - the AC voltages up to 1.22 pu (D2's), then gone; the DC voltages down to -0.08 pu; the DC
+     * currents freewheeling through the diodes into the fault, D1's gone by 2.7 s, the others' decaying, 0.29 to 0.53 pu still at 3 s.
+     * About 1 minute a case.
+     */
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"promotion-dc-fault-d1", "promotion-dc-fault-d1-cleared"})
+    void aDcFaultBlocksEveryStation(String name) throws IOException {
+        PscadProCases.Case fault = PscadProCases.all().filter(c -> c.name().equals(name)).findFirst().orElseThrow();
+        Network network = ExampleNetworks.withLoadFlow(fault.network().get());
+        Path workDir = Files.createDirectories(Path.of("target", "fault-swing", name));
+
+        PscadProSimulation.PscadProRun run = PscadProSimulation.run(network, workDir, fault.settings(), fault.events(), PscadProSettings.defaults());
+
+        Map<String, DoubleTimeSeries> curves = run.output().curves();
+        writeCsv(curves, workDir.resolveSibling(name + ".csv"));
+        double[] time = times(curves);
+        double faultTime = 2.3;
+        boolean cleared = name.endsWith("-cleared");
+        List<Blocking> blockings = cleared
+                ? Stream.of("CD1", "CC2", "CD2", "CB1", "CA1").map(s -> new Blocking(s, 0.0, 2.5)).toList()
+                : List.of(new Blocking("CD1", 0.0, 2.0), new Blocking("CC2", 10.0, 16.0), new Blocking("CD2", 10.0, 17.0), new Blocking("CB1", 30.0, 42.0),
+                        new Blocking("CA1", 85.0, 105.0));
+        SoftAssertions softly = new SoftAssertions();
+        for (Blocking blocking : blockings) {
+            String station = blocking.station();
+            double[] running = curves.get(station + "_RUN").toArray();
+            double[] idc = curves.get(station + "_IDC").toArray();
+            double[] vac = curves.get(station + "_VAC").toArray();
+            double[] vdc = curves.get(station + "_VDC").toArray();
+            double blocked = Double.NaN;
+            double peak = 0.0;
+            double vacLow = Double.MAX_VALUE;
+            double vacHigh = 0.0;
+            double vdcLow = Double.MAX_VALUE;
+            for (int i = 0; i < time.length; i++) {
+                if (time[i] >= faultTime) {
+                    blocked = Double.isNaN(blocked) && running[i] < 0.5 ? (time[i] - faultTime) * 1.0e3 : blocked;
+                    peak = Math.max(peak, Math.abs(idc[i]));
+                    vacLow = Math.min(vacLow, vac[i]);
+                    vacHigh = Math.max(vacHigh, vac[i]);
+                    vdcLow = Math.min(vdcLow, vdc[i]);
+                }
+            }
+            double end = time[time.length - 1];
+            double idcLate = run.output().mean(station + "_IDC", 2.68, 2.72);
+            double idcEnd = run.output().mean(station + "_IDC", end - 0.02, end);
+            double vacEnd = run.output().mean(station + "_VAC", end - 0.02, end);
+            double vdcEnd = run.output().mean(station + "_VDC", end - 0.02, end);
+            System.out.printf(Locale.ROOT, "%s %s: blocked %.1f ms on, |I_DC| up to %.2f pu, %.3f at 2.7 s, %.3f at the end; V_AC %.3f to %.3f, %.3f at"
+                    + " the end; V_DC from %.3f, %.3f at the end%n", name, station, blocked, peak, idcLate, idcEnd, vacLow, vacHigh, vacEnd, vdcLow, vdcEnd);
+            softly.assertThat(blocked).as("%s blocked, ms after the fault", station).isBetween(blocking.min(), blocking.max());
+            if (cleared) {
+                softly.assertThat(vacHigh).as("%s's highest AC voltage, pu", station).isLessThan(1.25);
+                softly.assertThat(vacEnd).as("%s's AC voltage at the end, its breaker open, pu", station).isLessThan(0.01);
+                softly.assertThat(vdcLow).as("%s's lowest DC voltage, pu", station).isGreaterThan(-0.1);
+                if ("CD1".equals(station)) {
+                    softly.assertThat(Math.abs(idcLate)).as("D1's DC current at 2.7 s, pu").isLessThan(0.01);
+                } else {
+                    softly.assertThat(idcEnd).as("%s's DC current at the end, decaying, pu", station).isBetween(0.15, 0.7).isLessThan(idcLate);
+                }
+            } else {
+                softly.assertThat(peak).as("%s's DC current's peak, pu", station).isBetween(4.4, 5.6);
+                softly.assertThat(vdcEnd).as("%s's DC voltage at the end, pu", station).isLessThan(0.25);
+                if (List.of("CA1", "CB1").contains(station)) {
+                    softly.assertThat(vacLow).as("%s's PCC's lowest AC voltage, pu", station).isBetween(0.18, 0.33);
+                    softly.assertThat(vacEnd).as("%s's PCC's AC voltage at the end, nothing clearing the fault, pu", station).isLessThan(0.5);
+                }
+            }
+        }
+        for (String chopper : List.of("CA1_PCHOP", "CB1_PCHOP")) {
+            softly.assertThat(Arrays.stream(curves.get(chopper).toArray()).max().orElseThrow()).as("%s, the DC voltage never up to it", chopper)
+                    .isZero();
         }
         softly.assertAll();
     }
