@@ -69,7 +69,8 @@ Phasor b2 = run.output().fundamentalPhasor(run.project().circuit().voltageChanne
     grid-following, grid-forming or mixed converter sources) through a fault and a load step at bus 16 - the swing between their
     areas (its amplitude, frequency and damping, or the machines settled), the centre of inertia's nadir and RoCoF after a load
     step, the DC voltages within their bounds, every station back on its law from the load flow; and PROMOTioN's DC fault at D1,
-    every station blocked, nearest first, its stations protected and nothing clearing it, or cleared by the AC breakers. About 3 minutes a case;
+    every station blocked, nearest first, its stations protected and nothing clearing it, or cleared by the AC breakers; and
+    IEEE 39 with six grid-following sources lost through its fault, G31 out of step. About 3 minutes a case;
     `-Dpscad.faults=ieee68-dc-fault-b1,...` runs only those.
   - `PscadProAc6ALimiterTest` runs upstream's AC6A field current limiter bench at 20, 10 and 5 us, holds the limiter to ATP's,
     Xyce's and Kestrel's - within 0.5 at their 20 us, as upstream does -, and writes its channels around the fault to

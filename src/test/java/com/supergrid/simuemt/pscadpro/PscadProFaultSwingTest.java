@@ -23,6 +23,7 @@ import com.powsybl.timeseries.DoubleTimeSeries;
 import com.powsybl.timeseries.TimeSeriesIndex;
 import org.assertj.core.api.SoftAssertions;
 import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -71,7 +72,7 @@ import static org.assertj.core.api.Assertions.within;
  * 2026-11-08 again. The fault: New England against G39 21.4 degrees at 0.594 Hz, zeta 0.173, with its machines; 33.2 degrees at
  * 0.680 Hz, zeta 0.160, four of them grid-following, no inertia of the converters'; 20.3 degrees at 0.464 Hz, zeta 0.296,
  * grid-forming, their virtual machines back within 0.0015 of their power; six replaced, 15.8 degrees grid-forming, 30.4 mixed (CL33
- * alone grid-forming) - six grid-following, the network is lost, G31 out of step: left out. The load step: the centre of inertia's
+ * alone grid-forming) - six grid-following, the network is lost, G31 out of step: held apart ({@link #ieee39WithSixGridFollowingSourcesIsLostThroughTheFault}). The load step: the centre of inertia's
  * nadir 80, 110 and 67 mHz, its RoCoF over 500 ms -0.075, -0.100 and -0.048 Hz/s, with the machines, grid-following and
  * grid-forming; 141 and 64 mHz, -0.115 and -0.038 Hz/s, six replaced; the grid-forming stations' virtual machines taking up 0.024 to
  * 0.027 of their rating for good, New England settling on its new angle without swinging.
@@ -157,7 +158,7 @@ class PscadProFaultSwingTest {
     /**
      * IEEE 39 with a high share of power electronics ({@link Ieee39IbrNetwork}): its machines, then four, then six of them replaced by
      * grid-following, grid-forming or mixed converter sources, through a fault and a load step at bus 16 - but the six replaced
-     * grid-following through the fault, where the network is lost, G31 out of step. Every machine left against G39.
+     * grid-following through the fault, where the network is lost, G31 out of step, held apart. Every machine left against G39.
      */
     private static Stream<Expected> ieee39Ibr() {
         List<String> g39 = List.of("G39");
@@ -412,6 +413,64 @@ class PscadProFaultSwingTest {
         for (String chopper : List.of("CA1_PCHOP", "CB1_PCHOP")) {
             softly.assertThat(Arrays.stream(curves.get(chopper).toArray()).max().orElseThrow()).as("%s, the DC voltage never up to it", chopper)
                     .isZero();
+        }
+        softly.assertAll();
+    }
+
+    /**
+     * IEEE 39 with six machines replaced by grid-following converter sources, through the solid three-phase fault at bus 16: the
+     * network lost, as its run by hand of 2026-11-08 had it - what {@link #aLargeNetworkRidesItsFault} leaves out, held here so that
+     * the limit stays known. The grid-following stations' AC voltages held near 0.85 pu after the clearing, G31, the machine nearest
+     * the fault, speeding up and out of step against the other machines' centre of inertia within 0.75 s, every grid-following
+     * station's AC voltage past 1.3 or under 0.3 pu by then. Past that the run no longer means anything: its voltages run away to
+     * hundreds of pu.
+     *
+     * <p>Run 2026-11-09: the stations' AC voltages 0.77 to 0.86 pu just after the clearing, out of [0.3, 1.3] pu 0.35 to 0.46 s
+     * after it; G31 up to 1.0558 pu, out of step 0.61 s after it.
+     */
+    @Test
+    void ieee39WithSixGridFollowingSourcesIsLostThroughTheFault() throws IOException {
+        String name = "ieee39-gfl65-fault-b16";
+        PscadProCases.Case fault = PscadProCases.all().filter(c -> c.name().equals(name)).findFirst().orElseThrow();
+        Network network = ExampleNetworks.withLoadFlow(fault.network().get());
+        Path workDir = Files.createDirectories(Path.of("target", "fault-swing", name));
+
+        PscadProSimulation.PscadProRun run = PscadProSimulation.run(network, workDir, fault.settings(), fault.events(), PscadProSettings.defaults());
+
+        Map<String, DoubleTimeSeries> curves = run.output().curves();
+        writeCsv(curves, workDir.resolveSibling(name + ".csv"));
+        double[] time = times(curves);
+        double faultTime = 2.5;
+        double clearing = faultTime + FAULT_DURATION;
+        List<String> others = machines(network).stream().filter(m -> !"G31".equals(m)).toList();
+        double[] angle = swing(network, curves, time, List.of("G31"), others, faultTime);
+        double[] speed = curves.get("G31_W").toArray();
+        double fastest = 0.0;
+        double outOfStep = Double.NaN;
+        for (int i = 0; i < time.length; i++) {
+            if (time[i] >= faultTime && time[i] <= clearing + 0.7) {
+                fastest = Math.max(fastest, speed[i]);
+            }
+            if (time[i] >= faultTime && Double.isNaN(outOfStep) && Math.abs(angle[i]) > 180.0) {
+                outOfStep = time[i] - clearing;
+            }
+        }
+        System.out.printf(Locale.ROOT, "%s: G31 up to %.4f pu within 0.7 s of the clearing, out of step %.3f s after it%n", name, fastest, outOfStep);
+        SoftAssertions softly = new SoftAssertions();
+        softly.assertThat(fastest).as("G31's speed within 0.7 s of the clearing, pu").isBetween(1.045, 1.065);
+        softly.assertThat(outOfStep).as("G31 out of step against the other machines, s after the clearing").isBetween(0.45, 0.75);
+        // The grid-following stations, on the AC grid's side of their links: the CR ones, on their own, ride it.
+        for (VoltageSourceConverter converter : network.getVoltageSourceConverterStream().filter(c -> c.getId().startsWith("CL")).toList()) {
+            String station = converter.getId();
+            double[] vac = curves.get(station + "_VAC").toArray();
+            double out = Double.NaN;
+            for (int i = 0; i < time.length && Double.isNaN(out); i++) {
+                out = time[i] > clearing + 0.05 && (vac[i] > 1.3 || vac[i] < 0.3) ? time[i] - clearing : out;
+            }
+            double after = run.output().mean(station + "_VAC", clearing + 0.05, clearing + 0.15);
+            System.out.printf(Locale.ROOT, "%s %s: V_AC %.3f just after the clearing, out of [0.3, 1.3] %.3f s after it%n", name, station, after, out);
+            softly.assertThat(after).as("%s's AC voltage just after the clearing, pu", station).isBetween(0.7, 0.9);
+            softly.assertThat(out).as("%s's AC voltage out of [0.3, 1.3] pu, s after the clearing", station).isBetween(0.2, 0.75);
         }
         softly.assertAll();
     }
