@@ -62,3 +62,5 @@ Phasor b2 = run.output().fundamentalPhasor(run.project().circuit().voltageChanne
   - `PscadProBeyondFreeTest` runs what upstream writes for the Professional edition only, past Free's 15 nodes, and holds it
     to what upstream holds ATP, Xyce and Kestrel to: the four phase-shifter benches on the load flow, a line put back into
     service, a three-winding transformer's leg closed, an open-ended energization with and without its arrester.
+  - `PscadProAc6ALimiterTest` runs upstream's AC6A field current limiter bench, whose PSCAD gap upstream documents, at 20, 10
+    and 5 us, and writes its channels around the fault to `target/ac6a-limiter/<step>us.csv`.
