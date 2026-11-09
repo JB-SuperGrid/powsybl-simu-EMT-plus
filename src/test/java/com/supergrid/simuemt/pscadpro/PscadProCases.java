@@ -264,6 +264,13 @@ final class PscadProCases {
                 new Case("ieee68-dc-fault-b1", () -> preprocessed("ieee68-dc", false, false), List.of(new BusFault("F", "B1", "ABC", true,
                         1.0, 2.5, 2.6, FaultClearing.AT_CURRENT_ZERO)), new PscadSimulationSettings(50.0e-6, 8.0, 50.0, PscadEdition.PROFESSIONAL),
                         Kind.FROM_REST),
+                // The three large networks each losing a station in full flow: blocked at 2.5 s, its AC breaker opening 40 ms on - its
+                // transit taken up by the others along their laws, the AC network shifting its flows. Kundur's CS7, area 1's 200 MW
+                // to area 2 back on the tie; IEEE 39's CS4, 350 MW into the load centre now through CS16 at the hub; IEEE 68's CS33,
+                // New York's 400 MW import from the DC grid, at 50 us as its fault
+                stationLoss("kundur-dc-loss-cs7", "kundur-dc", "7", 20.0e-6),
+                stationLoss("ieee39-dc-loss-cs4", "ieee39-dc", "4", 20.0e-6),
+                stationLoss("ieee68-dc-loss-cs33", "ieee68-dc", "33", 50.0e-6),
                 // PROMOTioN's five terminals, each cable between two hybrid DC breakers and their 200 mH reactors: a solid pole-to-pole
                 // fault at D1, the most meshed node, its stations protected against their arms' overcurrent - run 2026-11-08: every
                 // station blocked, nearest first, D1 0.4 ms on, C2 13, D2 13, B1 36, A1 94, their DC currents up to 4.8 to 5.4 pu;
@@ -348,6 +355,14 @@ final class PscadProCases {
     private static Case ibrCase(String name, String bench, EmtEvent event) {
         return new Case(name, () -> preprocessed(bench, false, false), List.of(event), new PscadSimulationSettings(50.0e-6, 8.0, 50.0,
                 PscadEdition.PROFESSIONAL), Kind.FROM_REST);
+    }
+
+    /** {@code bench}'s station CS{@code station} lost: blocked at 2.5 s, its transformer TC{@code station} opened at its grid's end at
+     * 2.54 s, at its current's zero; run 8 s at {@code timeStep}, from rest. */
+    private static Case stationLoss(String name, String bench, String station, double timeStep) {
+        return new Case(name, () -> preprocessed(bench, false, false), List.of(new ConverterBlocking("CS" + station, 2.5),
+                new BranchOperation("TC" + station, TwoSides.ONE, 2.54, BreakerAction.OPEN, FaultClearing.AT_CURRENT_ZERO)),
+                new PscadSimulationSettings(timeStep, 8.0, 50.0, PscadEdition.PROFESSIONAL), Kind.FROM_REST);
     }
 
     private static Case converters(String name, Supplier<Network> network, EmtEvent... events) {

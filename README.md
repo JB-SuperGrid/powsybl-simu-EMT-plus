@@ -45,7 +45,7 @@ Phasor b2 = run.output().fundamentalPhasor(run.project().circuit().voltageChanne
 
 - `mvn test`: without PSCAD: every case's `.pscx` is written, the driver ships and Python compiles it, its report is read.
 - `mvn test -Ppscad`: the real PSCAD.
-  - `PscadProBuildTest` builds each case of `PscadProCases` (104: every upstream example network the backend writes, those
+  - `PscadProBuildTest` builds each case of `PscadProCases` (107: every upstream example network the backend writes, those
     past PSCAD Free's 15 electrical nodes among them, and this project's own: CIGRE B4's DC grid test system, whole
     (`CigreB4Network`, `src/test/resources/cigre-b4*`), the IEEE 14-bus network with a meshed DC grid and Dynawo's machines
     (`Ieee14DcNetwork`, `src/test/resources/ieee14-dc*`), and Kundur's two-area system with a three-terminal DC grid beside its
@@ -69,7 +69,8 @@ Phasor b2 = run.output().fundamentalPhasor(run.project().circuit().voltageChanne
   - `PscadProFaultSwingTest` runs large networks' faults, past PSCAD Free, and holds them to their physics: Kundur's two
     areas with their DC grid, faulted at bus 7 and bus 8, IEEE 39, IEEE 68 and IEEE 14 with theirs, faulted at bus 16, 1 and 4,
     CIGRE B4 whole, faulted at BAB1, and PROMOTioN's benchmark through an AC fault at A1 and at B1 and a fault on cable D1-D2
-    its breakers cut off, and IEEE 39 with a high share of power electronics (its machines, four or six replaced by
+    its breakers cut off; Kundur's, IEEE 39's and IEEE 68's DC grids losing a station in full flow (CS7, CS4, CS33), a V_DC
+    station that hits its current limit held to it; and IEEE 39 with a high share of power electronics (its machines, four or six replaced by
     grid-following, grid-forming or mixed converter sources) through a fault and a load step at bus 16 - the swing between their
     areas (its amplitude, frequency and damping, or the machines settled), the centre of inertia's nadir and RoCoF after a load
     step, the DC voltages within their bounds, every station back on its law from the load flow; and PROMOTioN's DC fault at D1,

@@ -9,10 +9,12 @@ import com.powsybl.iidm.network.Generator;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.VoltageSourceConverter;
 import com.powsybl.simuemt.extensions.GeneratorModel;
+import com.powsybl.simuemt.extensions.event.ConverterBlocking;
 import com.powsybl.simuemt.extensions.hvdc.AveragedConverterModel;
 import com.powsybl.simuemt.extensions.hvdc.AveragedVscInitialState;
 import com.powsybl.simuemt.extensions.hvdc.DcVoltageDroopLaw;
 import com.powsybl.simuemt.extensions.hvdc.VoltageSourceConverterModel;
+import com.powsybl.simuemt.extensions.hvdc.control.GridFollowingControl;
 import com.powsybl.simuemt.extensions.hvdc.control.GridFormingControl;
 import com.powsybl.simuemt.extensions.hvdc.control.VscControlModel;
 import com.powsybl.simuemt.extensions.machine.SubtransientMachineModel;
@@ -67,6 +69,17 @@ import static org.assertj.core.api.Assertions.within;
  * grid and at B1's, run 5 s: the DC voltages within 0.966 and 1.087 pu, and 0.991 and 1.110; on cable D1-D2 at D1, its two
  * breakers opened 3 ms on, run 5 s: within 0.866 and 1.099 pu, B1 on its droop at the DC voltage the cut grid settles to, 1.2e-3 pu
  * under its own before. Every station of every case on its law within 1e-4 of its rating.
+ *
+ * <p>The same networks losing a station at 2.5 s, its AC breaker opened at 2.54 s, run 8 s - 2026-11-09. Kundur's CS7, area 1's
+ * 200 MW to area 2 back on the tie: area 1 swinging 18.9 degrees against area 2 at 0.566 Hz, zeta 0.207, to its new angle, 12.5
+ * degrees on; CS9 delivering the wind's 200 MW alone; the DC voltages within 0.945 and 1.016 pu. IEEE 39's CS4, 350 MW into the
+ * load centre: CS16 at the hub taking it up to its current limit, 1.1 pu - 1.108 of its rating -, the DC voltage left to rise to
+ * 1.0075 pu, where CS26's droop takes up the rest, 0.633 to 0.544 of its rating; New England 3.4 degrees against G39 at 0.590 Hz, zeta
+ * 0.170; the DC voltages within 0.995 and 1.077 pu. IEEE 68's CS33, New York's 400 MW import, at 50 us: CS16 importing 0.357 of its
+ * rating less, down to 0.026; New England 5.1 degrees against New York, area 5 3.5; the DC voltages within 0.992 and 1.038 pu. The
+ * centre of inertia's frequency down 0.1, 2.3 and 3.3 mHz at most - the power moved within one AC network, not lost to it; every
+ * machine's speed within 0.004 Hz peak to peak over the last second. A station on its current limit is held to it instead of its
+ * law; the station lost to none of its power from 0.2 s on.
  *
  * <p>IEEE 39 with a high share of power electronics, run 8 s at 50 us, the fault or bus 16's load up 494 MW at 2.5 s - the runs of
  * 2026-11-08 again. The fault: New England against G39 21.4 degrees at 0.594 Hz, zeta 0.173, with its machines; 33.2 degrees at
@@ -152,7 +165,30 @@ class PscadProFaultSwingTest {
                 new Expected("promotion-dc-ac-fault-a1", 2.3, 5.0, List.of(), 0.95, 1.10, Double.NaN, 1.0e-3),
                 new Expected("promotion-dc-ac-fault-b1", 2.3, 5.0, List.of(), 0.975, 1.125, Double.NaN, 1.0e-3),
                 new Expected("promotion-dc-fault-cd1d2", 2.3, 5.0, List.of(), 0.85, 1.115, Double.NaN, 1.0e-3)
-        ), ieee39Ibr()).filter(PscadProFaultSwingTest::selected).map(Arguments::of);
+        ), Stream.concat(stationLosses(), ieee39Ibr())).filter(PscadProFaultSwingTest::selected).map(Arguments::of);
+    }
+
+    /**
+     * The three large networks each losing a station in full flow, blocked, its AC breaker opened 40 ms on - its power gone, the others'
+     * on their laws: IEEE 39's CS16 taking up CS4's 350 MW on its current limit, the DC voltage rising until CS26's droop takes the rest.
+     * Each station carried power between two parts of one AC network: its loss shifts the flows, the areas swinging to their new angle,
+     * the centre of inertia's frequency hardly moving.
+     */
+    private static Stream<Expected> stationLosses() {
+        List<String> newEngland68 = List.of("G53", "G54", "G55", "G56", "G57", "G58", "G59", "G60", "G61");
+        List<String> newYork = List.of("G62", "G63", "G64", "G65");
+        Frequency unmoved = new Frequency(-6.0, 0.0, -0.1, 0.1);
+        return Stream.of(
+                new Expected("kundur-dc-loss-cs7", 2.5, Double.NaN, List.of(new Swing("area 1 against area 2", List.of("G1", "G2"), List.of("G3", "G4"),
+                        16.5, 21.5, 0.566, 0.207)), 0.93, 1.03, 0.006, 1.0e-3, 1.0e-3, unmoved),
+                new Expected("ieee39-dc-loss-cs4", 2.5, Double.NaN, List.of(new Swing("New England against G39",
+                        List.of("G30", "G31", "G32", "G33", "G34", "G35", "G36", "G37", "G38"), List.of("G39"), 2.8, 4.0, 0.590, 0.170)), 0.98, 1.09,
+                        0.005, 1.0e-3, 2.0e-3, unmoved),
+                // Its swings mix several modes, their extremes not a decaying sine's: their damping held through every machine's speed.
+                new Expected("ieee68-dc-loss-cs33", 2.5, Double.NaN, List.of(
+                        new Swing("New England against New York", newEngland68, newYork, 4.3, 5.9, Double.NaN, Double.NaN),
+                        new Swing("area 5 against New York", List.of("G68"), newYork, 2.9, 4.1, Double.NaN, Double.NaN)), 0.98, 1.045, 0.003, 1.0e-3,
+                        1.0e-3, unmoved));
     }
 
     /**
@@ -238,6 +274,7 @@ class PscadProFaultSwingTest {
             }
         }
         double runEnd = time[time.length - 1];
+        List<String> lost = fault.events().stream().filter(ConverterBlocking.class::isInstance).map(e -> ((ConverterBlocking) e).converterId()).toList();
         if (expected.frequency() != null) {
             double[] centre = centreOfInertia(network, curves, machines(network));
             double before = 0.0;
@@ -310,10 +347,23 @@ class PscadProFaultSwingTest {
             AveragedConverterModel model = (AveragedConverterModel) converter.getExtension(VoltageSourceConverterModel.class);
             AveragedVscInitialState initial = AveragedVscInitialState.of(converter, model);
             double rating = model.getRatedApparentPower();
-            if (converter.getControlMode() == AcDcConverter.ControlMode.V_DC) {
-                double lfVdc = initial.dcVoltage() / initial.dcNominalVoltage();
-                softly.assertThat(vdcEnd).as("%s's DC voltage at the end against the load flow's, pu", station).isCloseTo(lfVdc,
-                        within(expected.recovery()));
+            if (lost.contains(station)) {
+                // A station lost: blocked, its AC breaker open, none of its power left.
+                softly.assertThat(output.peakAbsolute(station + "_P", expected.fault() + 0.2, runEnd)).as("%s's power once lost, of its rating", station)
+                        .isLessThan(1.0e-4);
+            } else if (converter.getControlMode() == AcDcConverter.ControlMode.V_DC) {
+                // On its voltage - or, asked for more than its current limit lets through, on that limit, the DC voltage left to the droops.
+                double maxCurrent = GridFollowingControl.of(converter).getCurrentLimit().maxCurrent();
+                double currentEnd = Math.hypot(pEnd, output.mean(station + "_Q", runEnd - 0.04, runEnd)) / output.mean(station + "_VAC", runEnd - 0.04, runEnd);
+                if (currentEnd > maxCurrent - expected.recovery()) {
+                    System.out.printf(Locale.ROOT, "%s %s: on its current limit, %.5f of %.2f%n", expected.name(), station, currentEnd, maxCurrent);
+                    softly.assertThat(currentEnd).as("%s's current at the end against its limit, pu", station).isCloseTo(maxCurrent,
+                            within(expected.recovery()));
+                } else {
+                    double lfVdc = initial.dcVoltage() / initial.dcNominalVoltage();
+                    softly.assertThat(vdcEnd).as("%s's DC voltage at the end against the load flow's, pu", station).isCloseTo(lfVdc,
+                            within(expected.recovery()));
+                }
             } else {
                 double pExpected = (converter.getTerminal1().getP() - DcVoltageDroopLaw.of(converter, initial)
                         .map(law -> law.powerReduction(vdcEnd) * initial.baseApparentPower()).orElse(0.0)) / rating;
