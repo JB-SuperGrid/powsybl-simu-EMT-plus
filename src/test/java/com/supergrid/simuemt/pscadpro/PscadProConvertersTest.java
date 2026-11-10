@@ -363,8 +363,9 @@ class PscadProConvertersTest {
      * AtpSolverIntegrationTest#anMmcGridsDcBreakerClearsADcFaultSelectively}) and to what the three share ({@code
      * BackendComparisonTest#allThreeBackendsClearAnMmcGridsDcFaultSelectivelyThroughADcBreaker}): VSC3 blocked by its protection at ATP's
      * 0.30024 s on, within the 2e-4 s Xyce and Kestrel are held to; VSC1 and VSC2 never, settled at the end on the load flow with DCB open
-     * and VSC3 out; DC2P's crest within 1.5% of ATP's 673.4 kV - not the 1.5 kV Xyce and Kestrel are held to: PSCAD's is 665.7 kV (run
-     * 2026-11-10), 1.1% under, unexplained yet - the two-level grid's crest, {@link #aDcBreakerClearsADcFaultSelectively}, on ATP's.
+     * and VSC3 out; DC2P's crest within the 1.5 kV of ATP's 673.4 kV Xyce and Kestrel are held to. Switched on the time step, as ATP
+     * and Kestrel switch ({@code PscadSwitching.ON_TIME_STEP}): run 2026-11-10, 673.58 kV and VSC3 blocked at 2.30026 s, Kestrel's 0.30026
+     * s; PSCAD's interpolated switching, which opens DCB inside its step on less current, gave 665.7 kV, 1.1% under.
      */
     @Test
     void anMmcGridsDcBreakerClearsADcFaultSelectively(@TempDir Path tempDir) {
@@ -381,7 +382,7 @@ class PscadProConvertersTest {
         double crest = out.peakAbsolute("V_DC2P", 2.3, runEnd);
         System.out.printf(Locale.ROOT, "mmc-dc-breaker-selective: VSC3 blocked %.6f s (ATP 2.30024); DC2P crest %.1f kV (ATP 673.4)%n", blocked, crest / 1.0e3);
         softly.assertThat(blocked).as("VSC3 blocked at, s: ATP's").isCloseTo(2.30024, within(2.0e-4));
-        softly.assertThat(crest / 1.0e3).as("DC2P's crest, kV: ATP's").isCloseTo(673.4, within(0.015 * 673.4));
+        softly.assertThat(crest / 1.0e3).as("DC2P's crest, kV: ATP's").isCloseTo(673.4, within(1.5));
         for (String id : List.of("VSC1", "VSC2")) {
             softly.assertThat(out.firstTimeBelow(id + "_RUN", 0.5, 2.2)).as("%s blocked at, s: never, the breaker faster than its protection", id).isNaN();
             VoltageSourceConverter left = isolated.getVoltageSourceConverter(id);

@@ -92,6 +92,10 @@ final class PscadProCases {
             PscadSwitching.ON_TIME_STEP);
     /** A converter's scenario's, as upstream runs it: 20 us, past its events from 2.3 s. */
     static final PscadSimulationSettings CONVERTERS = new PscadSimulationSettings(20.0e-6, 3.0, 50.0, PscadEdition.PROFESSIONAL);
+    /** {@link #CONVERTERS}, switching on the time step as ATP and Kestrel do ({@link PscadSwitching#ON_TIME_STEP}): for a crest held to
+     * theirs - PSCAD's interpolated switching opens a DC breaker inside the step, on less current, its crest 1.1% lower. */
+    static final PscadSimulationSettings CONVERTERS_ON_TIME_STEP = new PscadSimulationSettings(20.0e-6, 3.0, 50.0, PscadEdition.PROFESSIONAL,
+            PscadSwitching.ON_TIME_STEP);
 
     private PscadProCases() {
     }
@@ -374,9 +378,10 @@ final class PscadProCases {
                 // two-level and MMC; the MMC grid's cleared selectively by DCB; the meshed MMC grid's faulted line cut off at both ends
                 converters("dc-fault-stations-open", () -> preprocessed("vsc-three-terminal-all-droop", true, true), stationsOpen()),
                 converters("mmc-stations-open", () -> preprocessed("vsc-three-terminal-all-droop-mmc", false, true), stationsOpen()),
-                converters("mmc-dc-breaker-selective", () -> preprocessed("vsc-three-terminal-dc-breaker-mmc", false, true),
-                        new DcFault("FDC", "DC3P", 0.0, 2.3, 12.0), new DcSwitchOperation("DCB", 2.302, BreakerAction.OPEN),
-                        new BranchOperation("T3", TwoSides.ONE, 2.36, BreakerAction.OPEN, FaultClearing.AT_CURRENT_ZERO)),
+                new Case("mmc-dc-breaker-selective", () -> preprocessed("vsc-three-terminal-dc-breaker-mmc", false, true),
+                        List.of(new DcFault("FDC", "DC3P", 0.0, 2.3, 12.0), new DcSwitchOperation("DCB", 2.302, BreakerAction.OPEN),
+                                new BranchOperation("T3", TwoSides.ONE, 2.36, BreakerAction.OPEN, FaultClearing.AT_CURRENT_ZERO)), CONVERTERS_ON_TIME_STEP,
+                        Kind.FROM_REST),
                 converters("mmc-meshed-line-cut", () -> preprocessed("vsc-three-terminal-meshed-mmc", false, true), new DcFault("FDC", "DC2M", 0.0, 2.3, 2.5),
                         new DcSwitchOperation("DCB", 2.302, BreakerAction.OPEN), new DcSwitchOperation("DCB3", 2.302, BreakerAction.OPEN),
                         new DcSwitchOperation("DCB", 2.6, BreakerAction.CLOSE), new DcSwitchOperation("DCB3", 2.6, BreakerAction.CLOSE)),
