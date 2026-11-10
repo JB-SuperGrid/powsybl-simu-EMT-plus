@@ -31,7 +31,8 @@ import static org.assertj.core.api.Assertions.within;
 /**
  * CIGRE B4 DCS2's four scenarios of {@link PscadProCases}, past PSCAD Free's 15 nodes, run live in PSCAD Professional at 20 us and
  * held to what ATP, Xyce and Kestrel share on them - the criteria upstream holds its stored PSCAD Professional runs of the same
- * scenarios to ({@code PscadFileWriterTest}), here on a run of the day, against a regression of PSCAD's or of the writer's. Each
+ * scenarios to ({@code PscadFileWriterTest}, tagged {@code professional} and left out of upstream's builds since its {@code
+ * 5e6fb79d}), here on a run of the day, against a regression of PSCAD's or of the writer's. Each
  * station's law from the load flow: CMB2 and CMB3 on their DC voltage droops, CME1 and CMF1 on their powers.
  *
  * <p>Run 2026-11-09, upstream's stored runs of 2026-11-07 again: the power steps, every station within 0.16 MW of its law, of CMB2's

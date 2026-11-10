@@ -17,8 +17,12 @@ import com.powsybl.simuemt.pscad.PscadCircuit;
 import com.powsybl.simuemt.pscad.PscadEdition;
 import com.powsybl.simuemt.pscad.PscadOutput;
 import com.powsybl.simuemt.pscad.PscadSimulationSettings;
+import com.powsybl.simuemt.pscad.PscadSteadyState;
+import com.powsybl.simuemt.pscad.PscadSwitching;
 import com.powsybl.simuemt.testresources.ExampleNetworks;
 import com.powsybl.simuemt.testresources.SwitchingWindows;
+import com.powsybl.timeseries.DoubleTimeSeries;
+import com.powsybl.timeseries.TimeSeriesIndex;
 import org.assertj.core.api.SoftAssertions;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -28,7 +32,10 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
 
@@ -111,6 +118,68 @@ class PscadProBeyondFreeTest {
                         .isCloseTo(0.0, within(0.01));
             }
         }
+        softly.assertAll();
+    }
+
+    /**
+     * The YNd11 phase shifter bench fed from an ideal source, 21 nodes, from a template run in PSCAD Professional - whose snapshot
+     * numbers the nodes otherwise than Main.dta does, past some twenty - and its restart through a fault on B3's phase A from 0.1 to
+     * 0.15 s, run 0.4 s: upstream's {@code PscadFileWriterTest#writeRestartReadsTheTemplatesNodesInTheSnapshotsOwnNumbering}, which read a
+     * stored Professional run and is left out of upstream's builds since its {@code 5e6fb79d}, held to its checks on a run of the day.
+     * Every bus phase on the circuit's steady state ({@code PscadSteadyState}) in the restart's first period to 5e-6 kV and in its last,
+     * from 0.38 s, to 1e-6 kV, each two samples' mean too; the faulted phase above 100 kV the step before the fault and under 0.1 kV
+     * at it. Read in PSCAD's numbering rather than the snapshot's, the restart is refused.
+     *
+     * <p>Run 2026-11-10: steady to 3.7e-6 kV in the first period - upstream's stored run's 3.7e-6 - and 3.1e-7 kV in the last; B3A
+     * 249.9 kV the step before the fault, 0.9 V at it.
+     */
+    @Test
+    void aRestartReadsTheTemplatesNodesInTheSnapshotsOwnNumbering(@TempDir Path tempDir) {
+        Network network = ExampleNetworks.createThreeBusNetworkWithPurePhaseShiftingYnd11Transformer();
+        network.getGenerator("GEN").addExtension(GeneratorModel.class, new InfiniteBusGeneratorModel(0.0, 0.0));
+        ExampleNetworks.withLoadFlow(network);
+        PscadSimulationSettings settings = new PscadSimulationSettings(TIME_STEP, 0.4, FREQUENCY, PscadEdition.PROFESSIONAL, PscadSwitching.ON_TIME_STEP);
+
+        PscadProSimulation.PscadProRun run = PscadProSimulation.runFromSteadyState(network, tempDir, settings, events("fault-b3-a-0.1-0.15-at-order"), PRO);
+
+        PscadCircuit circuit = run.project().circuit();
+        PscadSteadyState state = PscadSteadyState.solve(circuit, settings);
+        Map<String, DoubleTimeSeries> curves = run.output().curves();
+        SoftAssertions softly = new SoftAssertions();
+        double[] largest = new double[2];
+        for (String bus : List.of("B1", "B2", "B3")) {
+            for (char phase : "ABC".toCharArray()) {
+                PscadSteadyState.Complex phasor = state.voltage(bus, phase);
+                DoubleTimeSeries series = curves.get(circuit.voltageChannel(bus, phase));
+                // PscadOutput's volts, the steady state's kV.
+                double[] values = Arrays.stream(series.toArray()).map(v -> v / 1.0e3).toArray();
+                TimeSeriesIndex index = series.getMetadata().getIndex();
+                for (int row = 0; row < values.length; row++) {
+                    double tau = index.getInstantAt(row).getEpochSecond() + index.getInstantAt(row).getNano() * 1.0e-9;
+                    boolean first = tau <= 0.02 + 1.0e-9;
+                    if (!first && tau < 0.38 - 1.0e-9) {
+                        continue;
+                    }
+                    // The restart's tau is the steady state at the snapshot's 0.02 s + tau.
+                    double steady = phasor.at(state.omega(), 0.02 + tau) / 1.0e3;
+                    double gap = Math.abs(values[row] - steady);
+                    largest[first ? 0 : 1] = Math.max(largest[first ? 0 : 1], gap);
+                    softly.assertThat(values[row]).as("%s%c at %s s, kV", bus, phase, tau).isCloseTo(steady, within(first ? 5.0e-6 : 1.0e-6));
+                    if (!first && row > 0) {
+                        double before = index.getInstantAt(row - 1).getEpochSecond() + index.getInstantAt(row - 1).getNano() * 1.0e-9;
+                        double mean = (phasor.at(state.omega(), 0.02 + before) / 1.0e3 + steady) / 2.0;
+                        softly.assertThat((values[row - 1] + values[row]) / 2.0).as("mean of two samples, %s%c at %s s, kV", bus, phase, tau)
+                                .isCloseTo(mean, within(1.0e-6));
+                    }
+                }
+            }
+        }
+        double beforeFault = sampleAt(curves.get(circuit.voltageChannel("B3", 'A')), 0.1 - TIME_STEP);
+        double atFault = sampleAt(curves.get(circuit.voltageChannel("B3", 'A')), 0.1);
+        System.out.printf(Locale.ROOT, "ynd11 restart: steady to %.2e kV in the first period, %.2e in the last; B3A %.3f kV the step before the fault, %.4f at it%n",
+                largest[0], largest[1], beforeFault / 1.0e3, atFault / 1.0e3);
+        softly.assertThat(beforeFault / 1.0e3).as("B3A the step before the fault, kV").isGreaterThan(100.0);
+        softly.assertThat(Math.abs(atFault / 1.0e3)).as("B3A at the fault, kV").isLessThan(0.1);
         softly.assertAll();
     }
 
@@ -315,6 +384,22 @@ class PscadProBeyondFreeTest {
         double fromAngle = run.output().fundamentalPhasor(circuit.voltageChannel(from, 'A'), FREQUENCY, window[0], window[1]).angleRadians();
         double toAngle = run.output().fundamentalPhasor(circuit.voltageChannel(to, 'A'), FREQUENCY, window[0], window[1]).angleRadians();
         return -Math.toDegrees(Math.IEEEremainder(toAngle - fromAngle, 2 * Math.PI));
+    }
+
+    /** {@code series}'s sample at {@code time}, the one nearest it, V. */
+    private static double sampleAt(DoubleTimeSeries series, double time) {
+        double[] values = series.toArray();
+        TimeSeriesIndex index = series.getMetadata().getIndex();
+        int nearest = 0;
+        double gap = Double.MAX_VALUE;
+        for (int row = 0; row < values.length; row++) {
+            double t = index.getInstantAt(row).getEpochSecond() + index.getInstantAt(row).getNano() * 1.0e-9;
+            if (Math.abs(t - time) < gap) {
+                gap = Math.abs(t - time);
+                nearest = row;
+            }
+        }
+        return values[nearest];
     }
 
     private static double relative(double value, double reference) {
