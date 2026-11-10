@@ -4,6 +4,7 @@
  */
 package com.supergrid.simuemt.pscadpro;
 
+import com.powsybl.iidm.network.AcDcConverter;
 import com.powsybl.iidm.network.DcNode;
 import com.powsybl.iidm.network.Generator;
 import com.powsybl.iidm.network.Network;
@@ -26,6 +27,8 @@ import org.assertj.core.api.SoftAssertions;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.nio.file.Path;
 import java.util.Arrays;
@@ -651,6 +654,114 @@ class PscadProConvertersTest {
             }
         }
         return edges;
+    }
+
+    /**
+     * Example 4 master-slave, VSC3's power reference stepped by 0.2 pu at 2.5 s, run 3.5 s - upstream's {@code
+     * AtpSolverIntegrationTest#aMasterSlaveStationTakesItsNewSetpointAndTheMasterTheRest}, shifted 2 s: VSC3 at its new setpoint within 60
+     * ms, VSC1, the master, delivering the rest, each station and DC voltage moved as the load flow with VSC3's targetP 50 MW more.
+     */
+    @Test
+    void aMasterSlaveStationTakesItsNewSetpointAndTheMasterTheRest(@TempDir Path tempDir) {
+        double runEnd = 3.5;
+        Run run = run("vsc-master-slave-step", runEnd, tempDir);
+        SoftAssertions softly = new SoftAssertions();
+        stepMovesEachStationAsTheLoadFlow(softly, run, "vsc-three-terminal", 0.2, runEnd, 1.0e-4);
+        System.out.printf(Locale.ROOT, "vsc-master-slave-step: VSC3 %.5f pu 60 ms on%n", run.output.mean("VSC3_P", 2.56, 2.58));
+        softly.assertThat(run.output.mean("VSC3_P", 2.56, 2.58)).as("VSC3 power 60 ms after the step, pu: there").isCloseTo(0.6, within(0.005));
+        softly.assertAll();
+    }
+
+    /**
+     * Example 4 all on the droop, VSC3's power reference ramped by 0.2 pu over 0.2 s from 2.5 s, run 3.5 s - upstream's {@code
+     * AtpSolverIntegrationTest#aRampedPowerStepReachesTheSameEndWithoutRinging}, shifted 2 s: the stepped load flow's end, VSC3's power
+     * rising window after window along the ramp, then within 0.005 pu of its end, no ringing.
+     */
+    @Test
+    void aRampedPowerStepReachesTheSameEndWithoutRinging(@TempDir Path tempDir) {
+        double runEnd = 3.5;
+        Run run = run("vsc-droop-ramp", runEnd, tempDir);
+        PscadOutput out = run.output;
+        SoftAssertions softly = new SoftAssertions();
+        stepMovesEachStationAsTheLoadFlow(softly, run, "vsc-three-terminal-all-droop", 0.2, runEnd, 1.0e-3);
+        double previous = out.mean("VSC3_P", 2.48, 2.5);
+        for (double start = 2.5; start < 2.7 - 1.0e-9; start += 0.02) {
+            double mean = out.mean("VSC3_P", start, start + 0.02);
+            softly.assertThat(mean).as("VSC3 power from %.2f s, pu: rising along the ramp", start).isGreaterThan(previous);
+            previous = mean;
+        }
+        double end = out.mean("VSC3_P", runEnd - 0.2, runEnd);
+        double ringing = 0.0;
+        for (double start = 2.7; start < runEnd - 1.0e-9; start += 0.02) {
+            ringing = Math.max(ringing, Math.abs(out.mean("VSC3_P", start, start + 0.02) - end));
+        }
+        System.out.printf(Locale.ROOT, "vsc-droop-ramp: VSC3 %.5f pu at the end, within %.2e of it from 2.7 s%n", end, ringing);
+        softly.assertThat(ringing).as("VSC3 power from 2.7 s, pu off its end: no ringing").isLessThan(0.005);
+        softly.assertAll();
+    }
+
+    /**
+     * Example 4's VSC3, its fault ride-through with a 2 pu/s active power recovery ramp, through a solid three-phase fault on B3 from 2.3 to
+     * 2.4 s, run 3.5 s, master-slave and all on the droop - upstream's {@code AtpSolverIntegrationTest#aStationsPowerComesBackAlongItsRecoveryRampAfterAnAcFault}
+     * and {@code #aDroopStationsPowerComesBackAlongItsRecoveryRampAfterAnAcFault}, shifted 2 s: its power gone through the fault, back
+     * along the ramp - 1.8 to 2.1 pu/s from 2.5 to 2.6 s master-slave, 1.2 to 2.1 on the droop, still on its way 0.12 s after the
+     * clearing -, on its own before at the end.
+     */
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"vsc-recovery-ramp", "vsc-droop-recovery-ramp"})
+    void aStationsPowerComesBackAlongItsRecoveryRampAfterAnAcFault(String name, @TempDir Path tempDir) {
+        double runEnd = 3.5;
+        boolean droop = name.contains("droop");
+        PscadOutput out = run(name, runEnd, tempDir).output;
+        double before = out.mean("VSC3_P", 2.2, 2.3);
+        double slope = (out.mean("VSC3_P", 2.59, 2.61) - out.mean("VSC3_P", 2.49, 2.51)) / 0.1;
+        System.out.printf(Locale.ROOT, "%s: VSC3 %.4f pu before, %.4f through the fault, slope %.3f pu/s, %.4f 0.12 s on, %.4f at the end%n", name, before,
+                out.mean("VSC3_P", 2.36, 2.4), slope, out.mean("VSC3_P", 2.52, 2.54), out.mean("VSC3_P", 2.8, runEnd));
+        SoftAssertions softly = new SoftAssertions();
+        softly.assertThat(out.mean("VSC3_P", 2.36, 2.4)).as("VSC3's power through the fault, pu").isCloseTo(0.0, within(0.01));
+        softly.assertThat(slope).as("VSC3's power's slope once the voltage is back, pu/s").isBetween(droop ? 1.2 : 1.8, 2.1);
+        if (droop) {
+            softly.assertThat(out.mean("VSC3_P", 2.52, 2.54)).as("VSC3's power 0.12 s after the clearing, pu: still on its way back").isLessThan(0.33);
+        }
+        softly.assertThat(out.mean("VSC3_P", 2.8, runEnd)).as("VSC3's power at the end, pu: its own before").isCloseTo(before, within(2.0e-3));
+        softly.assertAll();
+    }
+
+    /**
+     * VSC3's power reference stepped by {@code deltaPu}: each station's power and DC voltage at the end, less its offset from the load flow's
+     * before the step (2.3 to 2.5 s), on the load flow of {@code bench} with VSC3's targetP that much more - the V_DC master's power on it
+     * outright -, VSC3's own within 1.5e-3 pu of it (upstream's {@code AtpSolverIntegrationTest#checkThePowerStepMovesEachStationAsTheLoadFlow}).
+     */
+    private static void stepMovesEachStationAsTheLoadFlow(SoftAssertions softly, Run run, String bench, double deltaPu, double runEnd, double tolerance) {
+        Network stepped = PscadProCases.bench(bench);
+        VoltageSourceConverter vsc3 = stepped.getVoltageSourceConverter("VSC3");
+        vsc3.setTargetP(vsc3.getTargetP() + deltaPu * rating(vsc3));
+        ExampleNetworks.runLoadFlow(stepped);
+        PscadOutput out = run.output;
+        for (VoltageSourceConverter before : run.network.getVoltageSourceConverters()) {
+            String id = before.getId();
+            VoltageSourceConverter after = stepped.getVoltageSourceConverter(id);
+            double rating = rating(before);
+            double offset = out.mean(id + "_P", 2.3, 2.5) - before.getTerminal1().getP() / rating;
+            double end = out.mean(id + "_P", runEnd - 0.2, runEnd);
+            double target = after.getTerminal1().getP() / rating;
+            DcNode poleBefore = before.getDcTerminal1().getDcNode();
+            DcNode poleAfter = after.getDcTerminal1().getDcNode();
+            double dcOffset = out.mean(id + "_VDC", 2.3, 2.5) - poleBefore.getV() / poleBefore.getNominalV();
+            double dcEnd = out.mean(id + "_VDC", runEnd - 0.2, runEnd) - dcOffset;
+            System.out.printf(Locale.ROOT, "%s: %s offset %.2e before, %.5f at the end against the stepped load flow's %.5f; DC %.2e off it%n", bench, id,
+                    offset, end, target, dcEnd - poleAfter.getV() / poleAfter.getNominalV());
+            softly.assertThat(offset).as("%s power before the step, pu, against the load flow's", id).isCloseTo(0.0, within(0.003));
+            if (before.getControlMode() == AcDcConverter.ControlMode.V_DC) {
+                softly.assertThat(end).as("%s power at the end, pu: the DC voltage's master, the stepped load flow's", id).isCloseTo(target, within(0.003));
+            } else {
+                softly.assertThat(end - offset).as("%s power at the end less its offset before, pu: the stepped load flow's", id).isCloseTo(target, within(tolerance));
+            }
+            if ("VSC3".equals(id)) {
+                softly.assertThat(end).as("VSC3 power at the end, pu: its new point").isCloseTo(target, within(1.5e-3));
+            }
+            softly.assertThat(dcEnd).as("%s DC voltage at the end less its offset before, pu", id).isCloseTo(poleAfter.getV() / poleAfter.getNominalV(), within(2.0e-4));
+        }
     }
 
     private static Run run(String name, double runEnd, Path tempDir) {
