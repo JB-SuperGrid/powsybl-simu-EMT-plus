@@ -334,6 +334,12 @@ final class PscadProCases {
                         new DcSwitchOperation("DCB", 2.302, BreakerAction.OPEN), new BranchOperation("T3", TwoSides.ONE, 2.36, BreakerAction.OPEN,
                                 FaultClearing.AT_CURRENT_ZERO), new DcSwitchOperation("DCB", 2.6, BreakerAction.CLOSE),
                         new BranchOperation("T3", TwoSides.ONE, 2.7, BreakerAction.CLOSE, FaultClearing.AT_CURRENT_ZERO), new ConverterDeblocking("VSC3", 2.8)),
+                // ... and VSC3 tripped again by a second fault on DC3P, DCB opened a second time: three operations of DCB
+                converters("mmc-restart-refault", PscadProCases::mmcRestart, new DcFault("FDC", "DC3P", 0.0, 2.3, 2.5),
+                        new DcSwitchOperation("DCB", 2.302, BreakerAction.OPEN), new BranchOperation("T3", TwoSides.ONE, 2.36, BreakerAction.OPEN,
+                                FaultClearing.AT_CURRENT_ZERO), new DcSwitchOperation("DCB", 2.6, BreakerAction.CLOSE),
+                        new BranchOperation("T3", TwoSides.ONE, 2.7, BreakerAction.CLOSE, FaultClearing.AT_CURRENT_ZERO), new ConverterDeblocking("VSC3", 2.8),
+                        new DcFault("FDC2", "DC3P", 0.0, 3.2, 3.4), new DcSwitchOperation("DCB", 3.202, BreakerAction.OPEN)),
                 // ... and those ATP, Xyce and Kestrel share that no PSCAD has run: the solid fault on DC3P cut off by the stations' AC breakers,
                 // two-level and MMC; the MMC grid's cleared selectively by DCB; the meshed MMC grid's faulted line cut off at both ends
                 converters("dc-fault-stations-open", () -> preprocessed("vsc-three-terminal-all-droop", true, true), stationsOpen()),

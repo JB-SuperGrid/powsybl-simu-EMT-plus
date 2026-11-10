@@ -525,6 +525,32 @@ class PscadProConvertersTest {
     }
 
     /** {@link PscadProCases}'s scenario {@code name}, from rest as upstream's runs, to {@code runEnd}. */
+    /**
+     * As {@link #anMmcStationRestartsAfterADcFault}, and a second solid fault on DC3P from 3.2 to 3.4 s, DCB opened again at 3.202 s - its
+     * third operation -, run 3.8 s, as upstream's {@code allThreeBackendsTripADeblockedStationAgainAtASecondFault} holds ATP, Xyce and
+     * Kestrel (shifted 2 s): VSC3 running from its deblocking until the second fault, blocked by its protection within 1 ms of it and for
+     * good; VSC1 and VSC2 never blocked; DCB open again, DC2P held off the fault.
+     */
+    @Test
+    void aDeblockedStationsProtectionTripsItAgainAtASecondFault(@TempDir Path tempDir) {
+        double runEnd = 3.8;
+        double refault = NumericalAids.switchingInstant(3.2, 20.0e-6);
+        PscadOutput out = run("mmc-restart-refault", runEnd, tempDir).output;
+        double tripped = out.firstTimeBelow("VSC3_RUN", 0.5, 2.801);
+        System.out.printf(Locale.ROOT, "mmc-restart-refault: VSC3 blocked again %.5f s; DC2P from 3.25 s %.4f pu; DC3P %.4f pu%n", tripped,
+                out.mean("V_DC2P", 3.25, 3.4) / 5.0e5, out.mean("V_DC3P", 3.25, 3.4) / 5.0e5);
+        SoftAssertions softly = new SoftAssertions();
+        softly.assertThat(out.mean("VSC3_RUN", 2.801, 3.199)).as("VSC3's running flag from the deblocking to the second fault").isCloseTo(1.0, within(1.0e-9));
+        softly.assertThat(tripped).as("VSC3 blocked again at, s: by its protection, at the second fault").isBetween(refault, refault + 1.0e-3);
+        softly.assertThat(out.mean("VSC3_RUN", 3.21, runEnd)).as("VSC3's running flag from the second fault: blocked for good").isCloseTo(0.0, within(1.0e-9));
+        for (String id : List.of("VSC1", "VSC2")) {
+            softly.assertThat(out.firstTimeBelow(id + "_RUN", 0.5, 2.1)).as("%s blocked, s: never", id).isNaN();
+        }
+        softly.assertThat(out.mean("V_DC2P", 3.25, 3.4) / 5.0e5).as("DC2P during the second fault, pu: DCB open again, held off it").isGreaterThan(0.8);
+        softly.assertThat(out.mean("V_DC3P", 3.25, 3.4) / 5.0e5).as("DC3P during the second fault, pu: faulted").isLessThan(0.05);
+        softly.assertAll();
+    }
+
     private static Run run(String name, double runEnd, Path tempDir) {
         PscadProCases.Case scenario = PscadProCases.all().filter(c -> c.name().equals(name)).findFirst().orElseThrow();
         Network network = ExampleNetworks.withLoadFlow(scenario.network().get());
