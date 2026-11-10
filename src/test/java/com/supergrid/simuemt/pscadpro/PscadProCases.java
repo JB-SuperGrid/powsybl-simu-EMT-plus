@@ -363,6 +363,13 @@ final class PscadProCases {
                         new BranchOperation("T3", TwoSides.ONE, 4.76, BreakerAction.OPEN, FaultClearing.AT_CURRENT_ZERO),
                         new BranchOperation("T3", TwoSides.ONE, 4.95, BreakerAction.CLOSE, FaultClearing.AT_CURRENT_ZERO),
                         new DcSwitchOperation("DCB", 5.0, BreakerAction.CLOSE)),
+                // Example 4's controls, as ATP, Xyce and Kestrel share them: master-slave, VSC3's power reference stepped by 0.2 pu at
+                // 2.5 s; all on the droop, ramped by as much over 0.2 s; VSC3's power back along its 2 pu/s recovery ramp after a solid
+                // three-phase fault on B3, 100 ms, on either bench
+                converters("vsc-master-slave-step", () -> preprocessed("vsc-three-terminal", false, false), new ConverterPowerStep("VSC3", 2.5, 0.2)),
+                converters("vsc-droop-ramp", () -> preprocessed("vsc-three-terminal-all-droop", false, false), new ConverterPowerStep("VSC3", 2.5, 0.2, 0.2)),
+                converters("vsc-recovery-ramp", () -> recoveryRamp("vsc-three-terminal"), B3_FAULT),
+                converters("vsc-droop-recovery-ramp", () -> recoveryRamp("vsc-three-terminal-all-droop"), B3_FAULT),
                 // ... and those ATP, Xyce and Kestrel share that no PSCAD has run: the solid fault on DC3P cut off by the stations' AC breakers,
                 // two-level and MMC; the MMC grid's cleared selectively by DCB; the meshed MMC grid's faulted line cut off at both ends
                 converters("dc-fault-stations-open", () -> preprocessed("vsc-three-terminal-all-droop", true, true), stationsOpen()),
@@ -508,6 +515,23 @@ final class PscadProCases {
 
     /** Example 4's MMC grid with its DC breaker, its stations protected, VSC3 with an active power recovery ramp of 2 pu/s, as upstream's
      * restart after a DC fault has it. */
+    /** Upstream's {@code fault-b3-abc-0.3-0.4}, 2 s later: a solid three-phase fault on B3 from 2.3 to 2.4 s. */
+    private static final EmtEvent B3_FAULT = shifted((BusFault) events("fault-b3-abc-0.3-0.4").get(0));
+
+    private static BusFault shifted(BusFault fault) {
+        return new BusFault(fault.id(), fault.busId(), fault.phases(), fault.earthed(), fault.resistanceOhm(), fault.closeTimeSeconds() + 2.0,
+                fault.openTimeSeconds() + 2.0, fault.clearing());
+    }
+
+    /** {@code bench}, VSC3's fault ride-through with an active power recovery ramp of 2 pu/s - upstream's {@code recoveryRampStation}. */
+    private static Network recoveryRamp(String bench) {
+        Network network = bench(bench);
+        VoltageSourceConverter vsc3 = network.getVoltageSourceConverter("VSC3");
+        vsc3.addExtension(VscControlModel.class, GridFollowingControl.of(vsc3).withFaultRideThrough(new FaultRideThrough(0.9, 2.0, 2.0)));
+        EmtNetworkPreprocessor.preprocess(network, LocalComputationManager.getDefault());
+        return network;
+    }
+
     /** {@link #mmcRestart}, VSC3's protection restarting it ({@link AutomaticRestart}): its DC voltage above {@code threshold} pu for 20 ms,
      * blocked 0.1 s at least, twice at most - upstream's {@code restartedStationBench} (0.5) and {@code cycledRestartBench} (0.8). */
     private static Network mmcRestartsItself(double threshold) {
