@@ -12,9 +12,7 @@ import com.powsybl.simuemt.extensions.GeneratorModel;
 import com.powsybl.simuemt.extensions.arrester.ZnOArrester;
 import com.powsybl.simuemt.extensions.circuit.NumericalAids;
 import com.powsybl.simuemt.extensions.hvdc.AveragedConverterModel;
-import com.powsybl.simuemt.extensions.hvdc.AveragedMmcModel;
 import com.powsybl.simuemt.extensions.hvdc.AveragedVscInitialState;
-import com.powsybl.simuemt.extensions.hvdc.AveragedVscModel;
 import com.powsybl.simuemt.extensions.hvdc.DcBreakerModel;
 import com.powsybl.simuemt.extensions.hvdc.DcVoltageDroopLaw;
 import com.powsybl.simuemt.extensions.hvdc.HybridDcBreakerModel;
@@ -57,9 +55,9 @@ import static org.assertj.core.api.Assertions.within;
  *
  * <p>The four of 2026-11-10: no station blocked in the meshed grid, VSC3's DC current's crest 7.39 pu, every power back within 1e-5;
  * the AC breakers' cut, the stations blocked 0.85, 4.67 and 9.93 ms after the fault - the MMCs' 0.25, 3.09 and 6.93 -, nothing drawn
- * once cut off; VSC3's freewheeling decay 0.889 and the MMC's 0.373 on PSCAD's loop, 0.885 and 0.381, short of ATP's 0.919 and 0.387,
- * PSCAD's loop holding its bridge's rails' breakers ({@link #pscadFreewheelOhm}); the MMC grid's DCB, VSC3 blocked at ATP's 2.30024 s,
- * DC2P's crest 665.7 kV against ATP's 673.4. About 6 minutes the four.
+ * once cut off; VSC3's freewheeling decay 0.9192 and the MMC's 5.819 pu decaying to 0.3867 of it, ATP's 0.9193, 5.8125 and 0.387 -
+ * since upstream's {@code b35057db}: before it PSCAD's loop held its bridge's two rails' breakers, 0.889, 5.624 and 0.373; the MMC
+ * grid's DCB, VSC3 blocked at ATP's 2.30024 s, DC2P's crest 665.7 kV against ATP's 673.4. About 6 minutes the four.
  *
  * <p>Tagged {@code pscad}: run with {@code mvn test -Ppscad}.
  *
@@ -309,12 +307,8 @@ class PscadProConvertersTest {
      * AtpSolverIntegrationTest#theStationsAcBreakersCutTheBridgesOffASolidDcFault}, 2 s earlier) and to what ATP, Xyce and Kestrel share
      * ({@code BackendComparisonTest#allThreeBackendsCutTheStationsBridgesOffASolidDcFault}): every station blocked by its protection before
      * its breaker opens, nothing drawn from the AC side once it has; VSC1's and VSC2's DC currents died out into the fault, their DC
-     * voltages at earth; VSC3's freewheeling through its bridge's diodes, its capacitor ringing, 0.6 s on at {@code e^(-0.6 R / L)} of
-     * its 2.4-2.6 s mean within 0.01, as ATP is - R its loop's in PSCAD ({@link #pscadFreewheelOhm}).
-     *
-     * <p>Not ATP's 0.9193: PSCAD's loop is some 0.037 ohm where the other backends' is 0.027 - its bridge's rails' two breakers in it, its
-     * station's earthing not -, the freewheeling decaying faster, 0.889 against 0.885 from PSCAD's loop and 0.915 from ATP's (run
-     * 2026-11-10; upstream's writer, {@code PscadCircuitBuilder#addBlockableStage}).
+     * voltages at earth; VSC3's freewheeling through its bridge's diodes, 0.6 s on at ATP's 0.9193 of its 2.4-2.6 s mean within the
+     * 0.0015 Xyce and Kestrel are held to, its capacitor ringing.
      */
     @Test
     void theStationsAcBreakersCutTheBridgesOffASolidDcFault(@TempDir Path tempDir) {
@@ -323,14 +317,12 @@ class PscadProConvertersTest {
         PscadOutput out = run.output;
         SoftAssertions softly = new SoftAssertions();
         cutOffTheirAcSides(softly, "dc-fault-stations-open", run, runEnd);
-        AveragedVscModel model = (AveragedVscModel) run.network.getVoltageSourceConverter("VSC3").getExtension(VoltageSourceConverterModel.class);
-        double expected = Math.exp(-0.6 * pscadFreewheelOhm(0.0) / (model.getDcReactorInductance() + model.getBridgeInductance()));
         double early = out.mean("VSC3_IDC", 2.4, 2.6);
         double decay = out.mean("VSC3_IDC", 3.0, runEnd) / early;
-        System.out.printf(Locale.ROOT, "dc-fault-stations-open: VSC3 DC current %.3f pu at 2.4-2.6 s, %.4f of it at 3.0-3.2 s (PSCAD's loop %.4f, ATP 0.9193); its DC voltage's crest %.3f%n",
-                early, decay, expected, out.peakAbsolute("VSC3_VDC", 3.0, runEnd));
+        System.out.printf(Locale.ROOT, "dc-fault-stations-open: VSC3 DC current %.3f pu at 2.4-2.6 s, %.4f of it at 3.0-3.2 s (ATP 0.9193); its DC voltage's crest %.3f%n",
+                early, decay, out.peakAbsolute("VSC3_VDC", 3.0, runEnd));
         softly.assertThat(early).as("VSC3 DC current at 2.4-2.6 s, pu: its reactor's, freewheeling into the fault").isGreaterThan(15.0);
-        softly.assertThat(decay).as("VSC3 DC current at 3.0-3.2 s against 2.4-2.6 s: its loop's L / R").isCloseTo(expected, within(0.01));
+        softly.assertThat(decay).as("VSC3 DC current at 3.0-3.2 s against 2.4-2.6 s: ATP's").isCloseTo(0.9193, within(0.0015));
         softly.assertThat(out.peakAbsolute("VSC3_VDC", 3.0, runEnd)).as("VSC3 DC voltage at the end, pu: its capacitor ringing").isGreaterThan(0.2);
         softly.assertAll();
     }
@@ -339,9 +331,8 @@ class PscadProConvertersTest {
      * The same with MMC stations and no DC reactor added, run 3.2 s - no PSCAD run upstream; held to ATP's checks ({@code
      * AtpSolverIntegrationTest#theStationsAcBreakersLetAnMmcsDcCurrentDieOut}) and to what the three share ({@code
      * BackendComparisonTest#allThreeBackendsLetAnMmcsDcCurrentDieOutOnceItsAcBreakerHasOpened}): VSC3's DC current round its arms' DC
-     * equivalent, the next 0.1 s at {@code e^(-0.1 R / L)} of its 2.4-2.5 s mean within 0.02, as ATP is - R its loop's in PSCAD ({@link
-     * #pscadFreewheelOhm}), its arms' resistance in it -; under 0.2% of it at 3.1-3.2 s; at 2.4-2.5 s within 0.25 pu of ATP's 5.8125, PSCAD's
-     * loop's extra 0.01 ohm having taken 3% off it by then (run 2026-11-10: 5.624, its decay 0.373 against ATP's 0.387).
+     * equivalent 5.8125 pu at 2.4-2.5 s, ATP's, within the 0.03 Xyce and Kestrel are held to; 0.387 of it the next 0.1 s, ATP's, within
+     * 0.01, Xyce's and Kestrel's tolerance; under 0.2% of it at 3.1-3.2 s.
      */
     @Test
     void theStationsAcBreakersLetAnMmcsDcCurrentDieOut(@TempDir Path tempDir) {
@@ -350,17 +341,13 @@ class PscadProConvertersTest {
         PscadOutput out = run.output;
         SoftAssertions softly = new SoftAssertions();
         cutOffTheirAcSides(softly, "mmc-stations-open", run, runEnd);
-        VoltageSourceConverter vsc3 = run.network.getVoltageSourceConverter("VSC3");
-        AveragedMmcModel model = (AveragedMmcModel) vsc3.getExtension(VoltageSourceConverterModel.class);
-        double baseKv = vsc3.getTerminal1().getVoltageLevel().getNominalV();
-        double expected = Math.exp(-0.1 * pscadFreewheelOhm(model.dcSeriesResistanceOhm(baseKv)) / model.dcSeriesInductanceH(baseKv, 2 * Math.PI * FREQUENCY));
         double current = out.mean("VSC3_IDC", 2.4, 2.5);
         double decay = out.mean("VSC3_IDC", 2.5, 2.6) / current;
         double end = out.mean("VSC3_IDC", 3.1, runEnd) / current;
-        System.out.printf(Locale.ROOT, "mmc-stations-open: VSC3 DC current %.4f pu at 2.4-2.5 s (ATP 5.8125), %.4f of it the next 0.1 s (PSCAD's loop %.4f, ATP 0.387), %.2e at 3.1-3.2 s%n",
-                current, decay, expected, end);
-        softly.assertThat(current).as("VSC3 DC current at 2.4-2.5 s, pu: ATP's, less what PSCAD's loop takes").isCloseTo(5.8125, within(0.25));
-        softly.assertThat(decay).as("VSC3 DC current at 2.5-2.6 s against 2.4-2.5 s: its loop's L / R").isCloseTo(expected, within(0.02));
+        System.out.printf(Locale.ROOT, "mmc-stations-open: VSC3 DC current %.4f pu at 2.4-2.5 s (ATP 5.8125), %.4f of it the next 0.1 s (ATP 0.387), %.2e at 3.1-3.2 s%n",
+                current, decay, end);
+        softly.assertThat(current).as("VSC3 DC current at 2.4-2.5 s, pu: ATP's").isCloseTo(5.8125, within(0.03));
+        softly.assertThat(decay).as("VSC3 DC current at 2.5-2.6 s against 2.4-2.5 s: ATP's").isCloseTo(0.387, within(0.01));
         softly.assertThat(end).as("VSC3 DC current at 3.1-3.2 s against 2.4-2.5 s: died out").isLessThan(0.002);
         softly.assertAll();
     }
@@ -500,17 +487,6 @@ class PscadProConvertersTest {
                 softly.assertThat(out.mean(id + "_P", start, end)).as("%s power from %.1f s, pu: drawn into the fault", id, start).isGreaterThan(0.4);
             }
         }
-    }
-
-    /**
-     * A blocked station's freewheeling loop on a solid fault at its pole in PSCAD, ohm, besides its own {@code seriesOhm}: the fault's
-     * closed breaker; its bridge's three legs in parallel, two diodes each; its rails' two breakers, both in the loop - each at {@link
-     * NumericalAids#FAULT_ON_RESISTANCE_OHM}; its station's earthing none, PSCAD's solidly earthed DC node being earth. The other
-     * backends have no rails' breakers and earth it through 0.01 ohm.
-     */
-    private static double pscadFreewheelOhm(double seriesOhm) {
-        double closed = NumericalAids.FAULT_ON_RESISTANCE_OHM;
-        return seriesOhm + closed + 2.0 * closed / 3.0 + 2.0 * closed;
     }
 
     /** How much more {@code id} takes from the DC network for each kV its DC voltage drops, MW/kV: its droop's slope at its load flow point. */
