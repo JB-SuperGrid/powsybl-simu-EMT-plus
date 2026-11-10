@@ -28,6 +28,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 
@@ -549,6 +550,107 @@ class PscadProConvertersTest {
         softly.assertThat(out.mean("V_DC2P", 3.25, 3.4) / 5.0e5).as("DC2P during the second fault, pu: DCB open again, held off it").isGreaterThan(0.8);
         softly.assertThat(out.mean("V_DC3P", 3.25, 3.4) / 5.0e5).as("DC3P during the second fault, pu: faulted").isLessThan(0.05);
         softly.assertAll();
+    }
+
+    /**
+     * {@link #anMmcStationRestartsAfterADcFault}'s VSC3 faulted three times on DC3P - at 2.3 s for 0.2 s, cleared by DCB, left open, and T3,
+     * reclosed at 2.55 s; at 3.2 and 3.9 s for 50 ms -, its protection restarting it with no order to ({@code AutomaticRestart}: above 0.5
+     * pu for 20 ms, blocked 0.1 s at least, twice at most), run 4.5 s; held to upstream's {@code
+     * AtpSolverIntegrationTest#aStationRestartsItselfTwiceThenStaysBlocked}, shifted 2 s: restarted first on its DC voltage, its diodes
+     * recharging its section once T3 is reclosed, 20 ms after it rose past 0.5 pu - ATP at 2.5746 s -, then on its minimum blocked time;
+     * locked out after its third trip; its section on its droop while it runs, at 1.028 pu, nothing to exchange.
+     */
+    @Test
+    void anMmcStationRestartsItselfTwiceThenStaysBlocked(@TempDir Path tempDir) {
+        double runEnd = 4.5;
+        PscadOutput out = run("mmc-restart-itself", runEnd, tempDir).output;
+        double[] edges = runningEdges(out, 6);
+        double voltageUp = out.firstTimeAbove("VSC3_VDC", 0.5, 2.5);
+        System.out.printf(Locale.ROOT, "mmc-restart-itself: VSC3 tripped at %.6f, %.6f, %.6f s, restarted at %.6f, %.6f s; DC voltage up %.6f s;"
+                + " DC voltage %.4f / %.4f pu running, %.4f locked out; IDC crest %.3f pu%n", edges[0], edges[2], edges[4], edges[1], edges[3], voltageUp,
+                out.mean("VSC3_VDC", 3.0, 3.2), out.mean("VSC3_VDC", 3.7, 3.9), out.mean("VSC3_VDC", 4.0, runEnd), out.peakAbsolute("VSC3_IDC", edges[1], edges[1] + 0.05));
+        SoftAssertions softly = new SoftAssertions();
+        softly.assertThat(edges[0]).as("VSC3's first trip, s: the first fault").isBetween(FAULT, FAULT + 1.0e-3);
+        softly.assertThat(voltageUp).as("VSC3's DC voltage above the threshold at, s: T3 reclosed").isBetween(2.55, 2.56);
+        softly.assertThat(edges[1] - voltageUp).as("VSC3's first restart after its DC voltage rose, s: the hold time").isCloseTo(0.02, within(2.0e-4));
+        softly.assertThat(edges[1]).as("VSC3's first restart, s: ATP's 2.5746").isCloseTo(2.5746, within(1.0e-3));
+        softly.assertThat(edges[2]).as("VSC3's second trip, s: the second fault").isBetween(3.2, 3.201);
+        softly.assertThat(out.mean("VSC3_VDC", 3.26, 3.3)).as("VSC3's DC voltage before its second restart, pu").isBetween(0.7, 0.8);
+        softly.assertThat(edges[3] - edges[2]).as("VSC3's second restart after its trip, s: the minimum blocked time").isCloseTo(0.1, within(2.0e-4));
+        softly.assertThat(edges[4]).as("VSC3's third trip, s: the third fault").isBetween(3.9, 3.901);
+        softly.assertThat(edges[5]).as("VSC3 restarted after its third trip: never").isNaN();
+        softly.assertThat(out.mean("VSC3_VDC", 4.0, runEnd)).as("VSC3's DC voltage blocked for good, pu: its diodes'").isBetween(0.6, 0.8);
+        for (double[] running : new double[][] {{3.0, 3.2}, {3.7, 3.9}}) {
+            softly.assertThat(out.mean("VSC3_VDC", running[0], running[1])).as("VSC3's DC voltage restarted from %.1f s, pu: its section on its droop", running[0])
+                    .isCloseTo(1.028, within(0.005));
+            softly.assertThat(out.mean("VSC3_P", running[0], running[1])).as("VSC3's power restarted from %.1f s, pu: nothing to exchange", running[0])
+                    .isCloseTo(0.0, within(0.01));
+        }
+        softly.assertThat(out.peakAbsolute("VSC3_IDC", edges[1], edges[1] + 0.05)).as("VSC3's DC current's crest at its first restart, pu").isBetween(3.0, 4.5);
+        for (String id : List.of("VSC1", "VSC2")) {
+            softly.assertThat(out.firstTimeBelow(id + "_RUN", 0.5, 2.1)).as("%s blocked, s: never, DCB open", id).isNaN();
+        }
+        softly.assertAll();
+    }
+
+    /**
+     * The same VSC3 faulted on DC3P at 2.3, 3.5 and 4.7 s for 0.2 s, each fault cleared by DCB 2 ms after it and T3 60 ms after it, both
+     * reclosed once it is gone - each breaker operated six times -, its protection restarting it on its DC voltage back from the grid
+     * ({@code AutomaticRestart}: above 0.8 pu for 20 ms, blocked 0.1 s at least, twice at most), run 5.5 s; held to upstream's {@code
+     * AtpSolverIntegrationTest#aStationRestartsItselfAfterEachReclosingTwiceThenStaysBlocked}, shifted 2 s: tripped at each fault,
+     * restarted 20 to 25 ms after DCB's first two reclosings, back on its power before the fault each time; blocked for good after the
+     * third, the grid's DC voltage back at its station; the three cycles alike.
+     */
+    @Test
+    void anMmcStationRestartsItselfAfterEachReclosingTwiceThenStaysBlocked(@TempDir Path tempDir) {
+        double runEnd = 5.5;
+        PscadOutput out = run("mmc-restart-cycled", runEnd, tempDir).output;
+        double[] edges = runningEdges(out, 6);
+        double before = out.mean("VSC3_P", 2.2, 2.3);
+        System.out.printf(Locale.ROOT, "mmc-restart-cycled: VSC3 tripped at %.6f, %.6f, %.6f s, restarted at %.6f, %.6f s; P %.4f before, %.4f and %.4f"
+                + " after; DC voltage %.4f at the end%n", edges[0], edges[2], edges[4], edges[1], edges[3], before, out.mean("VSC3_P", 3.2, 3.45),
+                out.mean("VSC3_P", 4.4, 4.65), out.mean("VSC3_VDC", 5.1, runEnd));
+        SoftAssertions softly = new SoftAssertions();
+        double[] faults = {2.3, 3.5, 4.7};
+        for (int k = 0; k < 3; k++) {
+            double fault = faults[k];
+            softly.assertThat(edges[2 * k]).as("VSC3 blocked at, s: the fault at %.1f s", fault).isBetween(fault, fault + 1.0e-3);
+            softly.assertThat(out.mean("VSC3_VAC", fault + 0.1, fault + 0.2)).as("VSC3's AC voltage, pu: T3 open after the fault at %.1f s", fault).isLessThan(0.01);
+            softly.assertThat(out.mean("VSC3_VAC", fault + 0.26, fault + 0.3)).as("VSC3's AC voltage, pu: T3 reclosed after the fault at %.1f s", fault)
+                    .isCloseTo(1.0, within(0.03));
+            if (k < 2) {
+                softly.assertThat(edges[2 * k + 1] - (fault + 0.3)).as("VSC3 restarted after DCB's reclosing at %.1f s, s: its DC voltage back, held 20 ms",
+                        fault + 0.3).isBetween(0.02, 0.025);
+                softly.assertThat(out.mean("VSC3_P", fault + 0.9, fault + 1.15)).as("VSC3's power back after the fault at %.1f s, pu", fault)
+                        .isCloseTo(before, within(2.0e-3));
+            }
+        }
+        softly.assertThat(edges[5]).as("VSC3 restarted after its third trip: never").isNaN();
+        softly.assertThat(out.mean("VSC3_VDC", 5.1, runEnd)).as("VSC3's DC voltage, pu: the grid's, DCB reclosed").isGreaterThan(0.95);
+        softly.assertThat(out.mean("VSC3_VDC", 3.6, 3.8)).as("VSC3's DC voltage through the second fault's clearing, pu: as through the first's")
+                .isCloseTo(out.mean("VSC3_VDC", 2.4, 2.6), within(1.0e-3));
+        softly.assertThat(out.mean("VSC3_P", 4.4, 4.65)).as("VSC3's power after its second restart, pu: as after its first")
+                .isCloseTo(out.mean("VSC3_P", 3.2, 3.45), within(1.0e-3));
+        for (String id : List.of("VSC1", "VSC2")) {
+            softly.assertThat(out.firstTimeBelow(id + "_RUN", 0.5, 2.1)).as("%s blocked, s: never", id).isNaN();
+        }
+        softly.assertAll();
+    }
+
+    /** VSC3's running flag's first {@code count} edges from 2.1 s - down, up, down... -, each past the one before by a microsecond, NaN from
+     * the first missing on. */
+    private static double[] runningEdges(PscadOutput out, int count) {
+        double[] edges = new double[count];
+        Arrays.fill(edges, Double.NaN);
+        double t = 2.1;
+        for (int edge = 0; edge < count; edge++) {
+            t = edge % 2 == 0 ? out.firstTimeBelow("VSC3_RUN", 0.5, t + 1.0e-6) : out.firstTimeAbove("VSC3_RUN", 0.5, t + 1.0e-6);
+            edges[edge] = t;
+            if (Double.isNaN(t)) {
+                break;
+            }
+        }
+        return edges;
     }
 
     private static Run run(String name, double runEnd, Path tempDir) {
