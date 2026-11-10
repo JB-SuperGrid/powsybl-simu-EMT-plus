@@ -158,6 +158,12 @@ final class PscadProCases {
                 fromRest("vsc-grid-forming", () -> bench("vsc-monopole-infinite-buses-3")),
                 fromRest("vsc-dc-chopper", () -> bench("vsc-monopole-infinite-buses-2")),
                 fromRest("vsc-dc-droop", PscadProCases::dcDroop),
+                // Upstream's catalogue's other Professional examples: the VSC monopole with its parallel AC line, three ways, and example 4
+                // on its master and slave
+                fromRest("vsc-monopole", () -> preprocessed("vsc-monopole", false, false)),
+                fromRest("vsc-monopole-2", () -> preprocessed("vsc-monopole-2", false, false)),
+                fromRest("vsc-monopole-3", () -> preprocessed("vsc-monopole-3", false, false)),
+                fromRest("vsc-master-slave", () -> preprocessed("vsc-three-terminal", false, false)),
                 fromRest("cigre-dcs2", () -> bench("cigre-dcs2")),
                 fromRest("cigre-b4", () -> bench("cigre-b4")),
                 fromRest("ieee14-dc", () -> bench("ieee14-dc")),

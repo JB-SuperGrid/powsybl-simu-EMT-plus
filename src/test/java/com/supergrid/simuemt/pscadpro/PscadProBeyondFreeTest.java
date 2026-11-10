@@ -8,6 +8,11 @@ import com.powsybl.iidm.network.Bus;
 import com.powsybl.iidm.network.Line;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.ThreeWindingsTransformer;
+import com.powsybl.iidm.network.VoltageLevel;
+import com.powsybl.iidm.network.extensions.ThreeWindingsTransformerFortescue;
+import com.powsybl.iidm.network.extensions.ThreeWindingsTransformerFortescueAdder;
+import com.powsybl.iidm.network.extensions.ThreeWindingsTransformerPhaseAngleClockAdder;
+import com.powsybl.iidm.network.extensions.WindingConnectionType;
 import com.powsybl.simuemt.extensions.GeneratorModel;
 import com.powsybl.simuemt.extensions.circuit.VectorGroupOffsets;
 import com.powsybl.simuemt.extensions.event.EmtEvent;
@@ -223,6 +228,94 @@ class PscadProBeyondFreeTest {
             softly.assertThat(raised).as("B2%s raised by the line back in service", phase).isGreaterThan(1.01);
         }
         softly.assertAll();
+    }
+
+    static Stream<Arguments> windingConnections() {
+        return Stream.of(
+                Arguments.of(WindingConnectionType.Y_GROUNDED, WindingConnectionType.Y_GROUNDED, WindingConnectionType.DELTA, 0, 11),
+                Arguments.of(WindingConnectionType.Y_GROUNDED, WindingConnectionType.DELTA, WindingConnectionType.DELTA, 1, 11),
+                Arguments.of(WindingConnectionType.DELTA, WindingConnectionType.Y_GROUNDED, WindingConnectionType.Y, 11, 1),
+                Arguments.of(WindingConnectionType.Y_GROUNDED, WindingConnectionType.Y_GROUNDED, WindingConnectionType.Y_GROUNDED, 6, 4));
+    }
+
+    /**
+     * A three-winding transformer with winding connections, legs 2 and 3 at their clock numbers against leg 1 - a delta tertiary, a
+     * delta leg 1, star-star at 6 on a leg moved and reversed -, leg 2's star point earthed through 20 ohm: a node more than PSCAD Free
+     * allows on this bench. Upstream's steady-state check of it ({@code PscadSteadyStateTest#settlesAtTheLoadFlowDisplacedByEachLegsClockNumber},
+     * removed with the writer's Professional tests in its {@code bd32eb0d}) run live here: from the steady state, 0.2 s, in the first
+     * period and the last 60 ms every bus at the load flow's voltage within 1e-4 pu and at its angle from B2, the infinite bus,
+     * displaced by its leg's clock number, within 0.01 degree - the phase shifters' bounds.
+     */
+    @ParameterizedTest(name = "{0}-{1}-{2} {3}/{4}")
+    @MethodSource("windingConnections")
+    void aThreeWindingTransformerDisplacesEachLegByItsClockNumber(WindingConnectionType connection1, WindingConnectionType connection2,
+                                                                 WindingConnectionType connection3, int clock2, int clock3, @TempDir Path tempDir) {
+        Network network = ExampleNetworks.createThreeBusNetworkWithThreeWindingsTransformer();
+        network.getGenerator("GEN").addExtension(GeneratorModel.class, new InfiniteBusGeneratorModel(0.0, 0.0));
+        ThreeWindingsTransformer transformer = network.getThreeWindingsTransformer("T2_3_4");
+        ThreeWindingsTransformerFortescueAdder fortescue = transformer.newExtension(ThreeWindingsTransformerFortescueAdder.class);
+        fortescue.leg1().withConnectionType(connection1).withFreeFluxes(true).add();
+        fortescue.leg2().withConnectionType(connection2).withFreeFluxes(true).add();
+        fortescue.leg3().withConnectionType(connection3).withFreeFluxes(true).add();
+        fortescue.add();
+        transformer.newExtension(ThreeWindingsTransformerPhaseAngleClockAdder.class).withPhaseAngleClockLeg2(clock2).withPhaseAngleClockLeg3(clock3).add();
+        transformer.getExtension(ThreeWindingsTransformerFortescue.class).getLeg2().setGroundingX(20.0);
+        ExampleNetworks.withLoadFlow(network);
+        double runEnd = 0.2;
+
+        PscadProSimulation.PscadProRun run = PscadProSimulation.runFromSteadyState(network, tempDir, settings(runEnd), List.of(), PRO);
+
+        String what = connection1 + "-" + connection2 + "-" + connection3 + " " + clock2 + "/" + clock3;
+        holdsEveryBusOnTheLoadFlow(run, network, "B2", what, runEnd, new SoftAssertions()).assertAll();
+    }
+
+    /**
+     * A bus whose IIDM id spells an internal node of the machine's - T_GEN, against the node GEN stands on behind its power meter - on the
+     * UEL2C's two-bus bench, a line and a load on it: upstream's {@code PscadFileWriterTest#writeRenamesAnInternalNodeABusSpells}, removed
+     * with the writer's Professional tests in its {@code bd32eb0d}, run live here. The bus keeps its name - the internal node takes another -
+     * and holds the load flow's voltage, as B1 and B2 do: from the steady state, 0.2 s, in the first period and the last 60 ms, every bus
+     * within 1e-4 pu and 0.01 degree of the load flow from B1.
+     */
+    @Test
+    void aBusSpellingAMachinesInternalNodeKeepsItsName(@TempDir Path tempDir) {
+        Network network = ExampleNetworks.createTwoBusNetworkWithUel2C(false);
+        VoltageLevel vl2 = network.getVoltageLevel("VL2");
+        vl2.getBusBreakerView().newBus().setId("T_GEN").add();
+        network.newLine().setId("L2_T").setBus1("B2").setConnectableBus1("B2").setBus2("T_GEN").setConnectableBus2("T_GEN")
+                .setR(1.0).setX(10.0).setG1(0.0).setB1(0.0).setG2(0.0).setB2(0.0).add();
+        vl2.newLoad().setId("LT").setBus("T_GEN").setConnectableBus("T_GEN").setP0(10.0).setQ0(2.0).add();
+        ExampleNetworks.withLoadFlow(network);
+        double runEnd = 0.2;
+
+        PscadProSimulation.PscadProRun run = PscadProSimulation.runFromSteadyState(network, tempDir, settings(runEnd), List.of(), PRO);
+
+        SoftAssertions softly = new SoftAssertions();
+        softly.assertThat(run.project().circuit().busNodes()).as("T_GEN's node, the bus's own name").containsEntry("T_GEN", "T_GEN");
+        holdsEveryBusOnTheLoadFlow(run, network, "B1", "T_GEN", runEnd, softly).assertAll();
+    }
+
+    /** Every bus but {@code reference} in the first period and the last 60 ms: at the load flow's voltage within 1e-4 pu, and at its angle
+     * from {@code reference}, displaced by the vector groups', within 0.01 degree. */
+    private static SoftAssertions holdsEveryBusOnTheLoadFlow(PscadProSimulation.PscadProRun run, Network network, String reference, String what,
+                                                             double runEnd, SoftAssertions softly) {
+        VectorGroupOffsets offsets = VectorGroupOffsets.of(network);
+        Bus origin = network.getBusBreakerView().getBus(reference);
+        for (double[] window : new double[][] {{TIME_STEP, TIME_STEP + 1.0 / FREQUENCY}, {runEnd - 0.06, runEnd}}) {
+            for (Bus bus : network.getBusBreakerView().getBuses()) {
+                if (bus == origin) {
+                    continue;
+                }
+                double nominal = bus.getVoltageLevel().getNominalV();
+                double puError = magnitude(run, bus.getId(), 'A', window) / (nominal * 1.0e3 * SQRT_TWO_THIRDS) - bus.getV() / nominal;
+                double expected = bus.getAngle() - origin.getAngle() + offsets.degrees(bus) - offsets.degrees(origin);
+                double angleError = Math.IEEEremainder(angleFrom(run, reference, bus.getId(), window) - expected, 360.0);
+                System.out.printf(Locale.ROOT, "%s %s from %.5f s: %.3e pu, %.3e degree%n", what, bus.getId(), window[0], puError, angleError);
+                softly.assertThat(puError).as("|V(%s)| against the load flow's, pu, %s, from %.5f s", bus.getId(), what, window[0]).isCloseTo(0.0, within(1.0e-4));
+                softly.assertThat(angleError).as("V(%s)'s angle from V(%s) against the load flow's, degrees, %s, from %.5f s", bus.getId(), reference, what,
+                        window[0]).isCloseTo(0.0, within(0.01));
+            }
+        }
+        return softly;
     }
 
     /**

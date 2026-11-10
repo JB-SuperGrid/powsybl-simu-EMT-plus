@@ -45,7 +45,7 @@ Phasor b2 = run.output().fundamentalPhasor(run.project().circuit().voltageChanne
 
 - `mvn test`: without PSCAD: every case's `.pscx` is written, the driver ships and Python compiles it, its report is read.
 - `mvn test -Ppscad`: the real PSCAD.
-  - `PscadProBuildTest` builds each case of `PscadProCases` (114: every upstream example network the backend writes, those
+  - `PscadProBuildTest` builds each case of `PscadProCases` (118: every upstream example network the backend writes, those
     past PSCAD Free's 15 electrical nodes among them, and this project's own: CIGRE B4's DC grid test system, whole
     (`CigreB4Network`, `src/test/resources/cigre-b4*`), the IEEE 14-bus network with a meshed DC grid and Dynawo's machines
     (`Ieee14DcNetwork`, `src/test/resources/ieee14-dc*`), and Kundur's two-area system with a three-terminal DC grid beside its
@@ -63,7 +63,12 @@ Phasor b2 = run.output().fundamentalPhasor(run.project().circuit().voltageChanne
     to what upstream holds ATP, Xyce and Kestrel to: the four phase-shifter benches on the load flow, a line put back into
     service, a three-winding transformer's leg closed, and left open from rest, an open-ended energization with and without
     its arrester, and a chain of twelve buses on the load flow; and the YNd11 bench restarted through a fault from a
-    Professional template, whose snapshot renumbers its nodes.
+    Professional template, whose snapshot renumbers its nodes; a three-winding transformer's legs displaced by their clock
+    numbers, and a bus spelling a machine's internal node keeping its name - upstream's writer tests of them removed with
+    their Professional projects.
+  - `PscadProExampleCoverageTest` runs every example upstream's catalogue (`ExampleCatalogue`) tags as PSCAD Professional's
+    alone - past Free's 15 nodes, twenty today - from rest and holds it to its load flow: an example upstream adds there runs
+    here with nothing to add. `-Dpscad.examples=vsc-monopole-3,...` runs only those.
   - Upstream's twelve PSCAD tests that read a PSCAD Professional run, tagged `professional` and left out of its builds since
     its `5e6fb79d`, run here live: the YNd11 restart above, CIGRE DCS2's four scenarios (`PscadProCigreDcs2Test`) and
     example 3's and 4's seven converter scenarios (`PscadProConvertersTest`).
