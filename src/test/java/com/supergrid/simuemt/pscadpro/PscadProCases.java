@@ -25,6 +25,7 @@ import com.powsybl.simuemt.extensions.event.FaultClearing;
 import com.powsybl.simuemt.extensions.event.LoadStep;
 import com.powsybl.simuemt.extensions.event.SwitchOperation;
 import com.powsybl.simuemt.extensions.excitation.ExcitationSystemModel;
+import com.powsybl.simuemt.extensions.hvdc.AutomaticRestart;
 import com.powsybl.simuemt.extensions.hvdc.AveragedVscModel;
 import com.powsybl.simuemt.extensions.hvdc.OvercurrentProtection;
 import com.powsybl.simuemt.extensions.hvdc.VoltageSourceConverterModel;
@@ -340,6 +341,28 @@ final class PscadProCases {
                                 FaultClearing.AT_CURRENT_ZERO), new DcSwitchOperation("DCB", 2.6, BreakerAction.CLOSE),
                         new BranchOperation("T3", TwoSides.ONE, 2.7, BreakerAction.CLOSE, FaultClearing.AT_CURRENT_ZERO), new ConverterDeblocking("VSC3", 2.8),
                         new DcFault("FDC2", "DC3P", 0.0, 3.2, 3.4), new DcSwitchOperation("DCB", 3.202, BreakerAction.OPEN)),
+                // ... and VSC3 restarted by its protection, with no order to (AutomaticRestart): three faults on DC3P, DCB left open, T3
+                // reclosed after the first; and three faults each cleared by DCB and T3, both reclosed after each
+                converters("mmc-restart-itself", () -> mmcRestartsItself(0.5), new DcFault("FDC1", "DC3P", 0.0, 2.3, 2.5),
+                        new DcSwitchOperation("DCB", 2.302, BreakerAction.OPEN),
+                        new BranchOperation("T3", TwoSides.ONE, 2.36, BreakerAction.OPEN, FaultClearing.AT_CURRENT_ZERO),
+                        new BranchOperation("T3", TwoSides.ONE, 2.55, BreakerAction.CLOSE, FaultClearing.AT_CURRENT_ZERO),
+                        new DcFault("FDC2", "DC3P", 0.0, 3.2, 3.25), new DcFault("FDC3", "DC3P", 0.0, 3.9, 3.95)),
+                converters("mmc-restart-cycled", () -> mmcRestartsItself(0.8), new DcFault("FDC1", "DC3P", 0.0, 2.3, 2.5),
+                        new DcSwitchOperation("DCB", 2.302, BreakerAction.OPEN),
+                        new BranchOperation("T3", TwoSides.ONE, 2.36, BreakerAction.OPEN, FaultClearing.AT_CURRENT_ZERO),
+                        new BranchOperation("T3", TwoSides.ONE, 2.55, BreakerAction.CLOSE, FaultClearing.AT_CURRENT_ZERO),
+                        new DcSwitchOperation("DCB", 2.6, BreakerAction.CLOSE),
+                        new DcFault("FDC2", "DC3P", 0.0, 3.5, 3.7),
+                        new DcSwitchOperation("DCB", 3.502, BreakerAction.OPEN),
+                        new BranchOperation("T3", TwoSides.ONE, 3.56, BreakerAction.OPEN, FaultClearing.AT_CURRENT_ZERO),
+                        new BranchOperation("T3", TwoSides.ONE, 3.75, BreakerAction.CLOSE, FaultClearing.AT_CURRENT_ZERO),
+                        new DcSwitchOperation("DCB", 3.8, BreakerAction.CLOSE),
+                        new DcFault("FDC3", "DC3P", 0.0, 4.7, 4.9),
+                        new DcSwitchOperation("DCB", 4.702, BreakerAction.OPEN),
+                        new BranchOperation("T3", TwoSides.ONE, 4.76, BreakerAction.OPEN, FaultClearing.AT_CURRENT_ZERO),
+                        new BranchOperation("T3", TwoSides.ONE, 4.95, BreakerAction.CLOSE, FaultClearing.AT_CURRENT_ZERO),
+                        new DcSwitchOperation("DCB", 5.0, BreakerAction.CLOSE)),
                 // ... and those ATP, Xyce and Kestrel share that no PSCAD has run: the solid fault on DC3P cut off by the stations' AC breakers,
                 // two-level and MMC; the MMC grid's cleared selectively by DCB; the meshed MMC grid's faulted line cut off at both ends
                 converters("dc-fault-stations-open", () -> preprocessed("vsc-three-terminal-all-droop", true, true), stationsOpen()),
@@ -485,6 +508,15 @@ final class PscadProCases {
 
     /** Example 4's MMC grid with its DC breaker, its stations protected, VSC3 with an active power recovery ramp of 2 pu/s, as upstream's
      * restart after a DC fault has it. */
+    /** {@link #mmcRestart}, VSC3's protection restarting it ({@link AutomaticRestart}): its DC voltage above {@code threshold} pu for 20 ms,
+     * blocked 0.1 s at least, twice at most - upstream's {@code restartedStationBench} (0.5) and {@code cycledRestartBench} (0.8). */
+    private static Network mmcRestartsItself(double threshold) {
+        Network network = mmcRestart();
+        network.getVoltageSourceConverter("VSC3").addExtension(VscProtectionModel.class,
+                new OvercurrentProtection(2.0, 0.0, new AutomaticRestart(threshold, 0.02, 0.1, 2)));
+        return network;
+    }
+
     private static Network mmcRestart() {
         Network network = bench("vsc-three-terminal-dc-breaker-mmc");
         network.getVoltageSourceConverters().forEach(converter -> converter.addExtension(VscProtectionModel.class, new OvercurrentProtection(2.0, 0.0)));
