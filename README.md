@@ -91,8 +91,7 @@ Phasor b2 = run.output().fundamentalPhasor(run.project().circuit().voltageChanne
     stations' bridges (blocked by order, by their protections, MMCs), cleared by a DC breaker, an MMC restarted after it -
     from rest at 20 us, held to the checks upstream holds those runs to; and four DC fault scenarios ATP, Xyce and Kestrel
     share that no PSCAD had run - the stations' AC breakers cutting a solid DC fault off, two-level and MMC, an MMC grid's DC
-    breaker, a meshed MMC grid's faulted line cut off at both ends -, held to ATP's checks, the freewheeling decay to
-    PSCAD's own loop resistance (its bridge's rails' breakers add 0.01 ohm the other backends do not have).
+    breaker, a meshed MMC grid's faulted line cut off at both ends -, held to ATP's checks and values.
   - `PscadProSt6BTest` runs upstream's IEEE ST6B benches from rest at 20 us - through the fault B1 alone and with an OEL1B
     at position 1 or 4, and through a 15% step with its field current limiter acting - and holds them to the Xyce tables
     and tolerances upstream holds its stored PSCAD Free runs to.
