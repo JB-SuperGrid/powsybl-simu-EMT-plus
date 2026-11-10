@@ -37,7 +37,8 @@ import static org.assertj.core.api.Assertions.within;
  * The eight converter scenarios of {@link PscadProCases} that upstream could only run in PSCAD Professional - past PSCAD Free's 15
  * nodes or 1024 components - and stores as hand-made runs of 2026-11-07 ({@code PscadFileWriterTest}): run live in PSCAD Professional
  * from rest at 20 us, as upstream's, and held to the checks upstream holds those runs to, themselves ATP's or Kestrel's on the same
- * benches - the numbers copied, the code this project's own. A WT4B wind turbine blocked; Example 3's grid-forming VSC2 blocked then
+ * benches - the numbers copied, the code this project's own. Upstream has tagged those tests {@code professional} and left them out
+ * of its builds since its {@code 5e6fb79d}, its repository keeping PSCAD Free's results only: they run here. A WT4B wind turbine blocked; Example 3's grid-forming VSC2 blocked then
  * deblocked; Example 4 on its droops losing VSC1; Example 4 through a solid DC fault fed through its stations' bridges, blocked by order,
  * by their protections, or with MMC stations; cleared selectively by its DC breaker; and an MMC station restarted after it. And four
  * that ATP, Xyce and Kestrel share and no PSCAD had run ({@code BackendComparisonTest}, {@code AtpSolverIntegrationTest}), held to

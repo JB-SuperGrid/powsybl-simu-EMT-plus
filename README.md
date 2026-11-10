@@ -62,7 +62,11 @@ Phasor b2 = run.output().fundamentalPhasor(run.project().circuit().voltageChanne
   - `PscadProBeyondFreeTest` runs what upstream writes for the Professional edition only, past Free's 15 nodes, and holds it
     to what upstream holds ATP, Xyce and Kestrel to: the four phase-shifter benches on the load flow, a line put back into
     service, a three-winding transformer's leg closed, and left open from rest, an open-ended energization with and without
-    its arrester, and a chain of twelve buses on the load flow.
+    its arrester, and a chain of twelve buses on the load flow; and the YNd11 bench restarted through a fault from a
+    Professional template, whose snapshot renumbers its nodes.
+  - Upstream's twelve PSCAD tests that read a PSCAD Professional run, tagged `professional` and left out of its builds since
+    its `5e6fb79d`, run here live: the YNd11 restart above, CIGRE DCS2's four scenarios (`PscadProCigreDcs2Test`) and
+    example 3's and 4's seven converter scenarios (`PscadProConvertersTest`).
   - `PscadProCigreDcs2Test` runs CIGRE B4 DCS2's four scenarios live - its droops' power steps, its wind park's loss, an onshore
     AC fault and a DC fault cleared through the onshore breakers - and holds them to what ATP, Xyce and Kestrel share, the
     criteria upstream holds its stored PSCAD runs of them to.
