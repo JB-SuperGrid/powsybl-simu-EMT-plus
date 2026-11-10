@@ -84,4 +84,8 @@ Phasor b2 = run.output().fundamentalPhasor(run.project().circuit().voltageChanne
     `target/ac6a-limiter/<step>us.csv`.
   - `PscadProDecTest` runs upstream's DEC2A and DEC3A benches, which upstream leaves to be run in PSCAD, from the steady
     state at 20 us, and holds them to the assertions ATP, Xyce and Kestrel are held to: the DEC2A's pulse on its trigger and
-    the terminal voltage it raises, the DEC3A cutting the stabilizer off through a fault and closing again TDR after.
+    the terminal voltage it raises, the DEC3A cutting the stabilizer off through a fault and closing again TDR after; and
+    from rest through upstream's stored-run scenarios, held to the Xyce tables upstream holds its PSCAD Free runs to.
+  - `PscadProSt6BTest` runs upstream's IEEE ST6B benches from rest at 20 us - through the fault B1 alone and with an OEL1B
+    at position 1 or 4, and through a 15% step with its field current limiter acting - and holds them to the Xyce tables
+    and tolerances upstream holds its stored PSCAD Free runs to.
