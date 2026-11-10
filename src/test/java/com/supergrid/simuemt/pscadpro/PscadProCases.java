@@ -328,6 +328,16 @@ final class PscadProCases {
                         new DcSwitchOperation("DCB", 2.302, BreakerAction.OPEN), new BranchOperation("T3", TwoSides.ONE, 2.36, BreakerAction.OPEN,
                                 FaultClearing.AT_CURRENT_ZERO), new DcSwitchOperation("DCB", 2.6, BreakerAction.CLOSE),
                         new BranchOperation("T3", TwoSides.ONE, 2.7, BreakerAction.CLOSE, FaultClearing.AT_CURRENT_ZERO), new ConverterDeblocking("VSC3", 2.8)),
+                // ... and those ATP, Xyce and Kestrel share that no PSCAD has run: the solid fault on DC3P cut off by the stations' AC breakers,
+                // two-level and MMC; the MMC grid's cleared selectively by DCB; the meshed MMC grid's faulted line cut off at both ends
+                converters("dc-fault-stations-open", () -> preprocessed("vsc-three-terminal-all-droop", true, true), stationsOpen()),
+                converters("mmc-stations-open", () -> preprocessed("vsc-three-terminal-all-droop-mmc", false, true), stationsOpen()),
+                converters("mmc-dc-breaker-selective", () -> preprocessed("vsc-three-terminal-dc-breaker-mmc", false, true),
+                        new DcFault("FDC", "DC3P", 0.0, 2.3, 12.0), new DcSwitchOperation("DCB", 2.302, BreakerAction.OPEN),
+                        new BranchOperation("T3", TwoSides.ONE, 2.36, BreakerAction.OPEN, FaultClearing.AT_CURRENT_ZERO)),
+                converters("mmc-meshed-line-cut", () -> preprocessed("vsc-three-terminal-meshed-mmc", false, true), new DcFault("FDC", "DC2M", 0.0, 2.3, 2.5),
+                        new DcSwitchOperation("DCB", 2.302, BreakerAction.OPEN), new DcSwitchOperation("DCB3", 2.302, BreakerAction.OPEN),
+                        new DcSwitchOperation("DCB", 2.6, BreakerAction.CLOSE), new DcSwitchOperation("DCB3", 2.6, BreakerAction.CLOSE)),
                 // The events
                 new Case("single-phase-fault", ExampleNetworks::createTwoBusNetworkWithInfiniteBusGenerator,
                         List.of(new BusFault("FLTA", "B2", 'A', 0.2, 0.3, FaultClearing.AT_ORDER)), SETTINGS, Kind.FROM_REST),
@@ -451,6 +461,14 @@ final class PscadProCases {
         network.getVoltageSourceConverters().forEach(converter -> converter.addExtension(VscProtectionModel.class, new OvercurrentProtection(2.0, 0.0)));
         EmtNetworkPreprocessor.preprocess(network, LocalComputationManager.getDefault());
         return network;
+    }
+
+    /** A solid fault on DC3P from 2.3 s, the three stations' AC breakers - their transformers' grid ends - ordered open 60 ms later, at
+     * their currents' zeros: upstream's {@code dc-fault-dc3p-solid-0.3-stations-open-0.36}, 2 s later. */
+    private static EmtEvent[] stationsOpen() {
+        return new EmtEvent[] {new DcFault("FDC", "DC3P", 0.0, 2.3, 12.0), new BranchOperation("T1", TwoSides.ONE, 2.36, BreakerAction.OPEN, FaultClearing.AT_CURRENT_ZERO),
+            new BranchOperation("T2", TwoSides.ONE, 2.36, BreakerAction.OPEN, FaultClearing.AT_CURRENT_ZERO),
+            new BranchOperation("T3", TwoSides.ONE, 2.36, BreakerAction.OPEN, FaultClearing.AT_CURRENT_ZERO)};
     }
 
     /** Example 4's MMC grid with its DC breaker, its stations protected, VSC3 with an active power recovery ramp of 2 pu/s, as upstream's

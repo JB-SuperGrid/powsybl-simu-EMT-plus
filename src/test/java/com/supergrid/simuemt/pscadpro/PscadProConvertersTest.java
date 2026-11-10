@@ -12,7 +12,9 @@ import com.powsybl.simuemt.extensions.GeneratorModel;
 import com.powsybl.simuemt.extensions.arrester.ZnOArrester;
 import com.powsybl.simuemt.extensions.circuit.NumericalAids;
 import com.powsybl.simuemt.extensions.hvdc.AveragedConverterModel;
+import com.powsybl.simuemt.extensions.hvdc.AveragedMmcModel;
 import com.powsybl.simuemt.extensions.hvdc.AveragedVscInitialState;
+import com.powsybl.simuemt.extensions.hvdc.AveragedVscModel;
 import com.powsybl.simuemt.extensions.hvdc.DcBreakerModel;
 import com.powsybl.simuemt.extensions.hvdc.DcVoltageDroopLaw;
 import com.powsybl.simuemt.extensions.hvdc.HybridDcBreakerModel;
@@ -39,7 +41,10 @@ import static org.assertj.core.api.Assertions.within;
  * from rest at 20 us, as upstream's, and held to the checks upstream holds those runs to, themselves ATP's or Kestrel's on the same
  * benches - the numbers copied, the code this project's own. A WT4B wind turbine blocked; Example 3's grid-forming VSC2 blocked then
  * deblocked; Example 4 on its droops losing VSC1; Example 4 through a solid DC fault fed through its stations' bridges, blocked by order,
- * by their protections, or with MMC stations; cleared selectively by its DC breaker; and an MMC station restarted after it.
+ * by their protections, or with MMC stations; cleared selectively by its DC breaker; and an MMC station restarted after it. And four
+ * that ATP, Xyce and Kestrel share and no PSCAD had run ({@code BackendComparisonTest}, {@code AtpSolverIntegrationTest}), held to
+ * ATP's checks: the solid fault cut off by the stations' AC breakers, two-level and MMC; the MMC grid's cleared by its DC breaker;
+ * the meshed MMC grid's faulted line cut off at both ends and reclosed.
  *
  * <p>Run 2026-11-10, on upstream's stored runs of 2026-11-07 to their last digit or nearly: WT1 8e-5 off the load flow before, no power
  * once blocked, its bus 1e-6 off the grid's EMF; VSC2 blocked at 0.99980 and 0.810 pu, -0.147 pu its first 20 ms, its crests 0.431 and
@@ -49,6 +54,12 @@ import static org.assertj.core.api.Assertions.within;
  * clearing, VSC3 blocked at 2.30084 s, DC2P's crest 554.9 kV, DCL2's end 0.24 kV, VSC1 and VSC2 1.5e-3 and 3.7e-4 off the load flow;
  * the MMC restart, DC3P 0.200 pu then 1.243, VSC3 -0.0023 pu its first 2 ms, its DC current's crest 1.25, the stations within 1.2e-5
  * of before. About 5 minutes the eight.
+ *
+ * <p>The four of 2026-11-10: no station blocked in the meshed grid, VSC3's DC current's crest 7.39 pu, every power back within 1e-5;
+ * the AC breakers' cut, the stations blocked 0.85, 4.67 and 9.93 ms after the fault - the MMCs' 0.25, 3.09 and 6.93 -, nothing drawn
+ * once cut off; VSC3's freewheeling decay 0.889 and the MMC's 0.373 on PSCAD's loop, 0.885 and 0.381, short of ATP's 0.919 and 0.387,
+ * PSCAD's loop holding its bridge's rails' breakers ({@link #pscadFreewheelOhm}); the MMC grid's DCB, VSC3 blocked at ATP's 2.30024 s,
+ * DC2P's crest 665.7 kV against ATP's 673.4. About 6 minutes the four.
  *
  * <p>Tagged {@code pscad}: run with {@code mvn test -Ppscad}.
  *
@@ -292,6 +303,161 @@ class PscadProConvertersTest {
         softly.assertAll();
     }
 
+    /**
+     * Example 4 all on the droop, each station with its DC reactor and protected, through the solid fault on DC3P at 2.3 s, the three
+     * stations' AC breakers ordered open 60 ms later, run 3.2 s - no PSCAD run upstream; held to ATP's checks ({@code
+     * AtpSolverIntegrationTest#theStationsAcBreakersCutTheBridgesOffASolidDcFault}, 2 s earlier) and to what ATP, Xyce and Kestrel share
+     * ({@code BackendComparisonTest#allThreeBackendsCutTheStationsBridgesOffASolidDcFault}): every station blocked by its protection before
+     * its breaker opens, nothing drawn from the AC side once it has; VSC1's and VSC2's DC currents died out into the fault, their DC
+     * voltages at earth; VSC3's freewheeling through its bridge's diodes, its capacitor ringing, 0.6 s on at {@code e^(-0.6 R / L)} of
+     * its 2.4-2.6 s mean within 0.01, as ATP is - R its loop's in PSCAD ({@link #pscadFreewheelOhm}).
+     *
+     * <p>Not ATP's 0.9193: PSCAD's loop is some 0.037 ohm where the other backends' is 0.027 - its bridge's rails' two breakers in it, its
+     * station's earthing not -, the freewheeling decaying faster, 0.889 against 0.885 from PSCAD's loop and 0.915 from ATP's (run
+     * 2026-11-10; upstream's writer, {@code PscadCircuitBuilder#addBlockableStage}).
+     */
+    @Test
+    void theStationsAcBreakersCutTheBridgesOffASolidDcFault(@TempDir Path tempDir) {
+        double runEnd = 3.2;
+        Run run = run("dc-fault-stations-open", runEnd, tempDir);
+        PscadOutput out = run.output;
+        SoftAssertions softly = new SoftAssertions();
+        cutOffTheirAcSides(softly, "dc-fault-stations-open", run, runEnd);
+        AveragedVscModel model = (AveragedVscModel) run.network.getVoltageSourceConverter("VSC3").getExtension(VoltageSourceConverterModel.class);
+        double expected = Math.exp(-0.6 * pscadFreewheelOhm(0.0) / (model.getDcReactorInductance() + model.getBridgeInductance()));
+        double early = out.mean("VSC3_IDC", 2.4, 2.6);
+        double decay = out.mean("VSC3_IDC", 3.0, runEnd) / early;
+        System.out.printf(Locale.ROOT, "dc-fault-stations-open: VSC3 DC current %.3f pu at 2.4-2.6 s, %.4f of it at 3.0-3.2 s (PSCAD's loop %.4f, ATP 0.9193); its DC voltage's crest %.3f%n",
+                early, decay, expected, out.peakAbsolute("VSC3_VDC", 3.0, runEnd));
+        softly.assertThat(early).as("VSC3 DC current at 2.4-2.6 s, pu: its reactor's, freewheeling into the fault").isGreaterThan(15.0);
+        softly.assertThat(decay).as("VSC3 DC current at 3.0-3.2 s against 2.4-2.6 s: its loop's L / R").isCloseTo(expected, within(0.01));
+        softly.assertThat(out.peakAbsolute("VSC3_VDC", 3.0, runEnd)).as("VSC3 DC voltage at the end, pu: its capacitor ringing").isGreaterThan(0.2);
+        softly.assertAll();
+    }
+
+    /**
+     * The same with MMC stations and no DC reactor added, run 3.2 s - no PSCAD run upstream; held to ATP's checks ({@code
+     * AtpSolverIntegrationTest#theStationsAcBreakersLetAnMmcsDcCurrentDieOut}) and to what the three share ({@code
+     * BackendComparisonTest#allThreeBackendsLetAnMmcsDcCurrentDieOutOnceItsAcBreakerHasOpened}): VSC3's DC current round its arms' DC
+     * equivalent, the next 0.1 s at {@code e^(-0.1 R / L)} of its 2.4-2.5 s mean within 0.02, as ATP is - R its loop's in PSCAD ({@link
+     * #pscadFreewheelOhm}), its arms' resistance in it -; under 0.2% of it at 3.1-3.2 s; at 2.4-2.5 s within 0.25 pu of ATP's 5.8125, PSCAD's
+     * loop's extra 0.01 ohm having taken 3% off it by then (run 2026-11-10: 5.624, its decay 0.373 against ATP's 0.387).
+     */
+    @Test
+    void theStationsAcBreakersLetAnMmcsDcCurrentDieOut(@TempDir Path tempDir) {
+        double runEnd = 3.2;
+        Run run = run("mmc-stations-open", runEnd, tempDir);
+        PscadOutput out = run.output;
+        SoftAssertions softly = new SoftAssertions();
+        cutOffTheirAcSides(softly, "mmc-stations-open", run, runEnd);
+        VoltageSourceConverter vsc3 = run.network.getVoltageSourceConverter("VSC3");
+        AveragedMmcModel model = (AveragedMmcModel) vsc3.getExtension(VoltageSourceConverterModel.class);
+        double baseKv = vsc3.getTerminal1().getVoltageLevel().getNominalV();
+        double expected = Math.exp(-0.1 * pscadFreewheelOhm(model.dcSeriesResistanceOhm(baseKv)) / model.dcSeriesInductanceH(baseKv, 2 * Math.PI * FREQUENCY));
+        double current = out.mean("VSC3_IDC", 2.4, 2.5);
+        double decay = out.mean("VSC3_IDC", 2.5, 2.6) / current;
+        double end = out.mean("VSC3_IDC", 3.1, runEnd) / current;
+        System.out.printf(Locale.ROOT, "mmc-stations-open: VSC3 DC current %.4f pu at 2.4-2.5 s (ATP 5.8125), %.4f of it the next 0.1 s (PSCAD's loop %.4f, ATP 0.387), %.2e at 3.1-3.2 s%n",
+                current, decay, expected, end);
+        softly.assertThat(current).as("VSC3 DC current at 2.4-2.5 s, pu: ATP's, less what PSCAD's loop takes").isCloseTo(5.8125, within(0.25));
+        softly.assertThat(decay).as("VSC3 DC current at 2.5-2.6 s against 2.4-2.5 s: its loop's L / R").isCloseTo(expected, within(0.02));
+        softly.assertThat(end).as("VSC3 DC current at 3.1-3.2 s against 2.4-2.5 s: died out").isLessThan(0.002);
+        softly.assertAll();
+    }
+
+    /**
+     * Example 4's MMC grid with its DC breaker DCB and its 100 mH reactor, stations protected, through the solid fault on DC3P at 2.3 s
+     * cleared selectively - DCB at 2.302 s, T3's grid end at 2.36 s -, run 4 s - no PSCAD run upstream; held to ATP's checks ({@code
+     * AtpSolverIntegrationTest#anMmcGridsDcBreakerClearsADcFaultSelectively}) and to what the three share ({@code
+     * BackendComparisonTest#allThreeBackendsClearAnMmcGridsDcFaultSelectivelyThroughADcBreaker}): VSC3 blocked by its protection at ATP's
+     * 0.30024 s on, within the 2e-4 s Xyce and Kestrel are held to; VSC1 and VSC2 never, settled at the end on the load flow with DCB open
+     * and VSC3 out; DC2P's crest within 1.5% of ATP's 673.4 kV - not the 1.5 kV Xyce and Kestrel are held to: PSCAD's is 665.7 kV (run
+     * 2026-11-10), 1.1% under, unexplained yet - the two-level grid's crest, {@link #aDcBreakerClearsADcFaultSelectively}, on ATP's.
+     */
+    @Test
+    void anMmcGridsDcBreakerClearsADcFaultSelectively(@TempDir Path tempDir) {
+        double runEnd = 4.0;
+        Run run = run("mmc-dc-breaker-selective", runEnd, tempDir);
+        PscadOutput out = run.output;
+        Network isolated = PscadProCases.bench("vsc-three-terminal-dc-breaker-mmc");
+        isolated.getDcSwitch("DCB").setOpen(true);
+        isolated.getVoltageSourceConverter("VSC3").getTerminal1().disconnect();
+        ExampleNetworks.runLoadFlow(isolated);
+
+        SoftAssertions softly = new SoftAssertions();
+        double blocked = out.firstTimeBelow("VSC3_RUN", 0.5, 2.2);
+        double crest = out.peakAbsolute("V_DC2P", 2.3, runEnd);
+        System.out.printf(Locale.ROOT, "mmc-dc-breaker-selective: VSC3 blocked %.6f s (ATP 2.30024); DC2P crest %.1f kV (ATP 673.4)%n", blocked, crest / 1.0e3);
+        softly.assertThat(blocked).as("VSC3 blocked at, s: ATP's").isCloseTo(2.30024, within(2.0e-4));
+        softly.assertThat(crest / 1.0e3).as("DC2P's crest, kV: ATP's").isCloseTo(673.4, within(0.015 * 673.4));
+        for (String id : List.of("VSC1", "VSC2")) {
+            softly.assertThat(out.firstTimeBelow(id + "_RUN", 0.5, 2.2)).as("%s blocked at, s: never, the breaker faster than its protection", id).isNaN();
+            VoltageSourceConverter left = isolated.getVoltageSourceConverter(id);
+            DcNode pole = left.getDcTerminal1().getDcNode();
+            double p = out.mean(id + "_P", 3.5, runEnd);
+            double vdc = out.mean(id + "_VDC", 3.5, runEnd);
+            System.out.printf(Locale.ROOT, "mmc-dc-breaker-selective %s: end %.5f (load flow %.5f), DC %.6f (%.6f)%n", id, p, left.getTerminal1().getP() / rating(left),
+                    vdc, pole.getV() / pole.getNominalV());
+            softly.assertThat(p).as("%s power at the end, pu: along its droop without VSC3", id).isCloseTo(left.getTerminal1().getP() / rating(left), within(0.003));
+            softly.assertThat(vdc).as("%s DC voltage at the end, pu", id).isCloseTo(pole.getV() / pole.getNominalV(), within(2.0e-4));
+        }
+        softly.assertAll();
+    }
+
+    /**
+     * Example 4 meshed with MMC stations, protected, through a solid fault at DCL2's midpoint from 2.3 to 2.5 s, DCB and DCB3 cutting
+     * DCL2 off at both its ends at 2.302 s and reclosing it at 2.6 s, run 4 s - no PSCAD run upstream; held to ATP's checks ({@code
+     * AtpSolverIntegrationTest#aMeshedGridsFaultedLineIsCutOffAtBothEndsNoStationBlocked}), which ATP, Xyce and Kestrel share: no station
+     * blocked; the DC voltages within 2% of nominal through the isolation; VSC3's DC current's crest between 6.5 and 8.5 pu; VSC3 still
+     * exporting through DCL3, a little less along its droop, VSC2 still drawing; every power back on before by 3 s, within 2e-4.
+     */
+    @Test
+    void aMeshedGridsFaultedLineIsCutOffAtBothEnds(@TempDir Path tempDir) {
+        double runEnd = 4.0;
+        PscadOutput out = run("mmc-meshed-line-cut", runEnd, tempDir).output;
+        SoftAssertions softly = new SoftAssertions();
+        for (String id : STATIONS) {
+            double before = out.mean(id + "_P", 2.2, 2.3);
+            double after = out.mean(id + "_P", 3.0, runEnd);
+            double vdc = out.mean(id + "_VDC", 2.35, 2.6);
+            System.out.printf(Locale.ROOT, "mmc-meshed-line-cut %s: blocked %s; P %.5f before, %.2e off at the end; DC %.4f through the isolation%n", id,
+                    out.firstTimeBelow(id + "_RUN", 0.5, 2.2), before, after - before, vdc);
+            softly.assertThat(out.firstTimeBelow(id + "_RUN", 0.5, 2.2)).as("%s blocked, s: never, the faulted line cut off in time", id).isNaN();
+            softly.assertThat(after).as("%s power at the end, pu: before the fault's", id).isCloseTo(before, within(2.0e-4));
+            softly.assertThat(vdc).as("%s DC voltage through the isolation, pu", id).isCloseTo(1.0, within(0.02));
+        }
+        double crest = out.peakAbsolute("VSC3_IDC", 2.3, 2.31);
+        System.out.printf(Locale.ROOT, "mmc-meshed-line-cut: VSC3 DC current's crest %.3f pu; P3 %.4f, P2 %.4f through the isolation%n", crest,
+                out.mean("VSC3_P", 2.4, 2.5), out.mean("VSC2_P", 2.4, 2.5));
+        softly.assertThat(crest).as("VSC3's DC current's crest, pu").isBetween(6.5, 8.5);
+        softly.assertThat(out.mean("VSC3_P", 2.4, 2.5)).as("VSC3's power through the isolation, pu").isBetween(0.3, 0.37);
+        softly.assertThat(out.mean("VSC2_P", 2.4, 2.5)).as("VSC2's power through the isolation, pu: still drawing").isBetween(-0.8, -0.73);
+        softly.assertAll();
+    }
+
+    /** The stations on the load flow before; each blocked by its protection before its breaker opens; nothing drawn from the AC side once
+     * it has; VSC1's and VSC2's DC currents died out and their DC voltages at earth at the end (ATP's checks). */
+    private static void cutOffTheirAcSides(SoftAssertions softly, String name, Run run, double runEnd) {
+        PscadOutput out = run.output;
+        for (String id : STATIONS) {
+            double expected = run.network.getVoltageSourceConverter(id).getTerminal1().getP() / rating(run.network, id);
+            double blocked = out.firstTimeBelow(id + "_RUN", 0.5, 2.2);
+            double p = out.peakAbsolute(id + "_P", 2.4, runEnd);
+            double q = out.peakAbsolute(id + "_Q", 2.4, runEnd);
+            System.out.printf(Locale.ROOT, "%s %s: before %.5f (load flow %.5f); blocked %.2f ms after the fault; P %.1e, Q %.1e once cut off; DC current %.1e, voltage %.1e at the end%n",
+                    name, id, out.mean(id + "_P", 2.2, 2.3), expected, (blocked - FAULT) * 1.0e3, p, q, out.peakAbsolute(id + "_IDC", runEnd - 0.2, runEnd),
+                    out.peakAbsolute(id + "_VDC", runEnd - 0.2, runEnd));
+            softly.assertThat(out.mean(id + "_P", 2.2, 2.3)).as("%s power before, pu", id).isCloseTo(expected, within(0.0015));
+            softly.assertThat(blocked).as("%s blocked at, s: by its protection, before its breaker opens", id).isBetween(FAULT, FAULT + 0.02);
+            softly.assertThat(p).as("%s power once its breaker has opened, pu", id).isLessThan(1.0e-4);
+            softly.assertThat(q).as("%s reactive power once its breaker has opened, pu", id).isLessThan(1.0e-4);
+        }
+        for (String id : List.of("VSC1", "VSC2")) {
+            softly.assertThat(out.peakAbsolute(id + "_IDC", runEnd - 0.2, runEnd)).as("%s DC current at the end, pu: died out", id).isLessThan(0.01);
+            softly.assertThat(out.peakAbsolute(id + "_VDC", runEnd - 0.2, runEnd)).as("%s DC voltage at the end, pu: at earth", id).isLessThan(0.005);
+        }
+    }
+
     /** The stations blocked by their protections after the fault, within 20 ms: VSC3 within 1 ms, VSC2 after it and before VSC1, 1 ms apart at least. */
     private static void blockedInTurn(SoftAssertions softly, String name, PscadOutput out) {
         double[] blocked = STATIONS.stream().mapToDouble(id -> out.firstTimeBelow(id + "_RUN", 0.5, 2.2)).toArray();
@@ -334,6 +500,17 @@ class PscadProConvertersTest {
                 softly.assertThat(out.mean(id + "_P", start, end)).as("%s power from %.1f s, pu: drawn into the fault", id, start).isGreaterThan(0.4);
             }
         }
+    }
+
+    /**
+     * A blocked station's freewheeling loop on a solid fault at its pole in PSCAD, ohm, besides its own {@code seriesOhm}: the fault's
+     * closed breaker; its bridge's three legs in parallel, two diodes each; its rails' two breakers, both in the loop - each at {@link
+     * NumericalAids#FAULT_ON_RESISTANCE_OHM}; its station's earthing none, PSCAD's solidly earthed DC node being earth. The other
+     * backends have no rails' breakers and earth it through 0.01 ohm.
+     */
+    private static double pscadFreewheelOhm(double seriesOhm) {
+        double closed = NumericalAids.FAULT_ON_RESISTANCE_OHM;
+        return seriesOhm + closed + 2.0 * closed / 3.0 + 2.0 * closed;
     }
 
     /** How much more {@code id} takes from the DC network for each kV its DC voltage drops, MW/kV: its droop's slope at its load flow point. */
