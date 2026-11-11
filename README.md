@@ -45,7 +45,7 @@ Phasor b2 = run.output().fundamentalPhasor(run.project().circuit().voltageChanne
 
 - `mvn test`: without PSCAD: every case's `.pscx` is written, the driver ships and Python compiles it, its report is read.
 - `mvn test -Ppscad`: the real PSCAD.
-  - `PscadProBuildTest` builds each case of `PscadProCases` (125: every upstream example network the backend writes, those
+  - `PscadProBuildTest` builds each case of `PscadProCases` (126: every upstream example network the backend writes, those
     past PSCAD Free's 15 electrical nodes among them, and this project's own: CIGRE B4's DC grid test system, whole
     (`CigreB4Network`, `src/test/resources/cigre-b4*`), the IEEE 14-bus network with a meshed DC grid and Dynawo's machines
     (`Ieee14DcNetwork`, `src/test/resources/ieee14-dc*`), and Kundur's two-area system with a three-terminal DC grid beside its
@@ -104,7 +104,7 @@ Phasor b2 = run.output().fundamentalPhasor(run.project().circuit().voltageChanne
     breaker operated a third time, the MMC restarted by its own protection twice then locked out, DCB left open or DCB and T3 cycled
     at each of three faults -, held to ATP's checks and values; and example 4's controls - a master-slave station's stepped
     setpoint, a power step ramped along the droops, VSC3's power back along its recovery ramp after an AC fault on B3, master-slave
-    and on the droop -, held to ATP's checks and to the stepped load flow.
+    and on the droop, example 3's grid-forming VSC2's stepped power reference -, held to ATP's checks and to the stepped load flow.
   - `PscadProSt6BTest` runs upstream's IEEE ST6B benches from rest at 20 us - through the fault B1 alone and with an OEL1B
     at position 1 or 4, and through a 15% step with its field current limiter acting - and holds them to the Xyce tables
     and tolerances upstream holds its stored PSCAD Free runs to.

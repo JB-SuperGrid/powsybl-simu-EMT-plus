@@ -667,7 +667,7 @@ class PscadProConvertersTest {
         double runEnd = 3.5;
         Run run = run("vsc-master-slave-step", runEnd, tempDir);
         SoftAssertions softly = new SoftAssertions();
-        stepMovesEachStationAsTheLoadFlow(softly, run, "vsc-three-terminal", 0.2, runEnd, 1.0e-4);
+        stepMovesEachStationAsTheLoadFlow(softly, run, "vsc-three-terminal", "VSC3", 0.2, 2.5, runEnd, 1.0e-4);
         System.out.printf(Locale.ROOT, "vsc-master-slave-step: VSC3 %.5f pu 60 ms on%n", run.output.mean("VSC3_P", 2.56, 2.58));
         softly.assertThat(run.output.mean("VSC3_P", 2.56, 2.58)).as("VSC3 power 60 ms after the step, pu: there").isCloseTo(0.6, within(0.005));
         softly.assertAll();
@@ -684,7 +684,7 @@ class PscadProConvertersTest {
         Run run = run("vsc-droop-ramp", runEnd, tempDir);
         PscadOutput out = run.output;
         SoftAssertions softly = new SoftAssertions();
-        stepMovesEachStationAsTheLoadFlow(softly, run, "vsc-three-terminal-all-droop", 0.2, runEnd, 1.0e-3);
+        stepMovesEachStationAsTheLoadFlow(softly, run, "vsc-three-terminal-all-droop", "VSC3", 0.2, 2.5, runEnd, 1.0e-3);
         double previous = out.mean("VSC3_P", 2.48, 2.5);
         for (double start = 2.5; start < 2.7 - 1.0e-9; start += 0.02) {
             double mean = out.mean("VSC3_P", start, start + 0.02);
@@ -729,26 +729,27 @@ class PscadProConvertersTest {
     }
 
     /**
-     * VSC3's power reference stepped by {@code deltaPu}: each station's power and DC voltage at the end, less its offset from the load flow's
-     * before the step (2.3 to 2.5 s), on the load flow of {@code bench} with VSC3's targetP that much more - the V_DC master's power on it
-     * outright -, VSC3's own within 1.5e-3 pu of it (upstream's {@code AtpSolverIntegrationTest#checkThePowerStepMovesEachStationAsTheLoadFlow}).
+     * {@code steppedId}'s power reference stepped by {@code deltaPu}: each station's power and DC voltage at the end, less its offset from the
+     * load flow's over the 0.2 s before the step at {@code stepAt}, on the load flow of {@code bench} with its targetP that much more - the V_DC master's power
+     * on it outright -, its own within 1.5e-3 pu of it (upstream's {@code AtpSolverIntegrationTest#checkThePowerStepMovesEachStationAsTheLoadFlow}).
      */
-    private static void stepMovesEachStationAsTheLoadFlow(SoftAssertions softly, Run run, String bench, double deltaPu, double runEnd, double tolerance) {
+    private static void stepMovesEachStationAsTheLoadFlow(SoftAssertions softly, Run run, String bench, String steppedId, double deltaPu, double stepAt,
+                                                          double runEnd, double tolerance) {
         Network stepped = PscadProCases.bench(bench);
-        VoltageSourceConverter vsc3 = stepped.getVoltageSourceConverter("VSC3");
-        vsc3.setTargetP(vsc3.getTargetP() + deltaPu * rating(vsc3));
+        VoltageSourceConverter steppedConverter = stepped.getVoltageSourceConverter(steppedId);
+        steppedConverter.setTargetP(steppedConverter.getTargetP() + deltaPu * rating(steppedConverter));
         ExampleNetworks.runLoadFlow(stepped);
         PscadOutput out = run.output;
         for (VoltageSourceConverter before : run.network.getVoltageSourceConverters()) {
             String id = before.getId();
             VoltageSourceConverter after = stepped.getVoltageSourceConverter(id);
             double rating = rating(before);
-            double offset = out.mean(id + "_P", 2.3, 2.5) - before.getTerminal1().getP() / rating;
+            double offset = out.mean(id + "_P", stepAt - 0.2, stepAt) - before.getTerminal1().getP() / rating;
             double end = out.mean(id + "_P", runEnd - 0.2, runEnd);
             double target = after.getTerminal1().getP() / rating;
             DcNode poleBefore = before.getDcTerminal1().getDcNode();
             DcNode poleAfter = after.getDcTerminal1().getDcNode();
-            double dcOffset = out.mean(id + "_VDC", 2.3, 2.5) - poleBefore.getV() / poleBefore.getNominalV();
+            double dcOffset = out.mean(id + "_VDC", stepAt - 0.2, stepAt) - poleBefore.getV() / poleBefore.getNominalV();
             double dcEnd = out.mean(id + "_VDC", runEnd - 0.2, runEnd) - dcOffset;
             System.out.printf(Locale.ROOT, "%s: %s offset %.2e before, %.5f at the end against the stepped load flow's %.5f; DC %.2e off it%n", bench, id,
                     offset, end, target, dcEnd - poleAfter.getV() / poleAfter.getNominalV());
@@ -758,11 +759,32 @@ class PscadProConvertersTest {
             } else {
                 softly.assertThat(end - offset).as("%s power at the end less its offset before, pu: the stepped load flow's", id).isCloseTo(target, within(tolerance));
             }
-            if ("VSC3".equals(id)) {
-                softly.assertThat(end).as("VSC3 power at the end, pu: its new point").isCloseTo(target, within(1.5e-3));
+            if (steppedId.equals(id)) {
+                softly.assertThat(end).as("%s power at the end, pu: its new point", id).isCloseTo(target, within(1.5e-3));
             }
             softly.assertThat(dcEnd).as("%s DC voltage at the end less its offset before, pu", id).isCloseTo(poleAfter.getV() / poleAfter.getNominalV(), within(2.0e-4));
         }
+    }
+
+    /**
+     * Example 3 between infinite buses, its grid-forming VSC2's power reference stepped by 0.1 pu at 5 s, run 6 s - upstream's {@code
+     * AtpSolverIntegrationTest#aGridFormingStationsVirtualMachineSwingsToItsNewPowerReference}, shifted 4.5 s, its virtual machine's slow
+     * swing from rest settled: swinging to the new reference on its inertia, past it at 5.34 s, never drawing deeper than before; the
+     * frequency the infinite buses' at the end; each station and DC voltage moved as the load flow with VSC2's targetP 25 MW more.
+     */
+    @Test
+    void aGridFormingStationsVirtualMachineSwingsToItsNewPowerReference(@TempDir Path tempDir) {
+        double runEnd = 6.0;
+        Run run = run("vsc-gfm-step", runEnd, tempDir);
+        PscadOutput out = run.output;
+        SoftAssertions softly = new SoftAssertions();
+        stepMovesEachStationAsTheLoadFlow(softly, run, "vsc-monopole-infinite-buses-3", "VSC2", 0.1, 5.0, runEnd, 1.0e-3);
+        System.out.printf(Locale.ROOT, "vsc-gfm-step: VSC2 crest %.4f pu drawn, %.4f at 5.34 s, speed %.6f at the end%n", out.peakAbsolute("VSC2_P", 5.0, runEnd),
+                out.mean("VSC2_P", 5.32, 5.36), out.mean("VSC2_VSMW", runEnd - 0.1, runEnd));
+        softly.assertThat(out.peakAbsolute("VSC2_P", 5.0, runEnd)).as("VSC2 power, pu drawn: no deeper than before").isLessThan(0.801);
+        softly.assertThat(out.mean("VSC2_P", 5.32, 5.36)).as("VSC2 power at 5.34 s, pu drawn: past its new reference, on its inertia").isGreaterThan(-0.695);
+        softly.assertThat(out.mean("VSC2_VSMW", runEnd - 0.1, runEnd)).as("VSC2's speed at the end: the infinite buses'").isCloseTo(1.0, within(1.0e-4));
+        softly.assertAll();
     }
 
     private static Run run(String name, double runEnd, Path tempDir) {

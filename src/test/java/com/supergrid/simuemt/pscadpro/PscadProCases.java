@@ -374,6 +374,9 @@ final class PscadProCases {
                 converters("vsc-droop-ramp", () -> preprocessed("vsc-three-terminal-all-droop", false, false), new ConverterPowerStep("VSC3", 2.5, 0.2, 0.2)),
                 converters("vsc-recovery-ramp", () -> recoveryRamp("vsc-three-terminal"), B3_FAULT),
                 converters("vsc-droop-recovery-ramp", () -> recoveryRamp("vsc-three-terminal-all-droop"), B3_FAULT),
+                // Example 3's grid-forming VSC2, as ATP, Xyce and Kestrel share it: its power reference stepped by 0.1 pu at 5 s - its
+                // virtual machine's slow swing from rest settled by then, still 7e-3 pu off at 2.5 s
+                converters("vsc-gfm-step", () -> preprocessed("vsc-monopole-infinite-buses-3", false, false), new ConverterPowerStep("VSC2", 5.0, 0.1)),
                 // ... and those ATP, Xyce and Kestrel share that no PSCAD has run: the solid fault on DC3P cut off by the stations' AC breakers,
                 // two-level and MMC; the MMC grid's cleared selectively by DCB; the meshed MMC grid's faulted line cut off at both ends
                 converters("dc-fault-stations-open", () -> preprocessed("vsc-three-terminal-all-droop", true, true), stationsOpen()),
