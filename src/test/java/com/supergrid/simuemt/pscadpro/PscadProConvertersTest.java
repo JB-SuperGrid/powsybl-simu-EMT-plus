@@ -227,9 +227,12 @@ class PscadProConvertersTest {
 
     /**
      * Example 4 with its DC breaker DCB through the solid fault on DC3P at 2.3 s, DCB ordered open at 2.302 s and T3's grid end at
-     * 2.36 s, run 4.5 s: VSC3 blocked by its protection within a millisecond; DCB's arrester bringing DCL2's current to nothing before
-     * VSC1's and VSC2's protections act, the two settling along their droops on the load flow with DCB open and VSC3 out; DC2P under
-     * the arrester's reference voltage; DCL2's far end at the fault's potential.
+     * 2.36 s, run 4.5 s: VSC3 blocked by its protection at ATP's 0.30084 s on, within the 2e-4 s Xyce and Kestrel are held to
+     * ({@code BackendComparisonTest#allThreeBackendsClearADcFaultSelectivelyThroughADcBreaker}); DCB's arrester bringing DCL2's current to
+     * nothing before VSC1's and VSC2's protections act, the two settling along their droops on the load flow with DCB open and VSC3 out;
+     * DC2P's crest within the 1.5 kV of ATP's 555.2 kV they are held to, under the arrester's reference voltage; DCL2's far end at the
+     * fault's potential. Run 2026-11-11: VSC3 blocked at 2.30084 s, DC2P's crest 554.9 kV - PSCAD's interpolated switching on ATP's here,
+     * 555.2 kV and 2.30086 s switched on the time step, Kestrel's.
      */
     @Test
     void aDcBreakerClearsADcFaultSelectively(@TempDir Path tempDir) {
@@ -243,7 +246,7 @@ class PscadProConvertersTest {
 
         SoftAssertions softly = new SoftAssertions();
         double vsc3Blocked = out.firstTimeBelow("VSC3_RUN", 0.5, 2.2);
-        softly.assertThat(vsc3Blocked).as("VSC3 blocked at, s: by its protection, within a millisecond of the fault").isBetween(FAULT, FAULT + 1.0e-3);
+        softly.assertThat(vsc3Blocked).as("VSC3 blocked at, s: by its protection, ATP's").isCloseTo(2.30084, within(2.0e-4));
         for (String id : STATIONS) {
             VoltageSourceConverter converter = run.network.getVoltageSourceConverter(id);
             double rating = rating(run.network, id);
@@ -267,6 +270,7 @@ class PscadProConvertersTest {
         System.out.printf(Locale.ROOT, "dc-breaker-selective: VSC3 blocked %.5f s; DC2P crest %.1f kV (arrester %.1f kV); DC2L from 2.7 s %.2f kV%n", vsc3Blocked,
                 crest / 1.0e3, arrester.referenceVoltage() / 1.0e3, farEnd / 1.0e3);
         softly.assertThat(crest).as("DC2P's crest, V: held under the breaker's arrester's").isLessThan(arrester.referenceVoltage());
+        softly.assertThat(crest / 1.0e3).as("DC2P's crest, kV: ATP's").isCloseTo(555.2, within(1.5));
         softly.assertThat(farEnd).as("DC2L from 2.7 s, V: cut off from DC2P, at the fault's potential").isLessThan(1.0e3);
         softly.assertAll();
     }
