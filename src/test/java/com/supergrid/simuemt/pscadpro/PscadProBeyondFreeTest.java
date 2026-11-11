@@ -8,6 +8,7 @@ import com.powsybl.iidm.network.Bus;
 import com.powsybl.iidm.network.Line;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.ThreeWindingsTransformer;
+import com.powsybl.iidm.network.TwoWindingsTransformer;
 import com.powsybl.iidm.network.VoltageLevel;
 import com.powsybl.iidm.network.extensions.ThreeWindingsTransformerFortescue;
 import com.powsybl.iidm.network.extensions.ThreeWindingsTransformerFortescueAdder;
@@ -124,6 +125,69 @@ class PscadProBeyondFreeTest {
             }
         }
         softly.assertAll();
+    }
+
+    /**
+     * The two-winding phase-shifter bench fed from an ideal source with upstream's heavy magnetizing admittance on its phase-shifting
+     * unit ({@code ExampleNetworks#withMagnetizingAdmittanceOnThePhaseShifters}), from its steady state over 0.2 s: upstream's {@code
+     * BackendComparisonTest#allThreeBackendsDrawAPhaseShiftersMagnetizingCurrentAlike}, which ATP, Xyce and Kestrel share and no PSCAD
+     * had run. The backends hang the admittance in the middle of a T, between the two halves of the unit's leakage, the load flow's pi
+     * at one end: over the last 60 ms every bus within {@code |y| |z|} of the load flow, magnitude and angle, the admittance's current
+     * across half the leakage; and more than 1% off the same bench without the admittance, the control. The comparison's three other
+     * benches - YNd11, three-winding leg, with winding connections - are a bank of PSCAD's transformers, whose magnetizing current
+     * PSCAD takes up to 50% of rated: their 159% is refused.
+     *
+     * <p>Run 2026-11-11: B2 and B3 within 9.5e-6 pu and 2.2e-5 rad of the load flow, against a bound of 2.6e-3; 4.03% off the control,
+     * upstream's 4.0 to 4.5%.
+     */
+    @Test
+    void aPhaseShiftersMagnetizingCurrentMovesEveryBusAsTheTDoes(@TempDir Path tempDir) {
+        String name = "two-winding";
+        Supplier<Network> bench = ExampleNetworks::createThreeBusNetworkWithPurePhaseShiftingTransformer;
+        double runEnd = 0.2;
+        double[] window = {runEnd - 0.06, runEnd};
+        Network control = bench.get();
+        control.getGenerator("GEN").addExtension(GeneratorModel.class, new InfiniteBusGeneratorModel(0.0, 0.0));
+        ExampleNetworks.withLoadFlow(control);
+        PscadProSimulation.PscadProRun controlRun = PscadProSimulation.runFromSteadyState(control, tempDir.resolve("control"), settings(runEnd), List.of(), PRO);
+        Network network = ExampleNetworks.withMagnetizingAdmittanceOnThePhaseShifters(bench.get());
+        network.getGenerator("GEN").addExtension(GeneratorModel.class, new InfiniteBusGeneratorModel(0.0, 0.0));
+        ExampleNetworks.withLoadFlow(network);
+        PscadProSimulation.PscadProRun run = PscadProSimulation.runFromSteadyState(network, tempDir.resolve("magnetizing"), settings(runEnd), List.of(), PRO);
+
+        double bound = magnetizingDropAcrossTheLeakage(network);
+        VectorGroupOffsets offsets = VectorGroupOffsets.of(network);
+        Bus b1 = network.getBusBreakerView().getBus("B1");
+        SoftAssertions softly = new SoftAssertions();
+        for (Bus bus : network.getBusBreakerView().getBuses()) {
+            if (bus == b1) {
+                continue;
+            }
+            double nominal = bus.getVoltageLevel().getNominalV();
+            double measured = magnitude(run, bus.getId(), 'A', window);
+            double withoutIt = magnitude(controlRun, bus.getId(), 'A', window);
+            double puError = measured / (nominal * 1.0e3 * SQRT_TWO_THIRDS) - bus.getV() / nominal;
+            double expected = bus.getAngle() - b1.getAngle() + offsets.degrees(bus) - offsets.degrees(b1);
+            double angleError = Math.toRadians(Math.IEEEremainder(angleFrom(run, "B1", bus.getId(), window) - expected, 360.0));
+            double fromControl = Math.abs(measured - withoutIt) / withoutIt;
+            System.out.printf(Locale.ROOT, "%s magnetizing %s: %.3e pu, %.3e rad against the load flow (bound %.3e); %.2f%% off the control%n", name, bus.getId(),
+                    puError, angleError, bound, 100.0 * fromControl);
+            softly.assertThat(Math.abs(puError)).as("|V(%s)| against the load flow's, pu, %s", bus.getId(), name).isLessThan(bound);
+            softly.assertThat(Math.abs(angleError)).as("V(%s)'s angle from V(B1) against the load flow's, radians, %s", bus.getId(), name).isLessThan(bound);
+            softly.assertThat(fromControl).as("|V(%s)| with the admittance against the control, %s", bus.getId(), name).isGreaterThan(0.01);
+        }
+        softly.assertAll();
+    }
+
+    /** {@code |y| |z|} of {@code network}'s two-winding phase-shifting unit: its magnetizing admittance's magnitude times half its leakage
+     * impedance's - between the T's and the pi's places for it -, both on the same side. */
+    private static double magnetizingDropAcrossTheLeakage(Network network) {
+        for (TwoWindingsTransformer transformer : network.getTwoWindingsTransformers()) {
+            if (transformer.hasPhaseTapChanger()) {
+                return Math.hypot(transformer.getG(), transformer.getB()) * Math.hypot(transformer.getR(), transformer.getX()) / 2.0;
+            }
+        }
+        throw new IllegalArgumentException("no two-winding phase shifter in " + network.getId());
     }
 
     /**

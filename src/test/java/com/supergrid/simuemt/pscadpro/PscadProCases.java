@@ -110,6 +110,27 @@ final class PscadProCases {
     }
 
     static Stream<Case> all() {
+        return Stream.concat(phaseShifters(), others());
+    }
+
+    /** Past PSCAD Free's 15 electrical nodes, upstream's phase-shifter benches: alone, with a ratio tap changer beside the phase one, and with
+     * upstream's heavy magnetizing admittance on the two-winding phase-shifting unit. */
+    private static Stream<Case> phaseShifters() {
+        return Stream.of(
+                fromRest("pure-phase-shifter", ExampleNetworks::createThreeBusNetworkWithPurePhaseShiftingTransformer),
+                fromRest("pure-phase-shifter-ynd11", ExampleNetworks::createThreeBusNetworkWithPurePhaseShiftingYnd11Transformer),
+                fromRest("pure-phase-shifting-leg", ExampleNetworks::createFourBusNetworkWithPurePhaseShiftingLeg),
+                fromRest("phase-shifting-leg-with-windings", ExampleNetworks::createFourBusNetworkWithPhaseShiftingLegAndWindings),
+                fromRest("phase-shifter-and-ratio", () -> withRatio(ExampleNetworks.createThreeBusNetworkWithPurePhaseShiftingTransformer())),
+                fromRest("phase-shifter-ynd11-and-ratio", () -> withRatio(ExampleNetworks.createThreeBusNetworkWithPurePhaseShiftingYnd11Transformer())),
+                fromRest("phase-shifting-leg-and-ratio", () -> withRatio(ExampleNetworks.createFourBusNetworkWithPurePhaseShiftingLeg())),
+                fromRest("phase-shifting-leg-with-windings-and-ratio", () -> withRatio(ExampleNetworks.createFourBusNetworkWithPhaseShiftingLegAndWindings())),
+                // ... and with upstream's heavy magnetizing admittance on the phase-shifting unit: the two-winding one alone - on a bank of
+                // PSCAD's transformers, the YNd11 and three-winding ones' 159% of rated is past the 50% PSCAD's transformer takes
+                fromRest("pure-phase-shifter-magnetizing", () -> magnetizing(ExampleNetworks.createThreeBusNetworkWithPurePhaseShiftingTransformer())));
+    }
+
+    private static Stream<Case> others() {
         return Stream.of(
                 // The circuit's kinds of components
                 fromRest("two-bus", ExampleNetworks::createTwoBusNetworkWithIdealInfiniteBusGenerator),
@@ -132,14 +153,6 @@ final class PscadProCases {
                 new Case("three-winding-leg-closing", ExampleNetworks::createThreeBusNetworkWithThreeWindingsTransformerOpenAtLegThree,
                         events("leg-t2_3_4-three-close-0.2"), SETTINGS, Kind.FROM_REST),
                 fromRest("arrester-on-a-line-out-of-service", ExampleNetworks::createTwoBusNetworkWithArresterAtTheFarEndOfALineOutOfService),
-                fromRest("pure-phase-shifter", ExampleNetworks::createThreeBusNetworkWithPurePhaseShiftingTransformer),
-                fromRest("pure-phase-shifter-ynd11", ExampleNetworks::createThreeBusNetworkWithPurePhaseShiftingYnd11Transformer),
-                fromRest("pure-phase-shifting-leg", ExampleNetworks::createFourBusNetworkWithPurePhaseShiftingLeg),
-                fromRest("phase-shifting-leg-with-windings", ExampleNetworks::createFourBusNetworkWithPhaseShiftingLegAndWindings),
-                fromRest("phase-shifter-and-ratio", () -> withRatio(ExampleNetworks.createThreeBusNetworkWithPurePhaseShiftingTransformer())),
-                fromRest("phase-shifter-ynd11-and-ratio", () -> withRatio(ExampleNetworks.createThreeBusNetworkWithPurePhaseShiftingYnd11Transformer())),
-                fromRest("phase-shifting-leg-and-ratio", () -> withRatio(ExampleNetworks.createFourBusNetworkWithPurePhaseShiftingLeg())),
-                fromRest("phase-shifting-leg-with-windings-and-ratio", () -> withRatio(ExampleNetworks.createFourBusNetworkWithPhaseShiftingLegAndWindings())),
                 fromRest("twelve-bus-chain", PscadProCases::twelveBusChain),
                 // A machine's controls of the project's own, in Fortran: exciters, limiters and controllers
                 fromRest("machine-st4b", ExampleNetworks::createTwoBusNetworkWithSt4B),
@@ -633,6 +646,11 @@ final class PscadProCases {
     /** The upstream scenario {@code events/<name>.xml}. */
     private static List<EmtEvent> events(String name) {
         return EmtEventsXml.read(ExampleNetworks.resource("/events/" + name + ".xml"));
+    }
+
+    /** {@code network} with upstream's heavy magnetizing admittance on its phase-shifting unit ({@code ExampleNetworks#withMagnetizingAdmittanceOnThePhaseShifters}). */
+    private static Network magnetizing(Network network) {
+        return ExampleNetworks.withMagnetizingAdmittanceOnThePhaseShifters(network);
     }
 
     /** {@code network}'s phase tap changers with a ratio tap changer beside each, as upstream folds into their ratio. */
