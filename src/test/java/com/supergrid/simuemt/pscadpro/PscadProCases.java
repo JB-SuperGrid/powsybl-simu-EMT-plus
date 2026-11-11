@@ -125,9 +125,16 @@ final class PscadProCases {
                 fromRest("phase-shifter-ynd11-and-ratio", () -> withRatio(ExampleNetworks.createThreeBusNetworkWithPurePhaseShiftingYnd11Transformer())),
                 fromRest("phase-shifting-leg-and-ratio", () -> withRatio(ExampleNetworks.createFourBusNetworkWithPurePhaseShiftingLeg())),
                 fromRest("phase-shifting-leg-with-windings-and-ratio", () -> withRatio(ExampleNetworks.createFourBusNetworkWithPhaseShiftingLegAndWindings())),
-                // ... and with upstream's heavy magnetizing admittance on the phase-shifting unit: the two-winding one alone - on a bank of
-                // PSCAD's transformers, the YNd11 and three-winding ones' 159% of rated is past the 50% PSCAD's transformer takes
-                fromRest("pure-phase-shifter-magnetizing", () -> magnetizing(ExampleNetworks.createThreeBusNetworkWithPurePhaseShiftingTransformer())));
+                // ... and with upstream's heavy magnetizing admittance on the phase-shifting unit: the two-winding one as upstream has it;
+                // on a bank of PSCAD's transformers, the YNd11 and three-winding ones' 159% of rated is past the 50% PSCAD's transformer
+                // takes, scaled down to 40%
+                fromRest("pure-phase-shifter-magnetizing", () -> magnetizing(ExampleNetworks.createThreeBusNetworkWithPurePhaseShiftingTransformer())),
+                fromRest("pure-phase-shifter-ynd11-magnetizing-40", () -> PscadProBeyondFreeTest.magnetizingAt(
+                        ExampleNetworks.createThreeBusNetworkWithPurePhaseShiftingYnd11Transformer(), 40.0)),
+                fromRest("pure-phase-shifting-leg-magnetizing-40", () -> PscadProBeyondFreeTest.magnetizingAt(
+                        ExampleNetworks.createFourBusNetworkWithPurePhaseShiftingLeg(), 40.0)),
+                fromRest("phase-shifting-leg-with-windings-magnetizing-40", () -> PscadProBeyondFreeTest.magnetizingAt(
+                        ExampleNetworks.createFourBusNetworkWithPhaseShiftingLegAndWindings(), 40.0)));
     }
 
     private static Stream<Case> others() {
