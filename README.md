@@ -45,7 +45,7 @@ Phasor b2 = run.output().fundamentalPhasor(run.project().circuit().voltageChanne
 
 - `mvn test`: without PSCAD: every case's `.pscx` is written, the driver ships and Python compiles it, its report is read.
 - `mvn test -Ppscad`: the real PSCAD.
-  - `PscadProBuildTest` builds each case of `PscadProCases` (129: every upstream example network the backend writes, those
+  - `PscadProBuildTest` builds each case of `PscadProCases` (132: every upstream example network the backend writes, those
     past PSCAD Free's 15 electrical nodes among them, and this project's own: CIGRE B4's DC grid test system, whole
     (`CigreB4Network`, `src/test/resources/cigre-b4*`), the IEEE 14-bus network with a meshed DC grid and Dynawo's machines
     (`Ieee14DcNetwork`, `src/test/resources/ieee14-dc*`), and Kundur's two-area system with a three-terminal DC grid beside its
@@ -60,9 +60,9 @@ Phasor b2 = run.output().fundamentalPhasor(run.project().circuit().voltageChanne
     held to the circuit's phasor steady state (`PscadSteadyState`), as upstream holds its hand-made PSCAD Free runs, and
     the multi-terminal DC grids to their load flow and droop curves.
   - `PscadProBeyondFreeTest` runs what upstream writes for the Professional edition only, past Free's 15 nodes, and holds it
-    to what upstream holds ATP, Xyce and Kestrel to: the four phase-shifter benches on the load flow, the two-winding one
-    with upstream's heavy magnetizing admittance within the T's drop of it (the other three's is past the 50% of rated PSCAD's
-    transformer takes), a line put back into
+    to what upstream holds ATP, Xyce and Kestrel to: the four phase-shifter benches on the load flow, the four
+    with a magnetizing admittance within the T's drop of it - the two-winding one with upstream's, the three others, past the
+    50% of rated PSCAD's transformer takes with it, at 40% -, a line put back into
     service, a three-winding transformer's leg closed, and left open from rest, an open-ended energization with and without
     its arrester, and a chain of twelve buses on the load flow; and the YNd11 bench restarted through a fault from a
     Professional template, whose snapshot renumbers its nodes; a three-winding transformer's legs displaced by their clock
