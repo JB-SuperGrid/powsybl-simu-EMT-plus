@@ -787,6 +787,42 @@ class PscadProConvertersTest {
         softly.assertAll();
     }
 
+    /**
+     * {@link #aDeblockedGridFormingStationRestartsInStep} with no steady-state current limit, VSC2 resynchronised by a PLL of its own while
+     * blocked, on its virtual machine and on a power-frequency droop, run 7 s - upstream's {@code
+     * AtpSolverIntegrationTest#aGridFormingStationRestartsInStepWithItsBusOnItsResynchronizationPll} and {@code
+     * #aDroopGridFormingStationRestartsInStepWithItsBusOnItsResynchronizationPll}, shifted 4.5 s as {@link
+     * #aGridFormingStationsVirtualMachineSwingsToItsNewPowerReference}, the virtual machine's slow swing from rest settled: blocked, its speed drawn to its bus's;
+     * restarted in step, its first 20 ms' power the diodes', its reactive power held; its swing's crest - 0.84 to 0.9 pu drawn on the
+     * machine, 1.05 to 1.15 on the droop, its own answer -; back on the powers and DC voltage before.
+     */
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"vsc-gfm-resync-pll", "vsc-gfm-droop-resync-pll"})
+    void aGridFormingStationRestartsInStepWithItsBusOnItsResynchronizationPll(String name, @TempDir Path tempDir) {
+        double runEnd = 7.0;
+        boolean droop = name.contains("droop");
+        double settled = droop ? 6.5 : 6.8;
+        PscadOutput out = run(name, runEnd, tempDir).output;
+        System.out.printf(Locale.ROOT, "%s: blocked speed %.5f, VAC %.4f; first 20 ms %.4f; Q crest %.4f, P crest %.4f; VSC2 %.2e, VSC1 %.2e, VDC1 %.2e off%n", name,
+                out.mean("VSC2_VSMW", 4.95, 5.0), out.mean("VSC2_VAC", 4.9, 5.0), out.mean("VSC2_P", 5.0, 5.02), out.peakAbsolute("VSC2_Q", 5.02, runEnd),
+                out.peakAbsolute("VSC2_P", 5.02, runEnd), out.mean("VSC2_P", settled, runEnd) - out.mean("VSC2_P", 4.7, 4.8),
+                out.mean("VSC1_P", settled, runEnd) - out.mean("VSC1_P", 4.7, 4.8), out.mean("VSC1_VDC", settled, runEnd) - out.mean("VSC1_VDC", 4.7, 4.8));
+        SoftAssertions softly = new SoftAssertions();
+        softly.assertThat(out.mean("VSC2_VSMW", 4.95, 5.0)).as("VSC2's speed blocked: drawn to its bus's").isCloseTo(1.0, within(1.0e-3));
+        if (!droop) {
+            softly.assertThat(out.mean("VSC2_VAC", 4.9, 5.0)).as("VSC2's AC voltage blocked, pu: its diodes clamping").isBetween(0.78, 0.84);
+        }
+        softly.assertThat(out.mean("VSC2_P", 5.0, 5.02)).as("VSC2's power over the deblocking's first 20 ms, pu drawn: in step").isBetween(-0.25, 0.0);
+        softly.assertThat(out.peakAbsolute("VSC2_Q", 5.02, runEnd)).as("VSC2's reactive power once restarted, pu").isLessThan(droop ? 0.4 : 0.55);
+        softly.assertThat(out.peakAbsolute("VSC2_P", 5.02, runEnd)).as("VSC2's power's crest once restarted, pu").isBetween(droop ? 1.05 : 0.84, droop ? 1.15 : 0.9);
+        softly.assertThat(out.mean("VSC2_P", settled, runEnd)).as("VSC2's power at the end, pu: back on before's").isCloseTo(out.mean("VSC2_P", 4.7, 4.8),
+                within(droop ? 1.0e-3 : 2.5e-3));
+        softly.assertThat(out.mean("VSC1_P", settled, runEnd)).as("VSC1's power at the end, pu: back on before's").isCloseTo(out.mean("VSC1_P", 4.7, 4.8),
+                within(droop ? 1.0e-3 : 3.0e-3));
+        softly.assertThat(out.mean("VSC1_VDC", settled, runEnd)).as("VSC1's DC voltage at the end, pu").isCloseTo(out.mean("VSC1_VDC", 4.7, 4.8), within(1.0e-3));
+        softly.assertAll();
+    }
+
     private static Run run(String name, double runEnd, Path tempDir) {
         PscadProCases.Case scenario = PscadProCases.all().filter(c -> c.name().equals(name)).findFirst().orElseThrow();
         Network network = ExampleNetworks.withLoadFlow(scenario.network().get());

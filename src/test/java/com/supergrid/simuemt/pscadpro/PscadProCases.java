@@ -32,6 +32,8 @@ import com.powsybl.simuemt.extensions.hvdc.VoltageSourceConverterModel;
 import com.powsybl.simuemt.extensions.hvdc.VscProtectionModel;
 import com.powsybl.simuemt.extensions.hvdc.control.FaultRideThrough;
 import com.powsybl.simuemt.extensions.hvdc.control.GridFollowingControl;
+import com.powsybl.simuemt.extensions.hvdc.control.GridFormingControl;
+import com.powsybl.simuemt.extensions.hvdc.control.SrfPll;
 import com.powsybl.simuemt.extensions.hvdc.control.VscControlModel;
 import com.powsybl.simuemt.extensions.infinitebus.InfiniteBusGeneratorModel;
 import com.powsybl.simuemt.extensions.line.BergeronLineModel;
@@ -377,6 +379,10 @@ final class PscadProCases {
                 // Example 3's grid-forming VSC2, as ATP, Xyce and Kestrel share it: its power reference stepped by 0.1 pu at 5 s - its
                 // virtual machine's slow swing from rest settled by then, still 7e-3 pu off at 2.5 s
                 converters("vsc-gfm-step", () -> preprocessed("vsc-monopole-infinite-buses-3", false, false), new ConverterPowerStep("VSC2", 5.0, 0.1)),
+                // ... and blocked at 4.8 s and deblocked at 5 s with no steady-state current limit, resynchronised by a PLL of its own, on
+                // its virtual machine and on a power-frequency droop
+                converters("vsc-gfm-resync-pll", () -> resynchronized(false), new ConverterBlocking("VSC2", 4.8), new ConverterDeblocking("VSC2", 5.0)),
+                converters("vsc-gfm-droop-resync-pll", () -> resynchronized(true), new ConverterBlocking("VSC2", 4.8), new ConverterDeblocking("VSC2", 5.0)),
                 // ... and those ATP, Xyce and Kestrel share that no PSCAD has run: the solid fault on DC3P cut off by the stations' AC breakers,
                 // two-level and MMC; the MMC grid's cleared selectively by DCB; the meshed MMC grid's faulted line cut off at both ends
                 converters("dc-fault-stations-open", () -> preprocessed("vsc-three-terminal-all-droop", true, true), stationsOpen()),
@@ -523,6 +529,24 @@ final class PscadProCases {
 
     /** Example 4's MMC grid with its DC breaker, its stations protected, VSC3 with an active power recovery ramp of 2 pu/s, as upstream's
      * restart after a DC fault has it. */
+    /** Example 3 between infinite buses, its grid-forming VSC2 - on its virtual machine, or on a power-frequency droop if {@code droop} -
+     * with no steady-state current limit, resynchronised by a {@code resynchronizationPll} of that limit's PLL's gains: upstream's {@code
+     * AtpSolverIntegrationTest#resynchronizedStation}. */
+    private static Network resynchronized(boolean droop) {
+        Network network = bench("vsc-monopole-infinite-buses-3");
+        if (droop) {
+            ExampleNetworks.withThirdVscExampleDroop(network);
+        }
+        VoltageSourceConverter vsc2 = network.getVoltageSourceConverter("VSC2");
+        GridFormingControl control = GridFormingControl.of(vsc2);
+        SrfPll limitsPll = control.getSteadyStateCurrentLimit().orElseThrow().pll();
+        vsc2.addExtension(VscControlModel.class, new GridFormingControl(control.getSynchronization(), control.getVoltageDroop(), control.getVirtualAdmittance(),
+                control.getCurrentControl(), control.getCurrentLimit(), control.getMeasurement(), null, control.getTransientDamping().orElse(null),
+                control.getDcVoltageDroop().orElse(null), limitsPll));
+        EmtNetworkPreprocessor.preprocess(network, LocalComputationManager.getDefault());
+        return network;
+    }
+
     /** Upstream's {@code fault-b3-abc-0.3-0.4}, 2 s later: a solid three-phase fault on B3 from 2.3 to 2.4 s. */
     private static final EmtEvent B3_FAULT = shifted((BusFault) events("fault-b3-abc-0.3-0.4").get(0));
 
