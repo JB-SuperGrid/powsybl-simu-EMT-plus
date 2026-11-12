@@ -147,11 +147,14 @@ class PscadProBeyondFreeTest {
      * without the admittance, the control: by more than 1% with upstream's admittance, as upstream holds them, by more than 0.25% at 40%,
      * some a quarter of the effect.
      *
+     * The farthest bus off the load flow by more than 80% of the bound: the T's own drop, ATP's, Xyce's and Kestrel's at 87 to 92%, a pi's
+     * at nothing.
+     *
      * <p>Run 2026-11-11. The three banks at 40% off the load flow by 89 to 93% of their bound - YNd11's B3 5.9e-4 pu against 6.6e-4, the
-     * legs' B4 1.24e-3 against 1.33e-3 -, where upstream measured ATP, Xyce and Kestrel at 87 to 92% of theirs: the T's own drop, PSCAD's
-     * transformer hanging the admittance as they do; 1.04 to 1.17% off the control. The two-winding bench within 9.5e-6 pu of the load
-     * flow, 0.4% of its bound, 4.03% off the control: PSCAD hangs that unit's admittance on side 1's bus ({@code PscadCircuitBuilder}),
-     * where the load flow's pi has it, not in the middle of the other backends' T - some 2.4e-3 pu from ATP's buses.
+     * legs' B4 1.24e-3 against 1.33e-3 -, PSCAD's transformer hanging the admittance as the other backends do; 1.04 to 1.17% off the
+     * control. The two-winding bench, its admittance in a T of its own in PSCAD Professional since upstream's {@code pscad-phase-shifter-tee}:
+     * B3 2.351e-3 pu off the load flow, 89% of its bound - ATP's 2.4e-3 -, 4.0 to 4.3% off the control; on side 1's bus before, the load
+     * flow's pi, within 9.5e-6 pu of it, 0.4% of its bound.
      */
     @ParameterizedTest(name = "{0}")
     @MethodSource("magnetizingBenches")
@@ -171,6 +174,7 @@ class PscadProBeyondFreeTest {
         VectorGroupOffsets offsets = VectorGroupOffsets.of(network);
         Bus b1 = network.getBusBreakerView().getBus("B1");
         SoftAssertions softly = new SoftAssertions();
+        double largest = 0.0;
         for (Bus bus : network.getBusBreakerView().getBuses()) {
             if (bus == b1) {
                 continue;
@@ -182,6 +186,7 @@ class PscadProBeyondFreeTest {
             double expected = bus.getAngle() - b1.getAngle() + offsets.degrees(bus) - offsets.degrees(b1);
             double angleError = Math.toRadians(Math.IEEEremainder(angleFrom(run, "B1", bus.getId(), window) - expected, 360.0));
             double fromControl = Math.abs(measured - withoutIt) / withoutIt;
+            largest = Math.max(largest, Math.abs(puError));
             System.out.printf(Locale.ROOT, "%s magnetizing %s: %.3e pu, %.3e rad against the load flow (bound %.3e); %.2f%% off the control%n", name, bus.getId(),
                     puError, angleError, bound, 100.0 * fromControl);
             softly.assertThat(Math.abs(puError)).as("|V(%s)| against the load flow's, pu, %s", bus.getId(), name).isLessThan(bound);
@@ -189,6 +194,8 @@ class PscadProBeyondFreeTest {
             softly.assertThat(fromControl).as("|V(%s)| with the admittance against the control, %s", bus.getId(), name)
                     .isGreaterThan(Double.isNaN(percent) ? 0.01 : 0.0025);
         }
+        // The T's own drop: its farthest bus off the load flow's pi by most of the bound, as ATP's, Xyce's and Kestrel's are - by 87 to 92%.
+        softly.assertThat(largest / bound).as("the farthest bus off the load flow, in its bound, %s: the T's drop", name).isGreaterThan(0.8);
         softly.assertAll();
     }
 
