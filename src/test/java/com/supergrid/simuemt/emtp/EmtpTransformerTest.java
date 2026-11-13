@@ -4,7 +4,6 @@
  */
 package com.supergrid.simuemt.emtp;
 
-import com.powsybl.commons.PowsyblException;
 import com.powsybl.iidm.network.Bus;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.simuemt.extensions.GeneratorModel;
@@ -28,7 +27,6 @@ import java.util.Locale;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.within;
 
 /**
@@ -72,14 +70,6 @@ class EmtpTransformerTest {
         assertRl(tapped.get("T2_3_W1a"), 3.96694214876033, 0.0947037677902187);
         assertRl(tapped.get("T2_3_W2a"), 1.2, 0.0286478897565412);
         assertThat(Double.parseDouble(tapped.get("T2_3_a")[1].split(",")[0])).isCloseTo(220.0 / 400.0, within(1.0e-15));
-    }
-
-    @Test
-    void refusesWindingConnectionsAndAPhaseTapChanger(@TempDir Path tempDir) {
-        Network network = ExampleNetworks.withLoadFlow(withInfiniteBus(ExampleNetworks.createThreeBusNetworkWithPhaseShiftingTransformer()));
-
-        assertThatThrownBy(() -> EmtpNetlistWriter.write(network, tempDir, SETTINGS)).isInstanceOf(PowsyblException.class)
-                .hasMessageContaining("has a phase tap changer");
     }
 
     /**

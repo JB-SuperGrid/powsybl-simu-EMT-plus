@@ -4,7 +4,6 @@
  */
 package com.supergrid.simuemt.emtp;
 
-import com.powsybl.commons.PowsyblException;
 import com.powsybl.iidm.network.Bus;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.ThreeWindingsTransformer;
@@ -33,7 +32,6 @@ import java.util.Locale;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.within;
 
 /**
@@ -79,16 +77,6 @@ class EmtpThreeWindingsTransformerTest {
         assertThat(Double.parseDouble(devices.get("T2_3_4_a")[2])).isCloseTo(104.545454545455, within(1.0e-9));
         assertRl(devices.get("T2_3_4_RMa"), 500000.0, 0.0);
         assertThat(Double.parseDouble(devices.get("T2_3_4_LMa")[1].split(",")[1])).isCloseTo(1039.6 / 1.95959, within(1.0e-5 * 530.0));
-    }
-
-    @Test
-    void refusesALegWithAPhaseTapChanger(@TempDir Path tempDir) {
-        Network network = ExampleNetworks.createFourBusNetworkWithPurePhaseShiftingLeg();
-        network.getGenerator("GEN").addExtension(GeneratorModel.class, new InfiniteBusGeneratorModel(20000.0, 10.0));
-        Network loaded = ExampleNetworks.withLoadFlow(network);
-
-        assertThatThrownBy(() -> EmtpNetlistWriter.write(loaded, tempDir, SETTINGS)).isInstanceOf(PowsyblException.class)
-                .hasMessageContaining("has a leg with a phase tap changer");
     }
 
     /**

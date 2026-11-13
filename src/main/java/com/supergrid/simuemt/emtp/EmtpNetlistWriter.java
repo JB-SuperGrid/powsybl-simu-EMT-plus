@@ -20,6 +20,7 @@ import com.powsybl.simuemt.extensions.GeneratorModel;
 import com.powsybl.simuemt.extensions.LoadModel;
 import com.powsybl.simuemt.extensions.circuit.LoadBranches;
 import com.powsybl.simuemt.extensions.circuit.NumericalAids;
+import com.powsybl.simuemt.extensions.circuit.PhaseShiftCoefficients;
 import com.powsybl.simuemt.extensions.circuit.TapCorrectedImpedance;
 import com.powsybl.simuemt.extensions.circuit.ThreeWindingsTransformerWindings;
 import com.powsybl.simuemt.extensions.circuit.TransformerWindings;
@@ -76,7 +77,7 @@ import java.util.stream.Stream;
  * order, the switch's current margin 0, or at the order, a margin no current reaches - ATP's own.
  *
  * <p>EMTP starts the run from its own steady-state solution, every source active from {@code -1} s. Anything else the network holds -
- * another kind of generator or load, a line's shunt conductance, a transformer with a phase tap changer,
+ * another kind of generator or load, a line's shunt conductance,
  * a switch - or the run goes through is refused, said
  * so, until written.
  *
@@ -181,6 +182,10 @@ public final class EmtpNetlistWriter {
             writeWindingConnectedTransformer(lines, transformer, windings, settings);
             return;
         }
+        if (transformer.getOptionalPhaseTapChanger().isPresent()) {
+            writePhaseShiftingTransformer(lines, transformer, settings);
+            return;
+        }
         TapCorrectedImpedance corrected = TapCorrectedImpedance.of(transformer);
         double ratedU1 = transformer.getRatedU1();
         double ratedU2 = corrected.ratedU();
@@ -224,6 +229,12 @@ public final class EmtpNetlistWriter {
         double b1 = Math.abs(corrected.b()) / toSide1 / factor1;
         String id = id(transformer);
         String[] side1 = phaseNodes(transformer.getTerminal1().getBusBreakerView().getBus().getId());
+        double alpha = transformer.getOptionalPhaseTapChanger().map(changer -> changer.getCurrentStep().getAlpha()).orElse(0.0);
+        if (alpha != 0.0) {
+            // A phase tap changer's angle, cascaded ahead of the bank on side 1: the bank's displacement is wiring, the tap's an angle
+            // no wiring produces; its rho is already in side 2's rated voltage.
+            side1 = coupling(lines, "PS" + id(transformer), side1, 1.0, alpha);
+        }
         String[] side2 = phaseNodes(transformer.getTerminal2().getBusBreakerView().getBus().getId());
         String neutral1 = neutral(windings.connection1(), windings.groundingR1(), windings.groundingX1(), "N" + id + "_1");
         String neutral2 = neutral(windings.connection2(), windings.groundingR2(), windings.groundingX2(), "N" + id + "_2");
@@ -289,6 +300,10 @@ public final class EmtpNetlistWriter {
      */
     private static void writeThreeWindingsTransformer(Devices lines, ThreeWindingsTransformer transformer, EmtpSimulationSettings settings) {
         ThreeWindingsTransformerWindings windings = ThreeWindingsTransformerWindings.of(transformer);
+        if (windings == null && transformer.getLegStream().anyMatch(leg -> leg.getOptionalPhaseTapChanger().isPresent())) {
+            writePhaseShiftingCapableTransformer(lines, transformer, settings);
+            return;
+        }
         ZeroSequenceFluxPath fluxPath = ZeroSequenceFluxPath.of(transformer.getExtension(ThreeWindingsTransformerFortescue.class));
         List<ThreeWindingsTransformer.Leg> legs = List.of(transformer.getLeg1(), transformer.getLeg2(), transformer.getLeg3());
         TapCorrectedImpedance[] values = new TapCorrectedImpedance[3];
@@ -299,6 +314,13 @@ public final class EmtpNetlistWriter {
         for (int k = 0; k < 3; k++) {
             values[k] = TapCorrectedImpedance.ofLeg(legs.get(k)).referredFromStarBus(transformer.getRatedU0());
             legNodes[k] = phaseNodes(legs.get(k).getTerminal().getBusBreakerView().getBus().getId());
+            double alpha = legs.get(k).getOptionalPhaseTapChanger().map(changer -> changer.getCurrentStep().getAlpha()).orElse(0.0);
+            if (alpha != 0.0) {
+                // The leg's tap angle, cascaded between its bus and its windings. The leg lags the star by the tap's angle
+                // (PhaseShiftCoefficients#legAlphaDegrees), but this block runs the other way, from the leg's bus back to the winding:
+                // minus that, as ATP writes it - with legAlphaDegrees itself, the leg's bus came out 2 alpha off the load flow.
+                legNodes[k] = coupling(lines, "PS" + id + "_" + (k + 1), legNodes[k], 1.0, -PhaseShiftCoefficients.legAlphaDegrees(alpha));
+            }
             connections[k] = windings == null ? WindingConnectionType.Y_GROUNDED : windings.connection(k + 1);
             neutrals[k] = windings == null ? "" : neutral(connections[k], windings.groundingR(k + 1), windings.groundingX(k + 1), "N" + id + "_" + (k + 1));
         }
@@ -364,6 +386,116 @@ public final class EmtpNetlistWriter {
         if (fluxPath != null) {
             tankEarthReferences(lines, id);
         }
+    }
+
+    /**
+     * A two-winding transformer with a phase tap changer and no winding connections, as ATP writes it: a T around an ideal phase-shifting
+     * coupling ({@link #coupling}) - half the leakage on each side, each half referred to its own side, {@code 16L/Dt} across it; the
+     * excitation admittance from the T's middle, the coupling's input, to earth, referred to side 1; the coupling at the windings' ratio
+     * (a ratio tap's and the phase tap's rho folded in, {@link TapCorrectedImpedance}) and the step's angle.
+     */
+    private static void writePhaseShiftingTransformer(Devices lines, TwoWindingsTransformer transformer, EmtpSimulationSettings settings) {
+        TapCorrectedImpedance corrected = TapCorrectedImpedance.of(transformer);
+        double ratedU1 = transformer.getRatedU1();
+        double ratedU2 = corrected.ratedU();
+        double toSide1 = ratedU1 * ratedU1 / (ratedU2 * ratedU2);
+        double l1 = 0.5 * corrected.x() * toSide1 / omega(settings);
+        double l2 = 0.5 * corrected.x() / omega(settings);
+        double g1 = corrected.g() / toSide1;
+        double b1 = Math.abs(corrected.b()) / toSide1;
+        String id = id(transformer);
+        String[] side1 = phaseNodes(transformer.getTerminal1().getBusBreakerView().getBus().getId());
+        String[] side2 = phaseNodes(transformer.getTerminal2().getBusBreakerView().getBus().getId());
+        String[] middle = new String[3];
+        for (int p = 0; p < 3; p++) {
+            middle[p] = "T" + id + "_1" + PHASES[p];
+            lines.add("_RLC", id + "_W1" + PHASES[p], List.of(side1[p], middle[p]), rl(0.5 * corrected.r() * toSide1, l1));
+            damping(lines, id + "_D1" + PHASES[p], side1[p], middle[p], l1, settings, "half the leakage");
+            if (g1 != 0.0) {
+                lines.add("_RLC", id + "_RM" + PHASES[p], List.of(middle[p]), rl(1.0 / g1, 0.0));
+            }
+            if (b1 != 0.0) {
+                lines.add("_RLC", id + "_LM" + PHASES[p], List.of(middle[p]), rl(0.0, 1.0 / (omega(settings) * b1)));
+            }
+        }
+        String[] ideal = coupling(lines, "PS" + id, middle, ratedU2 / ratedU1, transformer.getPhaseTapChanger().getCurrentStep().getAlpha());
+        for (int p = 0; p < 3; p++) {
+            lines.add("_RLC", id + "_W2" + PHASES[p], List.of(ideal[p], side2[p]), rl(0.5 * corrected.r(), l2));
+            damping(lines, id + "_D2" + PHASES[p], ideal[p], side2[p], l2, settings, "half the leakage");
+        }
+    }
+
+    /**
+     * A three-winding transformer with a phase-shifting leg and no winding connections, as ATP writes it: the star point an explicit node
+     * per phase, each leg on it - a ratio-only leg an ideal unit at {@code U_leg / U0} then its leakage, a phase-shifting leg a coupling
+     * ({@link #coupling}) at that ratio and its angle ({@link PhaseShiftCoefficients#legAlphaDegrees}) then its leakage, {@code 16L/Dt}
+     * across that one; each leg's excitation admittance on the star node, referred to {@code U0}.
+     */
+    private static void writePhaseShiftingCapableTransformer(Devices lines, ThreeWindingsTransformer transformer, EmtpSimulationSettings settings) {
+        String id = id(transformer);
+        double ratedU0 = transformer.getRatedU0();
+        String[] star = {"S" + id + "a", "S" + id + "b", "S" + id + "c"};
+        List<ThreeWindingsTransformer.Leg> legs = List.of(transformer.getLeg1(), transformer.getLeg2(), transformer.getLeg3());
+        for (int k = 0; k < 3; k++) {
+            ThreeWindingsTransformer.Leg leg = legs.get(k);
+            TapCorrectedImpedance values = TapCorrectedImpedance.ofLeg(leg).referredFromStarBus(ratedU0);
+            String[] bus = phaseNodes(leg.getTerminal().getBusBreakerView().getBus().getId());
+            double ratio = values.ratedU() / ratedU0;
+            double inductance = values.x() / omega(settings);
+            String legId = id + "_" + (k + 1);
+            if (leg.getOptionalPhaseTapChanger().isPresent()) {
+                String[] ideal = coupling(lines, "PS" + legId, star, ratio,
+                        PhaseShiftCoefficients.legAlphaDegrees(leg.getPhaseTapChanger().getCurrentStep().getAlpha()));
+                for (int p = 0; p < 3; p++) {
+                    lines.add("_RLC", legId + "_W" + PHASES[p], List.of(ideal[p], bus[p]), rl(values.r(), inductance));
+                    damping(lines, legId + "_D" + PHASES[p], ideal[p], bus[p], inductance, settings, "the leg's leakage");
+                }
+            } else {
+                for (int p = 0; p < 3; p++) {
+                    String winding = "T" + legId + PHASES[p];
+                    lines.add("_Tr0", legId + "_" + PHASES[p], List.of(star[p], "", winding, ""), number(ratio) + ",,,");
+                    lines.add("_RLC", legId + "_W" + PHASES[p], List.of(winding, bus[p]), rl(values.r(), inductance));
+                }
+            }
+            double g0 = values.g() * ratio * ratio;
+            double b0 = Math.abs(values.b()) * ratio * ratio;
+            for (int p = 0; p < 3; p++) {
+                if (g0 != 0.0) {
+                    lines.add("_RLC", legId + "_RM" + PHASES[p], List.of(star[p]), rl(1.0 / g0, 0.0));
+                }
+                if (b0 != 0.0) {
+                    lines.add("_RLC", legId + "_LM" + PHASES[p], List.of(star[p]), rl(0.0, 1.0 / (omega(settings) * b0)));
+                }
+            }
+        }
+    }
+
+    /**
+     * An ideal three-phase coupling at ratio {@code rho} and angle {@code alphaDegrees}, from {@code inputs} to the three nodes it returns -
+     * ATP's {@code AtpPhaseShiftingCoupling} in EMTP's ideal units: for each output phase, a chain from earth of one ideal unit per input
+     * phase ({@code _Tr0}), its primary from that input to earth, its secondary adding {@code rho} times the circulant coefficient {@link
+     * PhaseShiftCoefficients} gives of that input's voltage to the chain, its terminals swapped for a negative one - ampere-turns
+     * conserved by the units themselves. A zero coefficient adds nothing, and no unit.
+     */
+    private static String[] coupling(Devices lines, String name, String[] inputs, double rho, double alphaDegrees) {
+        double[] k = PhaseShiftCoefficients.compute(alphaDegrees);
+        String[] outputs = new String[3];
+        for (int out = 0; out < 3; out++) {
+            String chain = "";
+            for (int in = 0; in < 3; in++) {
+                double ratio = rho * PhaseShiftCoefficients.coefficientAt(k, out, in);
+                if (ratio == 0.0) {
+                    continue;
+                }
+                String next = name + "_" + PHASES[out] + (in + 1);
+                List<String> secondary = ratio > 0.0 ? List.of(next, chain) : List.of(chain, next);
+                lines.add("_Tr0", name + "_" + PHASES[out] + PHASES[in], List.of(inputs[in], "", secondary.get(0), secondary.get(1)),
+                        number(Math.abs(ratio)) + ",,,");
+                chain = next;
+            }
+            outputs[out] = chain;
+        }
+        return outputs;
     }
 
     /** A side's star point: earth ({@code ""}) when solidly earthed, the node {@code name} otherwise; none for a delta. */
@@ -534,16 +666,12 @@ public final class EmtpNetlistWriter {
             List<String> windingReasons = TransformerWindings.unsupportedReasons(transformer);
             if (!windingReasons.isEmpty()) {
                 reasons.add("transformer '" + transformer.getId() + "': " + String.join(", ", windingReasons));
-            } else if (transformer.getOptionalPhaseTapChanger().isPresent()) {
-                reasons.add("transformer '" + transformer.getId() + "' has a phase tap changer");
             }
         }
         for (ThreeWindingsTransformer transformer : network.getThreeWindingsTransformers()) {
             List<String> windingReasons = ThreeWindingsTransformerWindings.unsupportedReasons(transformer);
             if (!windingReasons.isEmpty()) {
                 reasons.add("transformer '" + transformer.getId() + "': " + String.join(", ", windingReasons));
-            } else if (transformer.getLegStream().anyMatch(leg -> leg.getOptionalPhaseTapChanger().isPresent())) {
-                reasons.add("transformer '" + transformer.getId() + "' has a leg with a phase tap changer");
             }
         }
         Stream.of(network.getShuntCompensatorStream(),
