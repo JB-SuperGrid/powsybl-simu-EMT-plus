@@ -50,7 +50,14 @@ import static com.supergrid.simuemt.emtp.EmtpNetlistWriter.number;
  * constant {@code H}, and its damping {@code D} - a power per unit of speed deviation - as the speed-deviation damping {@code DSR = D
  * S / wm^2}, a torque per mechanical rad/s, as ATP's mass card has it. EMTP starts the machine from its own steady state, the
  * machine there a source at the load flow's terminal voltage ({@link MachineInitialState}), displaced by its bus's vector group; its
- * field voltage and its mechanical power are then held where that steady state put them.
+ * mechanical power is then held where that steady state put it.
+ *
+ * <p>Its field voltage {@code vf} is held too, as upstream's backends hold it: a constant ({@code _c_cst}) at the load flow's {@link
+ * MachineInitialState#efd()} drives the machine's field-voltage control, per unit. Left uncontrolled, EMTP holds {@code Ef = w Mdf
+ * vf / rf} instead, the field voltage falling as the machine speeds up: shorted at the far end of its line, the two-bus machine's
+ * voltage came out 0.25% low 0.39 s later, 1.76 rad ahead (2026-11-13), where Park's equations with {@code vf/w} for the field
+ * voltage put it within 4e-5. The control signal goes on each phase's header right after its stator pin - the star point has no pin
+ * of its own when earthed inside -, named after the machine, {@code GEN_Vf}.
  *
  * <p>Refused, until written: zero-sequence data ({@code GeneratorFortescue}), saturation, and any enabled excitation system,
  * stabilizer, limiter or turbine-governor - one disabled holds what it would have regulated, as in upstream's backends.
@@ -66,6 +73,8 @@ final class EmtpSynchronousMachines {
     private static final int Q_WINDINGS = 2;
     /** EMTPWorks' defaults: damping factor, rotor speed tolerance, its iterations, no maximum precision, voltage tolerance. */
     private static final String PRECISION = "PR=100 1e-06 300 0 1e-06,";
+    /** Field voltage, torque, power, field voltage {@code vf}, speed: {@code vf} controlled. */
+    private static final String CONTROLS = "CTRL=0 0 0 1 0,";
     /** Observe and scope requests EMTPWorks' form writes, every one off. */
     private static final int OBSERVABLES = 31;
 
@@ -138,8 +147,8 @@ final class EmtpSynchronousMachines {
 
         List<String> lines = new ArrayList<>();
         for (int p = 0; p < 3; p++) {
-            // Pin k on the bus phase, pin m - the star point - blank: earthed inside the machine.
-            lines.add("_SM;" + name + "abc".charAt(p) + ";4;2;" + phaseNodes[p] + ",,");
+            // Pin k on the bus phase, the field-voltage control signal, a blank pin.
+            lines.add("_SM;" + name + "abc".charAt(p) + ";5;3;" + phaseNodes[p] + "," + fieldVoltageSignal(name) + ",,");
         }
         lines.add("V=" + number(terminalKv) + " " + number(terminalKv) + " " + number(terminalKv) + ",1kVRMSLL,");
         lines.add("P=" + number(angle) + " " + number(Math.IEEEremainder(angle - 120.0, 360.0)) + " "
@@ -167,11 +176,24 @@ final class EmtpSynchronousMachines {
         // H in place of the moment of inertia; SI units for the scopes and the observe signals.
         lines.add("MSu=1 0 0,");
         lines.add(PRECISION);
-        // Field voltage, torque, power, field voltage, speed: none controlled - held at the steady state's.
-        lines.add("CTRL=0 0 0 0 0,");
+        // Its controls per unit; the field voltage controlled, held by its constant.
+        lines.add("CTRLu=1,");
+        lines.add(CONTROLS);
         lines.add("OBSu=0 0,");
         lines.add("OBS=" + String.join(" ", Collections.nCopies(OBSERVABLES, "0")) + ",");
         return lines;
+    }
+
+    /** The constant that holds the machine's field voltage: its device, its signal at the load flow's field voltage, per unit, from
+     * the start (step mode). */
+    static List<String> fieldVoltage(Generator generator, String name) {
+        double efd = MachineInitialState.subtransient(generator, subtransient(generator), 0.0).efd();
+        return List.of("_c_cst;" + name + "_VF;1;1;" + fieldVoltageSignal(name) + ",", number(efd) + ",S1,");
+    }
+
+    /** The machine's field-voltage control signal: EMTP finds it by its {@code Vf}. */
+    private static String fieldVoltageSignal(String name) {
+        return name + "_Vf";
     }
 
     private static SubtransientMachineModel subtransient(Generator generator) {

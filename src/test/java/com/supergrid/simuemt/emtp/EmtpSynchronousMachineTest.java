@@ -65,10 +65,10 @@ class EmtpSynchronousMachineTest {
     @Test
     void writesTheExactCircuitOfTheMachinesData(@TempDir Path tempDir) throws IOException {
         List<String> lines = Files.readAllLines(EmtpNetlistWriter.write(loadedMachineWithFieldHeld(), tempDir, SETTINGS), StandardCharsets.ISO_8859_1);
-        int start = lines.indexOf("_SM;GENa;4;2;B1a,,");
+        int start = lines.indexOf("_SM;GENa;5;3;B1a,GEN_Vf,,");
 
         assertThat(start).as("the machine's phase a").isNotNegative();
-        assertThat(lines.subList(start + 1, start + 3)).containsExactly("_SM;GENb;4;2;B1b,,", "_SM;GENc;4;2;B1c,,");
+        assertThat(lines.subList(start + 1, start + 3)).containsExactly("_SM;GENb;5;3;B1b,GEN_Vf,,", "_SM;GENc;5;3;B1c,GEN_Vf,,");
         assertThat(lines.get(start + 3)).startsWith("V=400.0000000000000 ").endsWith(",1kVRMSLL,");
         assertThat(lines.get(start + 4)).isEqualTo("P=0.000000000000000 -120.0000000000000 120.0000000000000,1,");
         assertThat(lines.get(start + 5)).isEqualTo("f=50.00000000000000 2 0 0 50.00000000000000,");
@@ -84,7 +84,12 @@ class EmtpSynchronousMachineTest {
         assertThat(lines.get(start + 15)).isEqualTo("MS=0 1 1 0,");
         assertValues(lines.get(start + 16), "", 100, 5.5, 1.8e8 / Math.pow(100.0 * Math.PI, 2), 0, 0, 0);
         assertThat(lines.get(start + 19)).isEqualTo("PR=100 1e-06 300 0 1e-06,");
-        assertThat(lines.get(start + 20)).isEqualTo("CTRL=0 0 0 0 0,");
+        // Its field voltage held: controlled, per unit, by a constant at the load flow's, Ef = 2.4769 pu - Eq' + (Xd - Xd') Id.
+        assertThat(lines.subList(start + 20, start + 22)).containsExactly("CTRLu=1,", "CTRL=0 0 0 1 0,");
+        int constant = lines.indexOf("_c_cst;GEN_VF;1;1;GEN_Vf,");
+        assertThat(constant).as("the field voltage's constant").isNotNegative();
+        assertThat(lines.get(constant + 1)).endsWith(",S1,");
+        assertThat(Double.parseDouble(lines.get(constant + 1).split(",")[0])).isCloseTo(2.4769149, within(1.0e-6));
     }
 
     @Test
@@ -102,7 +107,7 @@ class EmtpSynchronousMachineTest {
      * The loaded machine run live: both buses within 1e-4 pu and 0.01 degree of the load flow, in EMTP's steady state and its last
      * period. Kept in {@code target/emtp/machine-loaded}.
      *
-     * <p>Run 2026-11-13: B1, the machine's terminal, within 2.8e-6 pu and 9.7e-4 degree; B2 within 1.2e-5 pu and 6.4e-4 degree.
+     * <p>Run 2026-11-13: B1, the machine's terminal, within 1.3e-6 pu and 8.8e-4 degree; B2 within 8.3e-6 pu and 5.5e-4 degree.
      */
     @Test
     @Tag("emtp")
@@ -138,7 +143,8 @@ class EmtpSynchronousMachineTest {
      * the voltage the decaying DC current drops across the line's resistance cancels out - within 1% over the first 0.9 s, as upstream
      * holds ATP (0.41%) and Xyce (0.28%). Kept in {@code target/emtp/machine-short}.
      *
-     * <p>Run 2026-11-13: the EMF 1.00000 pu, 88 pairs of crests, the worst 0.39% off.
+     * <p>Run 2026-11-13: the EMF 1.00000 pu, 88 pairs of crests, the worst 0.45% off - Park's equations integrated for the same short
+     * ({@link #theParkReferenceShortsTheUnloadedMachineAsTheClosedFormDoes}) 0.46%.
      */
     @Test
     @Tag("emtp")
@@ -180,7 +186,7 @@ class EmtpSynchronousMachineTest {
      * terminal voltage, crest by crest - each two consecutive crests averaged - over the line's impedance, within 0.5% of the closed form
      * {@link #shortCircuitEnvelope} over 0.9 s, which leaves out the stator's transients and resistance.
      *
-     * <p>2026-11-13: within 0.46% over 89 pairs of crests - as upstream's ATP is (0.41%), and EMTP (0.39%,
+     * <p>2026-11-13: within 0.46% over 89 pairs of crests - as upstream's ATP is (0.41%), and EMTP (0.45%,
      * {@link #theSuddenShortFollowsTheMachinesData}).
      */
     @Test
@@ -192,7 +198,7 @@ class EmtpSynchronousMachineTest {
         Line line = network.getLine("L1_2");
         double emf = generator.getTerminal().getBusBreakerView().getBus().getV() / generator.getTerminal().getVoltageLevel().getNominalV();
         ParkShortCircuitReference reference = new ParkShortCircuitReference(machine, line.getR() / baseOhms, line.getX() / baseOhms, FREQUENCY,
-                new double[] {emf, 0.0}, new double[] {0.0, 0.0});
+                new double[] {emf, 0.0}, new double[] {0.0, 0.0}, true);
         List<Crest> crests = phaseA(reference, 0.0, 0.0, 0.92).crests("V", 0.002, 0.9);
 
         double worst = 0.0;
@@ -215,18 +221,40 @@ class EmtpSynchronousMachineTest {
      * 0.5% and, but for the first one's delay, within 25 us of the reference's, as upstream holds ATP (0.03%) and Xyce (0.05%).
      * Kept in {@code target/emtp/machine-loaded-short}.
      *
-     * <p>Run 2026-11-13: 55 crests, the worst 2.5e-5 off, the first 1.8 us late and every other within 6.3 us of it.
+     * <p>Run 2026-11-13: 55 crests, the worst 1.9e-5 off, the first 1.8 us late and every other within 6.3 us of it.
      */
     @Test
     @Tag("emtp")
     void theLoadedSuddenShortFollowsParksEquations() {
+        assertLoadedShortFollowsParksEquations(true, 1.1, 0.55, "machine-loaded-short");
+    }
+
+    /**
+     * The same loaded short with the machine's own inertia (5.5 s) and damping (1.8), its rotor free: through the short at the end of
+     * its line the machine sheds most of its load and speeds up, some 1% per 100 ms, its rotor's angle drawing ahead of the network's -
+     * the swing equation's share in the crests, their instants most of all, which the held speed above leaves out. Over 0.45 s, held to
+     * the reference's free rotor ({@code 2H dw/dt = Pm/w - Te - D (w - 1)}) as tightly, as upstream holds ATP (0.04%) and Xyce (0.02%).
+     * Kept in {@code target/emtp/machine-free-rotor-short}.
+     *
+     * <p>This is what showed the field voltage EMTP holds by itself, {@code Ef = w Mdf vf / rf}, not {@code vf}: its crests fell behind
+     * the reference's in proportion to the angle the rotor gained, 1.4e-3 per radian, 0.33% by 0.42 s, the instants still within 2 us -
+     * as Park's equations put them, within 4e-5, with {@code vf/w} for the field voltage. Since held by a constant on its {@code vf}
+     * control ({@link EmtpSynchronousMachines}).
+     *
+     * <p>Run 2026-11-13: 45 crests, the worst 1.8e-5 off, the first 1.9 us late and every other within 1.9 us of it.
+     */
+    @Test
+    @Tag("emtp")
+    void theLoadedSuddenShortWithItsRotorFreeFollowsParksEquations() {
+        assertLoadedShortFollowsParksEquations(false, 1.0, 0.45, "machine-free-rotor-short");
+    }
+
+    private static void assertLoadedShortFollowsParksEquations(boolean speedHeld, double runEnd, double readTo, String directory) {
         double faultStart = 0.5;
-        double readTo = 0.55;
-        double runEnd = 1.1;
-        Network network = loadedMachineWithFieldHeld(1.0e4);
+        Network network = speedHeld ? loadedMachineWithFieldHeld(1.0e4) : loadedMachineWithFieldHeld();
         List<BusFault> shortCircuit = List.of(new BusFault("FLTA", "B2", 'A', faultStart, runEnd + 1), new BusFault("FLTB", "B2", 'B', faultStart, runEnd + 1),
                 new BusFault("FLTC", "B2", 'C', faultStart, runEnd + 1));
-        EmtpOutput output = EmtpRunner.run(EmtpNetlistWriter.write(network, Path.of("target", "emtp", "machine-loaded-short"),
+        EmtpOutput output = EmtpRunner.run(EmtpNetlistWriter.write(network, Path.of("target", "emtp", directory),
                 new EmtpSimulationSettings(TIME_STEP, runEnd, FREQUENCY), shortCircuit), EmtpSettings.defaults()).output();
 
         Generator generator = network.getGenerator("GEN");
@@ -242,7 +270,7 @@ class EmtpSynchronousMachineTest {
         double q = -generator.getTerminal().getQ() / generator.getRatedS();
         double v2 = v[0] * v[0] + v[1] * v[1];
         double[] i = {(p * v[0] + q * v[1]) / v2, (p * v[1] - q * v[0]) / v2};
-        ParkShortCircuitReference reference = new ParkShortCircuitReference(machine, line.getR() / baseOhms, line.getX() / baseOhms, FREQUENCY, v, i);
+        ParkShortCircuitReference reference = new ParkShortCircuitReference(machine, line.getR() / baseOhms, line.getX() / baseOhms, FREQUENCY, v, i, speedHeld);
 
         String b1a = EmtpNetlistWriter.voltageScope("B1", 'A');
         double[] before = SwitchingWindows.leadingUpTo(faultStart, 0.02, TIME_STEP);
@@ -272,14 +300,15 @@ class EmtpSynchronousMachineTest {
     }
 
     /** {@code reference}'s phase a per unit through {@code duration} after the short at {@code faultStart}, the d axis {@code
-     * rotorAngle} ahead of phase a at time 0, sampled every 5 us. */
+     * rotorAngle} ahead of phase a at time 0 in the synchronous frame - and the reference's own swing ahead of that -, sampled every 5
+     * us. */
     private static AbstractTimeStepTable phaseA(ParkShortCircuitReference reference, double faultStart, double rotorAngle, double duration) {
         double sample = 5.0e-6;
         double[][] dq = reference.terminalVoltages(duration, sample, 1.0e-6);
         double[][] rows = new double[dq.length][];
         for (int k = 0; k < dq.length; k++) {
             double t = faultStart + (k + 1) * sample;
-            double angle = rotorAngle + 2.0 * Math.PI * FREQUENCY * t;
+            double angle = rotorAngle + 2.0 * Math.PI * FREQUENCY * t + dq[k][2];
             rows[k] = new double[] {t, dq[k][0] * Math.cos(angle) - dq[k][1] * Math.sin(angle)};
         }
         return new AbstractTimeStepTable(new String[] {"TIME", "V"}, rows) { };
