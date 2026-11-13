@@ -13,13 +13,14 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 
 /**
  * Runs an EMTP netlist ({@code <name>.net}) with EMTP's solver alone, {@code emtpopt.exe}, without EMTPWorks: as EMTPWorks starts it
  * once it has written a design's netlist, with no progress panel. The solver writes everything into the netlist's project folder,
  * {@code <name>_pj} beside it - which it does not create: missing, it reports the error on its console only and exits with code 0,
  * having written nothing. So this creates it, removes the outputs of an earlier run, and refuses a run that did not end in EMTP's
- * {@code EMTP terminated} or that reported an error ({@code !!Error}), with the solver's console and its log's end.
+ * {@code EMTP terminated} or that reported an error ({@code !!Error: ...}, {@code Error, ...}), with the solver's console and its log's end.
  *
  * <p>The outputs ({@link EmtpOutput}, {@link EmtpSteadyState}): {@code <name>.out}, the log; {@code <name>m.m} and {@code <name>.mda},
  * the scopes; {@code <name>ss.xml}, the steady-state solution the time-domain run starts from.
@@ -30,8 +31,9 @@ public final class EmtpRunner {
 
     /** What EMTP prints last on a run that went through. */
     static final String TERMINATED = "EMTP terminated";
-    /** How EMTP flags an error, on its console and in its log. */
-    static final String ERROR = "!!Error";
+    /** How EMTP flags an error, on its console and in its log: {@code !!Error: ...} for its input, {@code Error, ...} for a network
+     * it cannot solve - which it still runs to its end, its log ending in {@link #TERMINATED}. */
+    private static final Pattern ERROR = Pattern.compile("^\\s*(!!)?Error\\b");
 
     /** A run: the netlist's name, its project folder and what the solver printed on its console. */
     public record Run(String name, Path projectDirectory, List<String> console) {
@@ -79,11 +81,15 @@ public final class EmtpRunner {
         }
         List<String> printed = lines(console);
         List<String> log = lines(project.resolve(name + ".out"));
-        if (log.stream().noneMatch(line -> line.contains(TERMINATED)) || printed.stream().anyMatch(line -> line.contains(ERROR))
-                || log.stream().anyMatch(line -> line.contains(ERROR))) {
+        if (log.stream().noneMatch(line -> line.contains(TERMINATED)) || hasError(printed) || hasError(log)) {
             throw new PowsyblException("SimuEmt Plus: EMTP did not run " + file + " through" + messages(project, name));
         }
         return new Run(name, project, printed);
+    }
+
+    /** Whether EMTP reported an error among {@code lines}. */
+    static boolean hasError(List<String> lines) {
+        return lines.stream().anyMatch(line -> ERROR.matcher(line).find());
     }
 
     /**
