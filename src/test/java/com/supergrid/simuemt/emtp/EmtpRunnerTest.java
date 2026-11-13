@@ -65,11 +65,14 @@ class EmtpRunnerTest {
         assertThat(run.steadyState().voltages()).isEqualTo(EmtpSteadyState.read(EmtpOutputTest.project(), "simple_short").voltages());
     }
 
-    /** A netlist EMTP cannot read: refused with its messages. */
+    /** A netlist EMTP cannot read: refused with its messages. Written under {@code target/emtp/broken}, not a temporary folder: on
+     * this "critical error" EMTP holds the netlist's folder for a moment after {@code emtpopt.exe} has exited - JUnit, deleting it at
+     * once, failed one run in two (2026-11-13); a run that goes through never does. */
     @Test
     @Tag("emtp")
-    void refusesARunThatDidNotGoThrough(@TempDir Path tempDir) throws IOException {
-        Path netlist = Files.writeString(tempDir.resolve("broken.net"), "Dt=10us;\ntmax=1ms;\n_NoSuchDevice;X1;1;1;a,\n1,\n");
+    void refusesARunThatDidNotGoThrough() throws IOException {
+        Path netlist = Files.writeString(Files.createDirectories(Path.of("target", "emtp", "broken")).resolve("broken.net"),
+                "Dt=10us;\ntmax=1ms;\n_NoSuchDevice;X1;1;1;a,\n1,\n");
 
         assertThatThrownBy(() -> EmtpRunner.run(netlist, EmtpSettings.defaults())).isInstanceOf(PowsyblException.class)
                 .hasMessageContaining("EMTP did not run").hasMessageContaining("EMTP's console");
