@@ -57,6 +57,10 @@ import static org.assertj.core.api.Assertions.within;
  * converters within 2e-3 pu and 1.7e-4 pu DC; the VSC monopole's within 8.8e-4, VSC2 grid-forming 0.026 pu off the load flow's at 7 s
  * on its swing law, the converters within 4.1e-3 of it; CIGRE DCS2 within 4e-5, 1.6e-3 and 1.9e-4.
  *
+ * <p>Run 2026-11-14, the three VSC bipoles - their negative poles' converters on their stations' earthed neutrals, each converter's DC
+ * voltage held across its two terminals -, once upstream writes the negative pole: on infinite buses, with a metallic return and with
+ * converter transformers, buses within 3.7e-5 pu, converters' powers within 2.7e-3 pu, DC voltages within 9.5e-6 pu, in 99 s.
+ *
  * <p>Tagged {@code pscad}: run with {@code mvn test -Ppscad}.
  *
  * @author Jean-Baptiste Heyberger : jean-baptiste.heyberger@supergrid-institute.com
@@ -125,8 +129,10 @@ class PscadProExampleCoverageTest {
             double rating = rating(converter);
             double p = out.mean(id + "_P", from, runEnd) - (converter.getTerminal1().getP() + offsets.getOrDefault(id, 0.0)) / rating;
             double q = out.mean(id + "_Q", from, runEnd) - converter.getTerminal1().getQ() / rating;
+            // Its DC voltage across its two terminals: a bipole's negative pole has its DC terminal 1 on the earthed neutral.
             double vdc = out.mean(id + "_VDC", from, runEnd)
-                    - converter.getDcTerminal1().getDcNode().getV() / converter.getDcTerminal1().getDcNode().getNominalV();
+                    - (converter.getDcTerminal1().getDcNode().getV() - converter.getDcTerminal2().getDcNode().getV())
+                    / converter.getDcTerminal1().getDcNode().getNominalV();
             worstPower = Math.max(worstPower, Math.max(Math.abs(p), Math.abs(q)));
             worstDc = Math.max(worstDc, Math.abs(vdc));
             softly.assertThat(p).as("%s: %s's power at the end against the load flow's, pu", example, id).isCloseTo(0.0, within(POWER_TOLERANCE));
