@@ -430,7 +430,11 @@ final class PscadProCases {
                         List.of(new BusFault("FLTA", "B2", 'A', 0.1, 0.15, FaultClearing.AT_ORDER)), ON_TIME_STEP, Kind.TEMPLATE),
                 new Case("template-machine", ExampleNetworks::createTwoBusNetworkWithAc1A, List.of(), SETTINGS, Kind.TEMPLATE),
                 new Case("template-machine-ac6a-limiter", PscadProCases::ac6aLimiterSwingBench, events("fault-b2-a-1.5-1.6"),
-                        new PscadSimulationSettings(20.0e-6, 3.0, 50.0, PscadEdition.PROFESSIONAL, PscadSwitching.ON_TIME_STEP), Kind.TEMPLATE));
+                        new PscadSimulationSettings(20.0e-6, 3.0, 50.0, PscadEdition.PROFESSIONAL, PscadSwitching.ON_TIME_STEP), Kind.TEMPLATE),
+                // Example 1's reduced bench, VSC2 on a metallic return, through the phase-a fault on B2 from its steady state, as upstream
+                // restarts it in PSCAD Free (PscadProMetallicReturnTest)
+                new Case("template-vsc-metallic-return", () -> bench("vsc-monopole-infinite-buses-metallic-return"), events("fault-b2-a-0.3-0.4"),
+                        new PscadSimulationSettings(20.0e-6, 0.8, 50.0, PscadEdition.PROFESSIONAL, PscadSwitching.ON_TIME_STEP), Kind.TEMPLATE));
     }
 
     private static Case fromRest(String name, Supplier<Network> network) {
