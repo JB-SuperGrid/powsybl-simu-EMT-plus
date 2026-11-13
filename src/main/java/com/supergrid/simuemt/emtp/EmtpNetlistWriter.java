@@ -12,12 +12,16 @@ import com.powsybl.iidm.network.Line;
 import com.powsybl.iidm.network.Load;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.TwoWindingsTransformer;
+import com.powsybl.iidm.network.extensions.TwoWindingsTransformerFortescue;
+import com.powsybl.iidm.network.extensions.WindingConnectionType;
 import com.powsybl.simuemt.extensions.GeneratorModel;
 import com.powsybl.simuemt.extensions.LoadModel;
 import com.powsybl.simuemt.extensions.circuit.LoadBranches;
 import com.powsybl.simuemt.extensions.circuit.NumericalAids;
 import com.powsybl.simuemt.extensions.circuit.TapCorrectedImpedance;
 import com.powsybl.simuemt.extensions.circuit.TransformerWindings;
+import com.powsybl.simuemt.extensions.circuit.VectorGroupOffsets;
+import com.powsybl.simuemt.extensions.circuit.ZeroSequenceFluxPath;
 import com.powsybl.simuemt.extensions.event.BusFault;
 import com.powsybl.simuemt.extensions.event.EmtEvent;
 import com.powsybl.simuemt.extensions.event.FaultClearing;
@@ -49,7 +53,12 @@ import java.util.stream.Stream;
  *     ({@code _Tr0}, its ratio {@code V2/V1}), half the leakage - IIDM's r/x, a ratio tap changer's step folded in ({@link
  *     TapCorrectedImpedance}) - on each winding, the side-1 half referred to it by {@code (V1/V2)^2}; and, the excitation admittance
  *     referred the other way, a core-loss resistance and a magnetizing inductance from the node between winding 1's leakage and the
- *     ideal unit to earth, where ATP hangs them. No {@code 16L/Dt} across a leakage, which ATP keeps inside its component;</li>
+ *     ideal unit to earth, where ATP hangs them. No {@code 16L/Dt} across a leakage, which ATP keeps inside its component. With
+ *     winding connections ({@code TwoWindingsTransformerFortescue} and its clock number), each unit's windings across the terminals
+ *     {@link TransformerWindings} gives - a star winding from its phase to the star point, a delta one across two phases -, each its
+ *     own rated voltage and its share of the leakage, three times its star-equivalent one in a delta, the admittance across winding 1
+ *     a third in a delta; a star point earth when solidly earthed, else a node of its own with its grounding impedance, or 0.003 uF
+ *     to earth isolated, and 0.003 uF from each phase of a delta side, as ATP has them;</li>
  *     <li>a load, constant impedance: per phase, from {@link LoadBranches} at the load flow's voltage, its resistance then its
  *     inductance to earth through a node of its own, {@code 16L/Dt} across the inductance;</li>
  *     <li>an infinite-bus generator: per phase a cosine source ({@code _Vsine}, active in the steady state) at the EMF that puts
@@ -64,8 +73,8 @@ import java.util.stream.Stream;
  * order, the switch's current margin 0, or at the order, a margin no current reaches - ATP's own.
  *
  * <p>EMTP starts the run from its own steady-state solution, every source active from {@code -1} s. Anything else the network holds -
- * another kind of generator or load, a line's shunt conductance, a transformer with winding connections or a phase tap changer, a
- * switch - or the run goes through is refused, said
+ * another kind of generator or load, a line's shunt conductance, a transformer with a phase tap changer or a zero-sequence flux path,
+ * a switch - or the run goes through is refused, said
  * so, until written.
  *
  * @author Jean-Baptiste Heyberger : jean-baptiste.heyberger@supergrid-institute.com
@@ -161,6 +170,11 @@ public final class EmtpNetlistWriter {
     }
 
     private static void writeTransformer(Devices lines, TwoWindingsTransformer transformer, EmtpSimulationSettings settings) {
+        TransformerWindings windings = TransformerWindings.of(transformer);
+        if (windings != null) {
+            writeWindingConnectedTransformer(lines, transformer, windings, settings);
+            return;
+        }
         TapCorrectedImpedance corrected = TapCorrectedImpedance.of(transformer);
         double ratedU1 = transformer.getRatedU1();
         double ratedU2 = corrected.ratedU();
@@ -186,6 +200,85 @@ public final class EmtpNetlistWriter {
                 lines.add("_RLC", id(transformer) + "_LM" + phase, List.of(winding1), rl(0.0, 1.0 / (omega(settings) * b1)));
             }
         }
+    }
+
+    /** A transformer with winding connections, as ATP wires its three single-phase units - see the class's javadoc. */
+    private static void writeWindingConnectedTransformer(Devices lines, TwoWindingsTransformer transformer, TransformerWindings windings,
+                                                         EmtpSimulationSettings settings) {
+        TapCorrectedImpedance corrected = TapCorrectedImpedance.of(transformer);
+        double ratedU1 = transformer.getRatedU1();
+        double ratedU2 = corrected.ratedU();
+        double toSide1 = ratedU1 * ratedU1 / (ratedU2 * ratedU2);
+        double factor1 = TransformerWindings.windingImpedanceFactor(windings.connection1());
+        double factor2 = TransformerWindings.windingImpedanceFactor(windings.connection2());
+        double winding1Kv = TransformerWindings.windingVoltage(windings.connection1(), ratedU1);
+        double winding2Kv = TransformerWindings.windingVoltage(windings.connection2(), ratedU2);
+        // The excitation admittance, star-equivalent at side 2, referred to winding 1: a third of it across a delta winding.
+        double g1 = corrected.g() / toSide1 / factor1;
+        double b1 = Math.abs(corrected.b()) / toSide1 / factor1;
+        String id = id(transformer);
+        String[] side1 = phaseNodes(transformer.getTerminal1().getBusBreakerView().getBus().getId());
+        String[] side2 = phaseNodes(transformer.getTerminal2().getBusBreakerView().getBus().getId());
+        String neutral1 = neutral(windings.connection1(), windings.groundingR1(), windings.groundingX1(), "N" + id + "_1");
+        String neutral2 = neutral(windings.connection2(), windings.groundingR2(), windings.groundingX2(), "N" + id + "_2");
+        for (int unit = 0; unit < 3; unit++) {
+            String phase = PHASES[unit];
+            int[] terminals1 = windings.side1Terminals(unit);
+            int[] terminals2 = windings.side2Terminals(unit);
+            String winding1 = "T" + id + "_1" + phase;
+            String winding2 = "T" + id + "_2" + phase;
+            String end1 = terminal(side1, terminals1[1], neutral1);
+            lines.add("_RLC", id + "_W1" + phase, List.of(terminal(side1, terminals1[0], neutral1), winding1),
+                    rl(factor1 * 0.5 * corrected.r() * toSide1, factor1 * 0.5 * corrected.x() * toSide1 / omega(settings)));
+            lines.add("_Tr0", id + "_" + phase, List.of(winding1, end1, winding2, terminal(side2, terminals2[1], neutral2)),
+                    number(winding2Kv / winding1Kv) + ",,,");
+            lines.add("_RLC", id + "_W2" + phase, List.of(winding2, terminal(side2, terminals2[0], neutral2)),
+                    rl(factor2 * 0.5 * corrected.r(), factor2 * 0.5 * corrected.x() / omega(settings)));
+            List<String> across1 = end1.isEmpty() ? List.of(winding1) : List.of(winding1, end1);
+            if (g1 != 0.0) {
+                lines.add("_RLC", id + "_RM" + phase, across1, rl(1.0 / g1, 0.0));
+            }
+            if (b1 != 0.0) {
+                lines.add("_RLC", id + "_LM" + phase, across1, rl(0.0, 1.0 / (omega(settings) * b1)));
+            }
+        }
+        earthReference(lines, id + "_1", windings.connection1(), windings.groundingR1(), windings.groundingX1(), neutral1, side1, settings);
+        earthReference(lines, id + "_2", windings.connection2(), windings.groundingR2(), windings.groundingX2(), neutral2, side2, settings);
+    }
+
+    /** A side's star point: earth ({@code ""}) when solidly earthed, the node {@code name} otherwise; none for a delta. */
+    private static String neutral(WindingConnectionType connection, double groundingR, double groundingX, String name) {
+        if (connection == WindingConnectionType.DELTA) {
+            return null;
+        }
+        return connection == WindingConnectionType.Y_GROUNDED && groundingR == 0.0 && groundingX == 0.0 ? "" : name;
+    }
+
+    /** A winding's terminal: its side's node of phase {@code terminal}, or the star point. */
+    private static String terminal(String[] phaseNodes, int terminal, String neutral) {
+        return terminal == TransformerWindings.NEUTRAL ? neutral : phaseNodes[terminal];
+    }
+
+    /** What ties a side to earth: its star point's grounding impedance, 0.003 uF from an isolated star point, 0.003 uF from each phase
+     * of a delta side - ATP's. */
+    private static void earthReference(Devices lines, String name, WindingConnectionType connection, double groundingR, double groundingX,
+                                       String neutral, String[] phaseNodes, EmtpSimulationSettings settings) {
+        String capacitor = "0,0," + number(NumericalAids.FLOATING_WINDING_EARTH_REFERENCE_F) + ",0,0,";
+        if (connection == WindingConnectionType.DELTA) {
+            for (int p = 0; p < phaseNodes.length; p++) {
+                lines.comment(NumericalAids.COMMENT_MARKER + ": 0.003 uF earth reference of a delta side's phase");
+                lines.add("_RLC", name + "_CD" + PHASES[p], List.of(phaseNodes[p]), capacitor);
+            }
+        } else if (connection == WindingConnectionType.Y) {
+            lines.comment(NumericalAids.COMMENT_MARKER + ": 0.003 uF earth reference of an isolated star point");
+            lines.add("_RLC", name + "_CN", List.of(neutral), capacitor);
+        } else if (!neutral.isEmpty()) {
+            lines.add("_RLC", name + "_ZN", List.of(neutral), rl(groundingR, groundingX / omega(settings)));
+        }
+    }
+
+    private static String[] phaseNodes(String busId) {
+        return new String[] {node(busId, 'a'), node(busId, 'b'), node(busId, 'c')};
     }
 
     /** A line end's charging, {@code susceptanceS} to earth from {@code node}: its capacitance, {@code Dt/16C} in series with it - one
@@ -236,12 +329,14 @@ public final class EmtpNetlistWriter {
         Bus bus = generator.getTerminal().getBusBreakerView().getBus();
         double nominalKv = bus.getVoltageLevel().getNominalV();
         InfiniteBusEmf emf = InfiniteBusEmf.fromLoadFlow(generator, model, settings.nominalFrequencyHz(), settings.timeStepSeconds());
+        // The vector-group displacement between the load flow's reference and the bus, as for any source (VectorGroupOffsets).
+        double offset = VectorGroupOffsets.of(generator.getNetwork()).degrees(bus);
         double resistance = NumericalAids.sourceSeriesResistanceOhm(InfiniteBusEmf.theveninResistanceOhm(model, nominalKv));
         double inductance = InfiniteBusEmf.theveninReactanceOhm(model, nominalKv) / omega(settings);
         for (int p = 0; p < PHASES.length; p++) {
             String phase = PHASES[p];
             String source = "E" + id(generator) + phase;
-            double angle = Math.IEEEremainder(emf.angleDegrees() - 120.0 * p, 360.0);
+            double angle = Math.IEEEremainder(emf.angleDegrees() + offset - 120.0 * p, 360.0);
             lines.add("_Vsine", id(generator) + "_" + phase, List.of(source),
                     number(emf.crestPerPhaseVolts()) + "," + number(settings.nominalFrequencyHz()) + "," + number(angle) + "," + STEADY_STATE_START + "," + NEVER + ",");
             String to = node(bus.getId(), phase.charAt(0));
@@ -316,8 +411,11 @@ public final class EmtpNetlistWriter {
             }
         }
         for (TwoWindingsTransformer transformer : network.getTwoWindingsTransformers()) {
-            if (TransformerWindings.of(transformer) != null) {
-                reasons.add("transformer '" + transformer.getId() + "' has winding connections");
+            List<String> windingReasons = TransformerWindings.unsupportedReasons(transformer);
+            if (!windingReasons.isEmpty()) {
+                reasons.add("transformer '" + transformer.getId() + "': " + String.join(", ", windingReasons));
+            } else if (ZeroSequenceFluxPath.of(transformer.getExtension(TwoWindingsTransformerFortescue.class)) != null) {
+                reasons.add("transformer '" + transformer.getId() + "' has a zero-sequence flux path, a third winding per unit");
             } else if (transformer.getOptionalPhaseTapChanger().isPresent()) {
                 reasons.add("transformer '" + transformer.getId() + "' has a phase tap changer");
             }
