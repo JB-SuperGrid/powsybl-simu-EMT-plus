@@ -15,6 +15,7 @@ import com.powsybl.simuemt.extensions.event.EmtEvent;
 import com.powsybl.simuemt.extensions.excitation.ExcitationSystemModel;
 import com.powsybl.simuemt.extensions.excitation.SimplifiedAvrModel;
 import com.powsybl.simuemt.extensions.machine.SubtransientMachineModel;
+import com.powsybl.simuemt.extensions.output.AbstractTimeStepTable;
 import com.powsybl.simuemt.extensions.output.Crest;
 import com.powsybl.simuemt.extensions.pss.Pss1AModel;
 import com.powsybl.simuemt.extensions.pss.PssModel;
@@ -44,7 +45,8 @@ import static org.assertj.core.api.Assertions.within;
  * 1.9, Xd' 0.28, T'd0 6.5 s, Xq' 0.35, T'q0 1.0 s, Xd'' = Xq'' 0.20, T''d0 0.035 s, T''q0 0.05 s, Xl 0.15, Ra 0.0025, H 5.5 s, D 1.8,
  * 1000 A on the air-gap line, 2 poles - through the 4 + j40 ohm line to B2's load, its voltage regulator and stabilizer disabled,
  * which holds its field. Written as EMTP's machine of the circuit its data describe under the exact definitions, and - tagged {@code
- * emtp} - run live: on the load flow, then shorted at the line's far end against the short-circuit current those data give.
+ * emtp} - run live: on the load flow, then shorted at the line's far end, unloaded against the short-circuit current those data give,
+ * loaded against Park's equations integrated here ({@link ParkShortCircuitReference}).
  *
  * @author Jean-Baptiste Heyberger : jean-baptiste.heyberger@supergrid-institute.com
  */
@@ -174,6 +176,116 @@ class EmtpSynchronousMachineTest {
     }
 
     /**
+     * The reference the loaded short is held to ({@link ParkShortCircuitReference}), checked first on the unloaded one: its machine's
+     * terminal voltage, crest by crest - each two consecutive crests averaged - over the line's impedance, within 0.5% of the closed form
+     * {@link #shortCircuitEnvelope} over 0.9 s, which leaves out the stator's transients and resistance.
+     *
+     * <p>2026-11-13: within 0.46% over 89 pairs of crests - as upstream's ATP is (0.41%), and EMTP (0.39%,
+     * {@link #theSuddenShortFollowsTheMachinesData}).
+     */
+    @Test
+    void theParkReferenceShortsTheUnloadedMachineAsTheClosedFormDoes() {
+        Network network = unloadedMachineWithFieldHeld();
+        Generator generator = network.getGenerator("GEN");
+        SubtransientMachineModel machine = (SubtransientMachineModel) generator.getExtension(GeneratorModel.class);
+        double baseOhms = Math.pow(generator.getTerminal().getVoltageLevel().getNominalV(), 2) / generator.getRatedS();
+        Line line = network.getLine("L1_2");
+        double emf = generator.getTerminal().getBusBreakerView().getBus().getV() / generator.getTerminal().getVoltageLevel().getNominalV();
+        ParkShortCircuitReference reference = new ParkShortCircuitReference(machine, line.getR() / baseOhms, line.getX() / baseOhms, FREQUENCY,
+                new double[] {emf, 0.0}, new double[] {0.0, 0.0});
+        List<Crest> crests = phaseA(reference, 0.0, 0.0, 0.92).crests("V", 0.002, 0.9);
+
+        double worst = 0.0;
+        for (int i = 0; i + 1 < crests.size(); i++) {
+            double t = 0.5 * (crests.get(i).timeSeconds() + crests.get(i + 1).timeSeconds());
+            double current = 0.5 * (crests.get(i).magnitude() + crests.get(i + 1).magnitude()) / (Math.hypot(line.getR(), line.getX()) / baseOhms);
+            worst = Math.max(worst, Math.abs(current / (emf * shortCircuitEnvelope(machine, line.getX() / baseOhms, t)) - 1.0));
+        }
+        System.out.printf(Locale.ROOT, "Park reference against the closed form: %d crest pairs, worst %.3e%n", crests.size() - 1, worst);
+        assertThat(crests).hasSizeGreaterThan(80);
+        assertThat(worst).isLessThan(0.005);
+    }
+
+    /**
+     * The same sudden short from the loaded machine, where its flux has a q-axis share before the short and the current then decays
+     * through both axes' rotor circuits - what tells two machines' q axes apart, where the unloaded short, all d axis, cannot. Its
+     * inertia made 1e4 s to hold its speed, its field held, the short solid at the line's far end at 0.5 s, cleared after the run:
+     * phase a of the machine's bus, crest by crest over 0.55 s, against {@link ParkShortCircuitReference} started from the load flow's
+     * terminal voltage and current, the rotor's position from the voltage EMTP held at the bus before the short - each crest within
+     * 0.5% and, but for the first one's delay, within 25 us of the reference's, as upstream holds ATP (0.03%) and Xyce (0.05%).
+     * Kept in {@code target/emtp/machine-loaded-short}.
+     *
+     * <p>Run 2026-11-13: 55 crests, the worst 2.5e-5 off, the first 1.8 us late and every other within 6.3 us of it.
+     */
+    @Test
+    @Tag("emtp")
+    void theLoadedSuddenShortFollowsParksEquations() {
+        double faultStart = 0.5;
+        double readTo = 0.55;
+        double runEnd = 1.1;
+        Network network = loadedMachineWithFieldHeld(1.0e4);
+        List<BusFault> shortCircuit = List.of(new BusFault("FLTA", "B2", 'A', faultStart, runEnd + 1), new BusFault("FLTB", "B2", 'B', faultStart, runEnd + 1),
+                new BusFault("FLTC", "B2", 'C', faultStart, runEnd + 1));
+        EmtpOutput output = EmtpRunner.run(EmtpNetlistWriter.write(network, Path.of("target", "emtp", "machine-loaded-short"),
+                new EmtpSimulationSettings(TIME_STEP, runEnd, FREQUENCY), shortCircuit), EmtpSettings.defaults()).output();
+
+        Generator generator = network.getGenerator("GEN");
+        SubtransientMachineModel machine = (SubtransientMachineModel) generator.getExtension(GeneratorModel.class);
+        double nominalV = generator.getTerminal().getVoltageLevel().getNominalV();
+        double baseOhms = nominalV * nominalV / generator.getRatedS();
+        double basePeakVolts = nominalV * 1.0e3 * Math.sqrt(2.0 / 3.0);
+        Line line = network.getLine("L1_2");
+        Bus bus = generator.getTerminal().getBusBreakerView().getBus();
+        // The load flow's terminal voltage and the current the machine gives, per unit.
+        double[] v = {bus.getV() / nominalV * Math.cos(Math.toRadians(bus.getAngle())), bus.getV() / nominalV * Math.sin(Math.toRadians(bus.getAngle()))};
+        double p = -generator.getTerminal().getP() / generator.getRatedS();
+        double q = -generator.getTerminal().getQ() / generator.getRatedS();
+        double v2 = v[0] * v[0] + v[1] * v[1];
+        double[] i = {(p * v[0] + q * v[1]) / v2, (p * v[1] - q * v[0]) / v2};
+        ParkShortCircuitReference reference = new ParkShortCircuitReference(machine, line.getR() / baseOhms, line.getX() / baseOhms, FREQUENCY, v, i);
+
+        String b1a = EmtpNetlistWriter.voltageScope("B1", 'A');
+        double[] before = SwitchingWindows.leadingUpTo(faultStart, 0.02, TIME_STEP);
+        double terminalAngle = -output.fundamentalPhasor(b1a, FREQUENCY, before[0], before[1]).angleRadians();
+        double[] vdq = reference.preFaultTerminalVoltage();
+        List<Crest> expected = phaseA(reference, faultStart, terminalAngle - Math.atan2(vdq[1], vdq[0]), readTo + 0.01)
+                .crests("V", faultStart + 0.002, faultStart + readTo);
+        List<Crest> measured = output.crests(b1a, faultStart + 0.002, faultStart + readTo);
+
+        assertThat(measured).as("crests of phase a after the short").hasSameSizeAs(expected);
+        double firstDelay = measured.get(0).timeSeconds() - expected.get(0).timeSeconds();
+        double worst = 0.0;
+        double worstDelay = 0.0;
+        SoftAssertions softly = new SoftAssertions();
+        for (int k = 0; k < expected.size(); k++) {
+            double crest = measured.get(k).magnitude() / basePeakVolts;
+            double delay = measured.get(k).timeSeconds() - expected.get(k).timeSeconds() - firstDelay;
+            worst = Math.max(worst, Math.abs(crest / expected.get(k).magnitude() - 1.0));
+            worstDelay = Math.max(worstDelay, Math.abs(delay));
+            softly.assertThat(crest / expected.get(k).magnitude() - 1.0).as("crest %d, %.5f pu at %.4f s against the reference's %.5f pu", k + 1,
+                    crest, measured.get(k).timeSeconds() - faultStart, expected.get(k).magnitude()).isCloseTo(0.0, within(0.005));
+            softly.assertThat(delay).as("crest %d's instant against the reference's, s", k + 1).isCloseTo(0.0, within(25.0e-6));
+        }
+        System.out.printf(Locale.ROOT, "%d crests: worst %.3e, first delay %.1f us, worst further delay %.1f us%n", expected.size(), worst,
+                firstDelay * 1.0e6, worstDelay * 1.0e6);
+        softly.assertAll();
+    }
+
+    /** {@code reference}'s phase a per unit through {@code duration} after the short at {@code faultStart}, the d axis {@code
+     * rotorAngle} ahead of phase a at time 0, sampled every 5 us. */
+    private static AbstractTimeStepTable phaseA(ParkShortCircuitReference reference, double faultStart, double rotorAngle, double duration) {
+        double sample = 5.0e-6;
+        double[][] dq = reference.terminalVoltages(duration, sample, 1.0e-6);
+        double[][] rows = new double[dq.length][];
+        for (int k = 0; k < dq.length; k++) {
+            double t = faultStart + (k + 1) * sample;
+            double angle = rotorAngle + 2.0 * Math.PI * FREQUENCY * t;
+            rows[k] = new double[] {t, dq[k][0] * Math.cos(angle) - dq[k][1] * Math.sin(angle)};
+        }
+        return new AbstractTimeStepTable(new String[] {"TIME", "V"}, rows) { };
+    }
+
+    /**
      * The AC envelope of a sudden three-phase short behind the external reactance {@code xe}, per unit of the EMF, {@code t} seconds
      * after it: the step response of {@code G(s) = D(s) / P(s)}, {@code D(s) = (1 + sT'd0)(1 + sT''d0)} and {@code P(s) = Xd (1 + sT'd)
      * (1 + sT''d) + xe D(s)}, the short-circuit time constants the exact definitions' {@code T'd = T'd0 Xd'/Xd}, {@code T''d = T''d0
@@ -200,6 +312,21 @@ class EmtpSynchronousMachineTest {
     private static Network loadedMachineWithFieldHeld() {
         Network network = EmtExtensionsXmlReader.readNetwork(ExampleNetworks.resource("/two-bus.xiidm"), ExampleNetworks.resource("/two-bus-extensions.xml"));
         holdField(network.getGenerator("GEN"));
+        return ExampleNetworks.withLoadFlow(network);
+    }
+
+    /** The same, its machine's inertia constant {@code inertiaSeconds}. */
+    private static Network loadedMachineWithFieldHeld(double inertiaSeconds) {
+        Network network = EmtExtensionsXmlReader.readNetwork(ExampleNetworks.resource("/two-bus.xiidm"), ExampleNetworks.resource("/two-bus-extensions.xml"));
+        Generator generator = network.getGenerator("GEN");
+        holdField(generator);
+        SubtransientMachineModel m = (SubtransientMachineModel) generator.getExtension(GeneratorModel.class);
+        generator.addExtension(GeneratorModel.class, new SubtransientMachineModel(inertiaSeconds, m.getDamping(), m.getStatorResistance(),
+                m.getDirectSynchronousReactance(), m.getQuadratureSynchronousReactance(), m.getDirectTransientReactance(),
+                m.getOpenCircuitTransientTimeConstant(), m.getStatorLeakageReactance(), m.getQuadratureTransientReactance(),
+                m.getDirectSubtransientReactance(), m.getQuadratureSubtransientReactance(), m.getQuadratureOpenCircuitTransientTimeConstant(),
+                m.getDirectOpenCircuitSubtransientTimeConstant(), m.getQuadratureOpenCircuitSubtransientTimeConstant(),
+                m.getFieldCurrentAirGapLine(), m.getNumberOfPoles(), m.getSaturationFactor10(), m.getSaturationFactor12()));
         return ExampleNetworks.withLoadFlow(network);
     }
 
