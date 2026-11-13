@@ -93,14 +93,38 @@ class EmtpSynchronousMachineTest {
     }
 
     @Test
-    void refusesTheMachineWhileItsRegulatorIsEnabled(@TempDir Path tempDir) {
+    void refusesTheMachineWhileItsStabilizerIsEnabled(@TempDir Path tempDir) {
         Network network = EmtExtensionsXmlReader.readNetwork(ExampleNetworks.resource("/two-bus.xiidm"), ExampleNetworks.resource("/two-bus-extensions.xml"));
 
         assertThatThrownBy(() -> EmtpNetlistWriter.write(network, tempDir, SETTINGS))
                 .isInstanceOf(PowsyblException.class)
                 .hasMessageContaining("generator 'GEN'")
-                .hasMessageContaining("SimplifiedAvrModel is not written yet")
-                .hasMessageContaining("Pss1AModel is not written yet");
+                .hasMessageContaining("Pss1AModel is not written yet")
+                .hasMessageNotContaining("SimplifiedAvrModel");
+    }
+
+    /**
+     * The bench's own simplified voltage regulator - Ka 250, Ta 0.015 s, its output within -6 and 6 pu - written as ATP's TACS has it:
+     * the machine's vd and vq observed per unit; their voltage error from {@code Vref = Vt0 + Efd0 / Ka}, 1 + 2.4769 / 250; the lag
+     * from it to the field voltage, starting at Efd0.
+     */
+    @Test
+    void writesTheRegulatorAsAtpsTacsHasIt(@TempDir Path tempDir) throws IOException {
+        List<String> lines = Files.readAllLines(EmtpNetlistWriter.write(loadedMachineWithRegulator(), tempDir, SETTINGS), StandardCharsets.ISO_8859_1);
+
+        assertThat(lines).contains("_SM;GENa;7;5;B1a,GEN_Vf,GEN_vd,GEN_vq,,", "CTRL=0 0 0 1 0,", "OBSu=0 1,",
+                "OBS=0 0 0 0 0 0 0 0 0 0 2 0 0 0 0 0 2 0 0 0 0 0 0 0 0 0 0 0 0 0 0,");
+        int lag = lines.indexOf("_c_fslim;GEN_AVR;4;4;GEN_Vf,GEN_VERR,0,0,");
+        assertThat(lag).as("the regulator's lag").isNotNegative();
+        String[] fields = lines.get(lag + 1).split(",");
+        assertThat(Double.parseDouble(fields[0])).isCloseTo(2.4769149, within(1.0e-6));
+        assertThat(Arrays.copyOfRange(fields, 1, 8)).containsExactly("6.000000000000000", "-6.000000000000000", "1", "1", "2",
+                "250.0000000000000", "S1");
+        assertThat(lines.subList(lag + 2, lag + 5)).containsExactly("1", ";", "1 0.01500000000000000");
+        int error = lines.indexOf("_c_fu;GEN_VERR;3;3;GEN_VERR,GEN_vd,GEN_vq,");
+        assertThat(error).as("the voltage error").isNotNegative();
+        assertThat(lines.get(error + 2)).endsWith("-SQRT(u[1]*u[1]+u[2]*u[2])");
+        assertThat(Double.parseDouble(lines.get(error + 2).split("-")[0])).isCloseTo(1.0 + 2.4769149 / 250.0, within(1.0e-8));
     }
 
     /**
@@ -226,7 +250,7 @@ class EmtpSynchronousMachineTest {
     @Test
     @Tag("emtp")
     void theLoadedSuddenShortFollowsParksEquations() {
-        assertLoadedShortFollowsParksEquations(true, 1.1, 0.55, "machine-loaded-short");
+        assertShortFollowsParksEquations(loadedMachineWithFieldHeld(1.0e4), 0.0, true, 1.1, 0.55, "machine-loaded-short");
     }
 
     /**
@@ -246,14 +270,49 @@ class EmtpSynchronousMachineTest {
     @Test
     @Tag("emtp")
     void theLoadedSuddenShortWithItsRotorFreeFollowsParksEquations() {
-        assertLoadedShortFollowsParksEquations(false, 1.0, 0.45, "machine-free-rotor-short");
+        assertShortFollowsParksEquations(loadedMachineWithFieldHeld(), 0.0, false, 1.0, 0.45, "machine-free-rotor-short");
     }
 
-    private static void assertLoadedShortFollowsParksEquations(boolean speedHeld, double runEnd, double readTo, String directory) {
+    /**
+     * The same free-rotor short, the bench's regulator in service (Ka 250, Ta 0.015 s, -6 to 6 pu): the voltage falls to a tenth, the
+     * regulator drives the field voltage to its ceiling within a millisecond and holds it there - against the reference driven by the
+     * same regulator ({@link ParkShortCircuitReference.Regulator}), its lag's state held at the limit as EMTP's dynamic limits hold it.
+     * Kept in {@code target/emtp/machine-regulated-short}.
+     *
+     * <p>Run 2026-11-13: 45 crests, the worst 2.1e-4 off, every instant within 1.9 us of the first's delay; the regulator's share, 0.0743
+     * pu at the last crest where the field held leaves 0.0584.
+     */
+    @Test
+    @Tag("emtp")
+    void theRegulatedMachineDrivesItsFieldToTheCeilingThroughTheShort() {
+        assertShortFollowsParksEquations(loadedMachineWithRegulator(), 0.0, false, 1.0, 0.45, "machine-regulated-short");
+    }
+
+    /**
+     * A regulator that regulates rather than hits its ceiling: the unloaded machine faulted through 560 ohm a phase (0.35 pu) at the
+     * line's far end, which leaves it a sixth of its voltage after the subtransient and transient decays without a regulator; with one of
+     * Ka 20 and Ta 0.05 s, the field voltage rising from 1 pu, short of its ceiling, as the voltage falls - the fault's resistance in
+     * series with the line's, to the reference. Kept in {@code target/emtp/machine-regulated-fault}.
+     *
+     * <p>Run 2026-11-13: 43 crests, the worst 2.1e-5 off, every instant within 0.4 us of the first's; the regulator's share, 0.851 pu at
+     * the last crest where the field held leaves 0.705.
+     */
+    @Test
+    @Tag("emtp")
+    void theRegulatedMachineHoldsItsVoltageThroughAResistiveFault() {
+        Network network = unloadedMachineWithFieldHeld();
+        network.getGenerator("GEN").addExtension(ExcitationSystemModel.class, new SimplifiedAvrModel(true, 20.0, 0.05, 400.0, -6.0, 6.0));
+        assertShortFollowsParksEquations(network, 560.0, false, 1.0, 0.45, "machine-regulated-fault");
+    }
+
+    /** {@code network}'s machine faulted at 0.5 s at the line's far end, each phase through {@code faultOhms} to earth, against Park's
+     * equations, crest by crest on its bus's phase a through {@code readTo}. */
+    private static void assertShortFollowsParksEquations(Network network, double faultOhms, boolean speedHeld, double runEnd, double readTo,
+                                                         String directory) {
         double faultStart = 0.5;
-        Network network = speedHeld ? loadedMachineWithFieldHeld(1.0e4) : loadedMachineWithFieldHeld();
-        List<BusFault> shortCircuit = List.of(new BusFault("FLTA", "B2", 'A', faultStart, runEnd + 1), new BusFault("FLTB", "B2", 'B', faultStart, runEnd + 1),
-                new BusFault("FLTC", "B2", 'C', faultStart, runEnd + 1));
+        List<BusFault> shortCircuit = List.of(new BusFault("FLTA", "B2", 'A', faultStart, runEnd + 1).withResistance(faultOhms),
+                new BusFault("FLTB", "B2", 'B', faultStart, runEnd + 1).withResistance(faultOhms),
+                new BusFault("FLTC", "B2", 'C', faultStart, runEnd + 1).withResistance(faultOhms));
         EmtpOutput output = EmtpRunner.run(EmtpNetlistWriter.write(network, Path.of("target", "emtp", directory),
                 new EmtpSimulationSettings(TIME_STEP, runEnd, FREQUENCY), shortCircuit), EmtpSettings.defaults()).output();
 
@@ -270,7 +329,10 @@ class EmtpSynchronousMachineTest {
         double q = -generator.getTerminal().getQ() / generator.getRatedS();
         double v2 = v[0] * v[0] + v[1] * v[1];
         double[] i = {(p * v[0] + q * v[1]) / v2, (p * v[1] - q * v[0]) / v2};
-        ParkShortCircuitReference reference = new ParkShortCircuitReference(machine, line.getR() / baseOhms, line.getX() / baseOhms, FREQUENCY, v, i, speedHeld);
+        ParkShortCircuitReference.Regulator regulator = generator.getExtension(ExcitationSystemModel.class) instanceof SimplifiedAvrModel avr && avr.isEnabled()
+                ? new ParkShortCircuitReference.Regulator(avr.getGain(), avr.getTimeConstant(), avr.getMinOutput(), avr.getMaxOutput()) : null;
+        ParkShortCircuitReference reference = new ParkShortCircuitReference(machine, (line.getR() + faultOhms) / baseOhms, line.getX() / baseOhms, FREQUENCY,
+                v, i, speedHeld, regulator);
 
         String b1a = EmtpNetlistWriter.voltageScope("B1", 'A');
         double[] before = SwitchingWindows.leadingUpTo(faultStart, 0.02, TIME_STEP);
@@ -341,6 +403,16 @@ class EmtpSynchronousMachineTest {
     private static Network loadedMachineWithFieldHeld() {
         Network network = EmtExtensionsXmlReader.readNetwork(ExampleNetworks.resource("/two-bus.xiidm"), ExampleNetworks.resource("/two-bus-extensions.xml"));
         holdField(network.getGenerator("GEN"));
+        return ExampleNetworks.withLoadFlow(network);
+    }
+
+    /** The bench, its load flow solved, its stabilizer disabled, its regulator in service. */
+    private static Network loadedMachineWithRegulator() {
+        Network network = EmtExtensionsXmlReader.readNetwork(ExampleNetworks.resource("/two-bus.xiidm"), ExampleNetworks.resource("/two-bus-extensions.xml"));
+        Generator generator = network.getGenerator("GEN");
+        ExcitationSystemModel regulator = generator.getExtension(ExcitationSystemModel.class);
+        holdField(generator);
+        generator.addExtension(ExcitationSystemModel.class, regulator);
         return ExampleNetworks.withLoadFlow(network);
     }
 

@@ -9,10 +9,11 @@ import com.powsybl.simuemt.extensions.machine.SubtransientMachineModel;
 
 /**
  * A loaded machine shorted at the far end of its line, from Park's equations integrated here: the circuit the machine's data describe
- * under the exact definitions ({@link RotorCircuit#fromExact}), its field voltage held, per unit on its own base, generator
- * convention, the q axis 90 degrees ahead of the d axis. Its speed held at the synchronous one, or free: {@code 2H dw/dt = Pm/w - Te -
- * D (w - 1)}, its mechanical power {@code Pm} held at the steady state's, {@code Te = psid iq - psiq id} - the swing equation upstream's
- * backends integrate, and EMTP's machine with the turbine's power held and its damping {@code DSR}.
+ * under the exact definitions ({@link RotorCircuit#fromExact}), its field voltage held - or driven by upstream's simplified voltage
+ * regulator ({@link Regulator}) -, per unit on its own base, generator convention, the q axis 90 degrees ahead of the d axis. Its
+ * speed held at the synchronous one, or free: {@code 2H dw/dt = Pm/w - Te - D (w - 1)}, its mechanical power {@code Pm} held at the
+ * steady state's, {@code Te = psid iq - psiq id} - the swing equation upstream's backends integrate, and EMTP's machine with the
+ * turbine's power held and its damping {@code DSR}.
  *
  * <p>The line, a series {@code Re + jXe} rotating with the stator's frame, is in the dq frame a leakage like the stator's own: the short
  * at its far end puts it in series with the stator, so the circuit integrated is the machine's with {@code Ra + Re} and {@code Xl + Xe}
@@ -36,7 +37,11 @@ final class ParkShortCircuitReference {
     /** Each axis's currents from its flux linkages - stator, then its two rotor windings. */
     private final double[][] dInverse;
     private final double[][] qInverse;
-    private final double fieldVoltage;
+    /** The field winding's voltage per unit of field voltage {@code Efd}: {@code Rf / Xad}, the steady field current {@code Efd /
+     * Xad} through the field's resistance. */
+    private final double fieldVoltagePerEfd;
+    private final Regulator regulator;
+    private final double voltageReference;
     private final boolean speedHeld;
     private final double inertia;
     private final double damping;
@@ -45,12 +50,26 @@ final class ParkShortCircuitReference {
     private double[] state;
 
     /**
+     * Upstream's simplified voltage regulator ({@code SimplifiedAvrModel}): {@code Efd = Ka / (1 + sTa) (Vref - Vt)}, held within
+     * {@code [min, max]} - the lag's state, not only its output, as a limited TACS s-block and EMTP's {@code f(s)} with limits hold it
+     * -, {@code Vt} the terminal voltage's magnitude, {@code Vref = Vt0 + Efd0 / Ka}, at equilibrium before the short.
+     */
+    record Regulator(double gain, double timeConstant, double min, double max) {
+    }
+
+    /**
      * The machine {@code machine}, its line {@code re + j xe} per unit, at {@code frequencyHz}, before the short at terminal voltage
      * {@code v} and current {@code i} - generator convention -, each a complex number in any common reference; its speed held or
      * free.
      */
     ParkShortCircuitReference(SubtransientMachineModel machine, double re, double xe, double frequencyHz, double[] v, double[] i,
                               boolean speedHeld) {
+        this(machine, re, xe, frequencyHz, v, i, speedHeld, null);
+    }
+
+    /** The same, its field voltage driven by {@code regulator} - held if {@code null}. */
+    ParkShortCircuitReference(SubtransientMachineModel machine, double re, double xe, double frequencyHz, double[] v, double[] i,
+                              boolean speedHeld, Regulator regulator) {
         this.omega = 2.0 * Math.PI * frequencyHz;
         this.re = re;
         this.xe = xe;
@@ -82,11 +101,14 @@ final class ParkShortCircuitReference {
         double xad = d.magnetizingReactance();
         double xaq = q.magnetizingReactance();
         double fieldCurrent = (psid + (xl + xad) * id) / xad;
-        this.fieldVoltage = d.fieldResistance() / omega * fieldCurrent;
+        this.fieldVoltagePerEfd = d.fieldResistance() / omega / xad;
+        this.regulator = regulator;
+        double efd = xad * fieldCurrent;
+        this.voltageReference = regulator == null ? Double.NaN : Math.hypot(vdq[0], vdq[1]) + efd / regulator.gain();
         this.mechanicalPower = psid * iq - psiq * id;
         // The stator's flux linkages with the line's leakage added, the currents unchanged through the short.
         this.state = new double[] {psid - xe * id, -xad * id + (xad + d.fieldReactance()) * fieldCurrent, -xad * id + xad * fieldCurrent,
-            psiq - xe * iq, -xaq * iq, -xaq * iq, 1.0, 0.0};
+            psiq - xe * iq, -xaq * iq, -xaq * iq, 1.0, 0.0, efd};
     }
 
     /** The terminal voltage before the short in the rotor's frame, {@code {vd, vq}}. */
@@ -106,7 +128,7 @@ final class ParkShortCircuitReference {
             for (int k = 0; k < perSample; k++) {
                 advance(step);
             }
-            double[] terminal = terminal(state);
+            double[] terminal = terminal(state, rates(state));
             voltages[n] = new double[] {terminal[0], terminal[1], state[7]};
         }
         return voltages;
@@ -122,28 +144,43 @@ final class ParkShortCircuitReference {
         }
     }
 
-    /** The states' rates, per second: the stator shorted behind {@code Ra + Re} at the rotor's speed, the field driven, the dampers
-     * free; the swing equation, unless the speed is held. The line's leakage drops out of the torque, {@code (psid + Xe id) iq - (psiq +
-     * Xe iq) id}. */
+    /** The states' rates, per second: the windings', the rotor's; and the field voltage's, the regulator's lag held at its limits,
+     * none without one. */
     private double[] derivative(double[] x) {
+        double[] rates = rates(x);
+        if (regulator != null) {
+            double[] terminal = terminal(x, rates);
+            double efdRate = (regulator.gain() * (voltageReference - Math.hypot(terminal[0], terminal[1])) - x[8]) / regulator.timeConstant();
+            if (x[8] >= regulator.max() && efdRate > 0.0 || x[8] <= regulator.min() && efdRate < 0.0) {
+                efdRate = 0.0;
+            }
+            rates[8] = efdRate;
+        }
+        return rates;
+    }
+
+    /** The windings' and the rotor's rates, per second: the stator shorted behind {@code Ra + Re} at the rotor's speed, the field
+     * driven at {@code Efd Rf / Xad}, the dampers free; the swing equation, unless the speed is held. The line's leakage drops out of
+     * the torque, {@code (psid + Xe id) iq - (psiq + Xe iq) id}. */
+    private double[] rates(double[] x) {
         double[] di = multiply(dInverse, x[0], x[1], x[2]);
         double[] qi = multiply(qInverse, x[3], x[4], x[5]);
         double w = x[6];
         double acceleration = speedHeld ? 0.0 : (mechanicalPower / w - (x[0] * qi[0] - x[3] * di[0]) - damping * (w - 1.0)) / (2.0 * inertia);
         return new double[] {
             omega * ((ra + re) * di[0] + w * x[3]),
-            omega * fieldVoltage - d.fieldResistance() * di[1],
+            omega * fieldVoltagePerEfd * x[8] - d.fieldResistance() * di[1],
             -d.damperResistance() * di[2],
             omega * ((ra + re) * qi[0] - w * x[0]),
             -q.fieldResistance() * qi[1],
             -q.damperResistance() * qi[2],
             acceleration,
-            omega * (w - 1.0)};
+            omega * (w - 1.0),
+            0.0};
     }
 
     /** The line's drop, {@code Re i + (Xe/w0) di/dt + jwXe i}. */
-    private double[] terminal(double[] x) {
-        double[] rate = derivative(x);
+    private double[] terminal(double[] x, double[] rate) {
         double[] di = multiply(dInverse, x[0], x[1], x[2]);
         double[] qi = multiply(qInverse, x[3], x[4], x[5]);
         double idRate = multiply(dInverse, rate[0], rate[1], rate[2])[0];
