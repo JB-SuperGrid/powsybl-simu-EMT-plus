@@ -23,5 +23,11 @@ and used here once released or installed locally (`mvn install` in the upstream 
 
 ## Tests
 
-`mvn test` runs what needs no PSCAD. `mvn test -Ppscad` also runs the tests tagged `pscad`, which drive the real
-PSCAD 5.1 Professional through `mhi.pscad` (licence, Intel Fortran and the Windows SDK required).
+`mvn test` runs what needs neither PSCAD nor EMTP. `mvn test -Ppscad` also runs the tests tagged `pscad`, which drive the real
+PSCAD 5.1 Professional through `mhi.pscad` (licence, Intel Fortran and the Windows SDK required). `mvn test -Pemtp` also runs the
+tests tagged `emtp`, which run EMTP 4.6's solver `emtpopt.exe` (licensed EMTP install required); `-Ppscad,emtp` runs both.
+
+## EMTP
+
+The EMTP backend (`com.supergrid.simuemt.emtp`) lives here only: nothing of it goes to powsybl-simu-emt for now, for licence
+reasons. Keep it self-contained, on upstream's public API only, so that it can be moved upstream later.

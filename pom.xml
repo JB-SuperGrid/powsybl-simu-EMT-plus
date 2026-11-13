@@ -51,7 +51,9 @@
         <!-- required for later correct replacement of argline by the parent pom -->
         <argLine/>
         <!-- Tests tagged pscad run the real PSCAD Professional - licence, compiler and all: left out unless -Ppscad. -->
-        <simuemt.plus.tests.excluded>pscad</simuemt.plus.tests.excluded>
+        <simuemt.plus.tests.excluded.pscad>pscad</simuemt.plus.tests.excluded.pscad>
+        <!-- Tests tagged emtp run the real EMTP (emtpopt.exe, licensed): left out unless -Pemtp. -->
+        <simuemt.plus.tests.excluded.emtp>emtp</simuemt.plus.tests.excluded.emtp>
     </properties>
 
     <dependencyManagement>
@@ -126,7 +128,7 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <configuration>
-                    <excludedGroups>${simuemt.plus.tests.excluded}</excludedGroups>
+                    <excludedGroups>${simuemt.plus.tests.excluded.pscad}, ${simuemt.plus.tests.excluded.emtp}</excludedGroups>
                 </configuration>
             </plugin>
         </plugins>
@@ -137,7 +139,14 @@
             <!-- Runs the tests that drive the real PSCAD Professional: mvn test -Ppscad -->
             <id>pscad</id>
             <properties>
-                <simuemt.plus.tests.excluded>none</simuemt.plus.tests.excluded>
+                <simuemt.plus.tests.excluded.pscad>none</simuemt.plus.tests.excluded.pscad>
+            </properties>
+        </profile>
+        <profile>
+            <!-- Runs the tests that drive the real EMTP: mvn test -Pemtp (both: -Ppscad,emtp) -->
+            <id>emtp</id>
+            <properties>
+                <simuemt.plus.tests.excluded.emtp>none</simuemt.plus.tests.excluded.emtp>
             </properties>
         </profile>
     </profiles>

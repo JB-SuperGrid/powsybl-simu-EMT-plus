@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="iso-8859-1"?>
+<Design_steady_state>
+<DesignFile>
+<FileName Name="C:\Users\j.heyberger\AppData\Local\Temp\claude\018b49115ce3c138\e97154a3-941a-40fe-8400-e2f91bdc5644\scratchpad\emtp-run\with space\simple_short.ecf"></FileName>
+<SolutionDateTime Date="26/11/13" Time="20:59:18.215"></SolutionDateTime>
+</DesignFile>
+<Frequency f="60">
+<VoltageTable>
+<S N="SOURCE" m="+0.5633826408E+05" p="+0.9000000000E+02"></S>
+<S N="s5" m="+0.5679825289E+05" p="+0.8987587466E+02"></S>
+<S N="s6" m="+0.5679825289E+05" p="+0.8987587466E+02"></S>
+</VoltageTable>
+<DeviceCurrentPowerTable>
+<Dev N="C1" k="s5" m="GND" d="k" Im="+0.1220508902E+02" Ip="+0.1798758747E+03" P="+0.0000000000E+00" Q="-0.3466138665E+06"></Dev>
+<Dev N="C1" k="GND" m="s5" d="m" Im="+0.1220508902E+02" Ip="-0.1241253432E+00" P="+0.0000000000E+00" Q="+0.0000000000E+00"></Dev>
+<Dev N="C2" k="s6" m="GND" d="k" Im="+0.1220508902E+02" Ip="+0.1798758747E+03" P="+0.0000000000E+00" Q="-0.3466138665E+06"></Dev>
+<Dev N="C2" k="GND" m="s6" d="m" Im="+0.1220508902E+02" Ip="-0.1241253432E+00" P="+0.0000000000E+00" Q="+0.0000000000E+00"></Dev>
+<Dev N="RL1" k="SOURCE" m="s5" d="k" Im="+0.1220508902E+02" Ip="+0.1798758747E+03" P="+0.7448209904E+03" Q="-0.3438059575E+06"></Dev>
+<Dev N="RL1" k="s5" m="SOURCE" d="m" Im="+0.1220508902E+02" Ip="-0.1241253432E+00" P="-0.3966533768E-09" Q="+0.3466138665E+06"></Dev>
+<Dev N="RLC1" k="SOURCE" m="s6" d="k" Im="+0.1220508902E+02" Ip="+0.1798758747E+03" P="+0.7448209904E+03" Q="-0.3438059575E+06"></Dev>
+<Dev N="RLC1" k="s6" m="SOURCE" d="m" Im="+0.1220508902E+02" Ip="-0.1241253432E+00" P="-0.2656747711E-08" Q="+0.3466138665E+06"></Dev>
+<Dev N="SWfault" k="s5" m="GND" d="k" Im="+0.0000000000E+00" Ip="+0.0000000000E+00" P="+0.0000000000E+00" Q="+0.0000000000E+00"></Dev>
+</DeviceCurrentPowerTable>
+<Loss>
+<PQ P="+0.1489641981E+04" Q="-0.6876119150E+06"></PQ>
+</Loss>
+<DeviceGeneration>
+<Dev N="AC1" k="SOURCE" m="GND" d="k" Im="+0.2441017805E+02" Ip="-0.1241253432E+00" P="+0.1489641981E+04" Q="-0.6876119150E+06"></Dev>
+<Dev N="AC1" k="GND" m="SOURCE" d="m" Im="+0.2441017805E+02" Ip="+0.1798758747E+03" P="+0.0000000000E+00" Q="+0.0000000000E+00"></Dev>
+</DeviceGeneration>
+<DeviceTotalGeneration>
+<PQ P="+0.1489641981E+04" Q="-0.6876119150E+06"></PQ>
+</DeviceTotalGeneration>
+<PowerMismatch>
+<PQ P="+0.1689841156E-08" Q="+0.1466833055E-07"></PQ>
+</PowerMismatch>
+</Frequency>
+</Design_steady_state>
