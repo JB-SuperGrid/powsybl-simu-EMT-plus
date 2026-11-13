@@ -76,7 +76,7 @@ import java.util.stream.Stream;
  * order, the switch's current margin 0, or at the order, a margin no current reaches - ATP's own.
  *
  * <p>EMTP starts the run from its own steady-state solution, every source active from {@code -1} s. Anything else the network holds -
- * another kind of generator or load, a line's shunt conductance, a transformer with a phase tap changer or a zero-sequence flux path,
+ * another kind of generator or load, a line's shunt conductance, a transformer with a phase tap changer,
  * a switch - or the run goes through is refused, said
  * so, until written.
  *
@@ -227,6 +227,7 @@ public final class EmtpNetlistWriter {
         String[] side2 = phaseNodes(transformer.getTerminal2().getBusBreakerView().getBus().getId());
         String neutral1 = neutral(windings.connection1(), windings.groundingR1(), windings.groundingX1(), "N" + id + "_1");
         String neutral2 = neutral(windings.connection2(), windings.groundingR2(), windings.groundingX2(), "N" + id + "_2");
+        ZeroSequenceFluxPath fluxPath = ZeroSequenceFluxPath.of(transformer.getExtension(TwoWindingsTransformerFortescue.class));
         for (int unit = 0; unit < 3; unit++) {
             String phase = PHASES[unit];
             int[] terminals1 = windings.side1Terminals(unit);
@@ -236,8 +237,17 @@ public final class EmtpNetlistWriter {
             String end1 = terminal(side1, terminals1[1], neutral1);
             lines.add("_RLC", id + "_W1" + phase, List.of(terminal(side1, terminals1[0], neutral1), winding1),
                     rl(factor1 * 0.5 * corrected.r() * toSide1, factor1 * 0.5 * corrected.x() * toSide1 / omega(settings)));
-            lines.add("_Tr0", id + "_" + phase, List.of(winding1, end1, winding2, terminal(side2, terminals2[1], neutral2)),
-                    number(winding2Kv / winding1Kv) + ",,,");
+            if (fluxPath == null) {
+                lines.add("_Tr0", id + "_" + phase, List.of(winding1, end1, winding2, terminal(side2, terminals2[1], neutral2)),
+                        number(winding2Kv / winding1Kv) + ",,,");
+            } else {
+                // A three-limb core: a third winding on each unit, the tank path's closed delta at side 2's line voltage.
+                String tank = "T" + id + "_Z" + phase;
+                lines.add("_Tr0", id + "_" + phase, List.of(winding1, end1, winding2, terminal(side2, terminals2[1], neutral2), tank,
+                        tankCorner(id, unit + 1)), number(winding1Kv) + ",2,1,0,0,0,0", number(winding2Kv), number(ratedU2));
+                lines.add("_RLC", id + "_WZ" + phase, List.of(tankCorner(id, unit), tank),
+                        rl(3.0 * fluxPath.r(), 3.0 * fluxPath.x() / omega(settings)));
+            }
             lines.add("_RLC", id + "_W2" + phase, List.of(winding2, terminal(side2, terminals2[0], neutral2)),
                     rl(factor2 * 0.5 * corrected.r(), factor2 * 0.5 * corrected.x() / omega(settings)));
             List<String> across1 = end1.isEmpty() ? List.of(winding1) : List.of(winding1, end1);
@@ -250,6 +260,23 @@ public final class EmtpNetlistWriter {
         }
         earthReference(lines, id + "_1", windings.connection1(), windings.groundingR1(), windings.groundingX1(), neutral1, side1, settings);
         earthReference(lines, id + "_2", windings.connection2(), windings.groundingR2(), windings.groundingX2(), neutral2, side2, settings);
+        if (fluxPath != null) {
+            tankEarthReferences(lines, id);
+        }
+    }
+
+    /** Corner {@code corner} (modulo 3) of the tank path's fictitious delta: the node its unit's winding starts from, the previous one's
+     * ends on. */
+    private static String tankCorner(String id, int corner) {
+        return "TANK" + id + "_" + (corner % 3);
+    }
+
+    /** The tank path's delta closes on itself and touches nothing else: 0.003 uF from each corner to earth, as ATP. */
+    private static void tankEarthReferences(Devices lines, String id) {
+        for (int corner = 0; corner < 3; corner++) {
+            lines.comment(NumericalAids.COMMENT_MARKER + ": 0.003 uF earth reference of the core's fictitious delta");
+            lines.add("_RLC", id + "_CZ" + corner, List.of(tankCorner(id, corner)), "0,0," + number(NumericalAids.FLOATING_WINDING_EARTH_REFERENCE_F) + ",0,0,");
+        }
     }
 
     /**
@@ -262,6 +289,7 @@ public final class EmtpNetlistWriter {
      */
     private static void writeThreeWindingsTransformer(Devices lines, ThreeWindingsTransformer transformer, EmtpSimulationSettings settings) {
         ThreeWindingsTransformerWindings windings = ThreeWindingsTransformerWindings.of(transformer);
+        ZeroSequenceFluxPath fluxPath = ZeroSequenceFluxPath.of(transformer.getExtension(ThreeWindingsTransformerFortescue.class));
         List<ThreeWindingsTransformer.Leg> legs = List.of(transformer.getLeg1(), transformer.getLeg2(), transformer.getLeg3());
         TapCorrectedImpedance[] values = new TapCorrectedImpedance[3];
         String[][] legNodes = new String[3][];
@@ -307,8 +335,18 @@ public final class EmtpNetlistWriter {
                 lines.add("_RLC", id + "_W" + (k + 1) + phase, List.of(from[k], inner[k]),
                         rl(factor * values[k].r(), factor * values[k].x() / omega(settings)));
             }
-            lines.add("_Tr0", id + "_" + phase, List.of(primary, to[0], winding2, to[1], winding3, to[2]),
-                    number(windingKv[0]) + ",2,1,0,0,0,0", number(windingKv[1]), number(windingKv[2]));
+            if (fluxPath == null) {
+                lines.add("_Tr0", id + "_" + phase, List.of(primary, to[0], winding2, to[1], winding3, to[2]),
+                        number(windingKv[0]) + ",2,1,0,0,0,0", number(windingKv[1]), number(windingKv[2]));
+            } else {
+                // A three-limb core: a fourth winding on each unit, the tank path's closed delta at the star bus's voltage - the base
+                // IIDM gives every leg's impedance on, this one's included.
+                String tank = "T" + id + "_Z" + phase;
+                lines.add("_Tr0", id + "_" + phase, List.of(primary, to[0], winding2, to[1], winding3, to[2], tank, tankCorner(id, unit + 1)),
+                        number(windingKv[0]) + ",3,1,0,0,0,0", number(windingKv[1]), number(windingKv[2]), number(transformer.getRatedU0()));
+                lines.add("_RLC", id + "_WZ" + phase, List.of(tankCorner(id, unit), tank),
+                        rl(3.0 * fluxPath.r(), 3.0 * fluxPath.x() / omega(settings)));
+            }
             List<String> across1 = to[0].isEmpty() ? List.of(primary) : List.of(primary, to[0]);
             if (g1 != 0.0) {
                 lines.add("_RLC", id + "_RM" + phase, across1, rl(1.0 / g1, 0.0));
@@ -322,6 +360,9 @@ public final class EmtpNetlistWriter {
                 earthReference(lines, id + "_" + (k + 1), connections[k], windings.groundingR(k + 1), windings.groundingX(k + 1), neutrals[k],
                         legNodes[k], settings);
             }
+        }
+        if (fluxPath != null) {
+            tankEarthReferences(lines, id);
         }
     }
 
@@ -493,8 +534,6 @@ public final class EmtpNetlistWriter {
             List<String> windingReasons = TransformerWindings.unsupportedReasons(transformer);
             if (!windingReasons.isEmpty()) {
                 reasons.add("transformer '" + transformer.getId() + "': " + String.join(", ", windingReasons));
-            } else if (ZeroSequenceFluxPath.of(transformer.getExtension(TwoWindingsTransformerFortescue.class)) != null) {
-                reasons.add("transformer '" + transformer.getId() + "' has a zero-sequence flux path, a third winding per unit");
             } else if (transformer.getOptionalPhaseTapChanger().isPresent()) {
                 reasons.add("transformer '" + transformer.getId() + "' has a phase tap changer");
             }
@@ -503,8 +542,6 @@ public final class EmtpNetlistWriter {
             List<String> windingReasons = ThreeWindingsTransformerWindings.unsupportedReasons(transformer);
             if (!windingReasons.isEmpty()) {
                 reasons.add("transformer '" + transformer.getId() + "': " + String.join(", ", windingReasons));
-            } else if (ZeroSequenceFluxPath.of(transformer.getExtension(ThreeWindingsTransformerFortescue.class)) != null) {
-                reasons.add("transformer '" + transformer.getId() + "' has a zero-sequence flux path, a fourth winding per unit");
             } else if (transformer.getLegStream().anyMatch(leg -> leg.getOptionalPhaseTapChanger().isPresent())) {
                 reasons.add("transformer '" + transformer.getId() + "' has a leg with a phase tap changer");
             }
