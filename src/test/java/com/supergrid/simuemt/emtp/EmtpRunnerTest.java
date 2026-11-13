@@ -14,6 +14,7 @@ import java.net.URISyntaxException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -32,6 +33,15 @@ class EmtpRunnerTest {
 
         assertThat(EmtpRunner.command(Path.of("C:\\cases\\two bus.net"), settings))
                 .containsExactly("C:\\EMTP\\emtpopt.exe", "C:\\state\\emtpstate.ini;C:\\state\\emtpstate.ini;C:\\cases\\two bus.net;0;1;;");
+    }
+
+    /** EMTP's two ways of saying something went wrong: about its input, and about a network it cannot solve - which it still runs to
+     * its end, as it did on an infinite bus written part after part, its log ending in "EMTP terminated" all the same. */
+    @Test
+    void readsEitherOfEmtpsErrorsAsAnError() {
+        assertThat(EmtpRunner.hasError(List.of("->START harmonic steady-state solution", "Error, Problem near signal: EGENa", "EMTP terminated"))).isTrue();
+        assertThat(EmtpRunner.hasError(List.of("!!Error: Problem opening file: C:\\cases\\x_pj\\x.out"))).isTrue();
+        assertThat(EmtpRunner.hasError(List.of("->END harmonic steady-state solution", "Errors: none", "EMTP terminated"))).isFalse();
     }
 
     @Test
