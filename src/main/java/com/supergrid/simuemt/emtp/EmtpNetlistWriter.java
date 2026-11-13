@@ -11,10 +11,13 @@ import com.powsybl.iidm.network.Identifiable;
 import com.powsybl.iidm.network.Line;
 import com.powsybl.iidm.network.Load;
 import com.powsybl.iidm.network.Network;
+import com.powsybl.iidm.network.TwoWindingsTransformer;
 import com.powsybl.simuemt.extensions.GeneratorModel;
 import com.powsybl.simuemt.extensions.LoadModel;
 import com.powsybl.simuemt.extensions.circuit.LoadBranches;
 import com.powsybl.simuemt.extensions.circuit.NumericalAids;
+import com.powsybl.simuemt.extensions.circuit.TapCorrectedImpedance;
+import com.powsybl.simuemt.extensions.circuit.TransformerWindings;
 import com.powsybl.simuemt.extensions.event.BusFault;
 import com.powsybl.simuemt.extensions.event.EmtEvent;
 import com.powsybl.simuemt.extensions.event.FaultClearing;
@@ -42,6 +45,11 @@ import java.util.stream.Stream;
  * <ul>
  *     <li>a line: its series resistance and inductance ({@code _RLC}), {@code 16L/Dt} across the inductance; and at each end, half its
  *     shunt susceptance as a capacitance to earth, {@code Dt/16C} in series with it;</li>
+ *     <li>a two-winding transformer, star-earthed on both sides as ATP's three single-phase units: per phase an ideal unit
+ *     ({@code _Tr0}, its ratio {@code V2/V1}), half the leakage - IIDM's r/x, a ratio tap changer's step folded in ({@link
+ *     TapCorrectedImpedance}) - on each winding, the side-1 half referred to it by {@code (V1/V2)^2}; and, the excitation admittance
+ *     referred the other way, a core-loss resistance and a magnetizing inductance from the node between winding 1's leakage and the
+ *     ideal unit to earth, where ATP hangs them. No {@code 16L/Dt} across a leakage, which ATP keeps inside its component;</li>
  *     <li>a load, constant impedance: per phase, from {@link LoadBranches} at the load flow's voltage, its resistance then its
  *     inductance to earth through a node of its own, {@code 16L/Dt} across the inductance;</li>
  *     <li>an infinite-bus generator: per phase a cosine source ({@code _Vsine}, active in the steady state) at the EMF that puts
@@ -56,7 +64,8 @@ import java.util.stream.Stream;
  * order, the switch's current margin 0, or at the order, a margin no current reaches - ATP's own.
  *
  * <p>EMTP starts the run from its own steady-state solution, every source active from {@code -1} s. Anything else the network holds -
- * another kind of generator or load, a line's shunt conductance, a transformer, a switch - or the run goes through is refused, said
+ * another kind of generator or load, a line's shunt conductance, a transformer with winding connections or a phase tap changer, a
+ * switch - or the run goes through is refused, said
  * so, until written.
  *
  * @author Jean-Baptiste Heyberger : jean-baptiste.heyberger@supergrid-institute.com
@@ -100,6 +109,9 @@ public final class EmtpNetlistWriter {
         Devices devices = new Devices();
         for (Line line : network.getLines()) {
             writeLine(devices, line, settings);
+        }
+        for (TwoWindingsTransformer transformer : network.getTwoWindingsTransformers()) {
+            writeTransformer(devices, transformer, settings);
         }
         for (Load load : network.getLoads()) {
             writeLoad(devices, load, settings);
@@ -145,6 +157,34 @@ public final class EmtpNetlistWriter {
             damping(lines, id(line) + "_D" + phase, from, to, inductance, settings, "the series inductance");
             charging(lines, id(line) + "_C1" + phase, from, line.getB1(), settings);
             charging(lines, id(line) + "_C2" + phase, to, line.getB2(), settings);
+        }
+    }
+
+    private static void writeTransformer(Devices lines, TwoWindingsTransformer transformer, EmtpSimulationSettings settings) {
+        TapCorrectedImpedance corrected = TapCorrectedImpedance.of(transformer);
+        double ratedU1 = transformer.getRatedU1();
+        double ratedU2 = corrected.ratedU();
+        double toSide1 = ratedU1 * ratedU1 / (ratedU2 * ratedU2);
+        double l1 = 0.5 * corrected.x() * toSide1 / omega(settings);
+        double l2 = 0.5 * corrected.x() / omega(settings);
+        // The excitation admittance, given at side 2, referred to winding 1 - the other way from the leakage.
+        double g1 = corrected.g() / toSide1;
+        double b1 = Math.abs(corrected.b()) / toSide1;
+        String bus1 = transformer.getTerminal1().getBusBreakerView().getBus().getId();
+        String bus2 = transformer.getTerminal2().getBusBreakerView().getBus().getId();
+        for (String phase : PHASES) {
+            String winding1 = "T" + id(transformer) + "_1" + phase;
+            String winding2 = "T" + id(transformer) + "_2" + phase;
+            lines.add("_RLC", id(transformer) + "_W1" + phase, List.of(node(bus1, phase.charAt(0)), winding1), rl(0.5 * corrected.r() * toSide1, l1));
+            // Its two windings each to earth: the earth pins left blank, as EMTPWorks writes them.
+            lines.add("_Tr0", id(transformer) + "_" + phase, List.of(winding1, "", winding2, ""), number(ratedU2 / ratedU1) + ",,,");
+            lines.add("_RLC", id(transformer) + "_W2" + phase, List.of(winding2, node(bus2, phase.charAt(0))), rl(0.5 * corrected.r(), l2));
+            if (g1 != 0.0) {
+                lines.add("_RLC", id(transformer) + "_RM" + phase, List.of(winding1), rl(1.0 / g1, 0.0));
+            }
+            if (b1 != 0.0) {
+                lines.add("_RLC", id(transformer) + "_LM" + phase, List.of(winding1), rl(0.0, 1.0 / (omega(settings) * b1)));
+            }
         }
     }
 
@@ -275,7 +315,14 @@ public final class EmtpNetlistWriter {
                 reasons.add("generator '" + generator.getId() + "' is not an infinite bus");
             }
         }
-        Stream.of(network.getTwoWindingsTransformerStream(), network.getThreeWindingsTransformerStream(), network.getShuntCompensatorStream(),
+        for (TwoWindingsTransformer transformer : network.getTwoWindingsTransformers()) {
+            if (TransformerWindings.of(transformer) != null) {
+                reasons.add("transformer '" + transformer.getId() + "' has winding connections");
+            } else if (transformer.getOptionalPhaseTapChanger().isPresent()) {
+                reasons.add("transformer '" + transformer.getId() + "' has a phase tap changer");
+            }
+        }
+        Stream.of(network.getThreeWindingsTransformerStream(), network.getShuntCompensatorStream(),
                         network.getSwitchStream(), network.getHvdcLineStream(), network.getStaticVarCompensatorStream(),
                         network.getBatteryStream(), network.getVoltageSourceConverterStream())
                 .flatMap(s -> s.map(Identifiable::getId))
