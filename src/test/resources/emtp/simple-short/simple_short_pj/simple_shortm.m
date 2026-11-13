@@ -1,0 +1,17 @@
+filn='simple_short.mda';
+t=1;
+precision='float64';
+t_max=0.5000000000E-01;
+n_scopes=4;
+n_time_scopes=1;
+Ntime='time';
+time=1:1:1;
+n_is_scopes=1;
+Nis='SWfault';
+is=2:1:2;
+n_vb_scopes=1;
+Nvb='C1';
+vb=3:1:3;
+n_ib_scopes=1;
+Nib='C1';
+ib=4:1:4;
