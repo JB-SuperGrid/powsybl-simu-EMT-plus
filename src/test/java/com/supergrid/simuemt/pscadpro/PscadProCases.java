@@ -51,6 +51,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Supplier;
+import java.util.function.UnaryOperator;
 import java.util.stream.Stream;
 
 /**
@@ -71,12 +72,23 @@ final class PscadProCases {
         TEMPLATE
     }
 
-    /** One case: a network, the events it goes through, its settings and how it is written. */
-    record Case(String name, Supplier<Network> network, List<? extends EmtEvent> events, PscadSimulationSettings settings, Kind kind) {
+    /** One case: a network, the events it goes through, its settings, how it is written, and its load flow - upstream's but for a
+     * network it cannot solve whole (one of several islands, {@link TwoIslandsNetwork}). */
+    record Case(String name, Supplier<Network> network, List<? extends EmtEvent> events, PscadSimulationSettings settings, Kind kind,
+                UnaryOperator<Network> loadFlow) {
+
+        Case(String name, Supplier<Network> network, List<? extends EmtEvent> events, PscadSimulationSettings settings, Kind kind) {
+            this(name, network, events, settings, kind, ExampleNetworks::withLoadFlow);
+        }
+
+        /** The network, with its load flow. */
+        Network loaded() {
+            return loadFlow.apply(network.get());
+        }
 
         /** The project written into {@code directory} by {@code serializer}: its {@code .pscx} by default. */
         PscadFileWriter.PscadProject write(Path directory, PscadProjectSerializer serializer) {
-            Network loaded = ExampleNetworks.withLoadFlow(network.get());
+            Network loaded = loaded();
             return switch (kind) {
                 case FROM_REST -> PscadFileWriter.write(loaded, directory, settings, events, serializer);
                 case TEMPLATE -> PscadFileWriter.writeTemplate(loaded, directory, settings, events, serializer);
@@ -434,7 +446,11 @@ final class PscadProCases {
                 // Example 1's reduced bench, VSC2 on a metallic return, through the phase-a fault on B2 from its steady state, as upstream
                 // restarts it in PSCAD Free (PscadProMetallicReturnTest)
                 new Case("template-vsc-metallic-return", () -> bench("vsc-monopole-infinite-buses-metallic-return"), events("fault-b2-a-0.3-0.4"),
-                        new PscadSimulationSettings(20.0e-6, 0.8, 50.0, PscadEdition.PROFESSIONAL, PscadSwitching.ON_TIME_STEP), Kind.TEMPLATE));
+                        new PscadSimulationSettings(20.0e-6, 0.8, 50.0, PscadEdition.PROFESSIONAL, PscadSwitching.ON_TIME_STEP), Kind.TEMPLATE),
+                // Two passive islands, a subsystem each in PSCAD Professional, from their steady state (PscadProTwoIslandsTest)
+                new Case("template-two-islands", TwoIslandsNetwork::create, List.of(),
+                        new PscadSimulationSettings(20.0e-6, 0.2, 50.0, PscadEdition.PROFESSIONAL, PscadSwitching.ON_TIME_STEP), Kind.TEMPLATE,
+                        TwoIslandsNetwork::withLoadFlow));
     }
 
     private static Case fromRest(String name, Supplier<Network> network) {
