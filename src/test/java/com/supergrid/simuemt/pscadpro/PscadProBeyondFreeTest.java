@@ -588,14 +588,14 @@ class PscadProBeyondFreeTest {
     }
 
     /** The fundamental's crest at {@code node}'s phase over {@code window}, V. */
-    private static double magnitude(PscadProSimulation.PscadProRun run, String node, char phase, double[] window) {
+    static double magnitude(PscadProSimulation.PscadProRun run, String node, char phase, double[] window) {
         PscadCircuit circuit = run.project().circuit();
         PscadOutput output = run.output();
         return output.fundamentalPhasor(circuit.voltageChannel(node, phase), FREQUENCY, window[0], window[1]).magnitude();
     }
 
     /** How far {@code to}'s phase A leads {@code from}'s over {@code window}, degrees. */
-    private static double angleFrom(PscadProSimulation.PscadProRun run, String from, String to, double[] window) {
+    static double angleFrom(PscadProSimulation.PscadProRun run, String from, String to, double[] window) {
         PscadCircuit circuit = run.project().circuit();
         double fromAngle = run.output().fundamentalPhasor(circuit.voltageChannel(from, 'A'), FREQUENCY, window[0], window[1]).angleRadians();
         double toAngle = run.output().fundamentalPhasor(circuit.voltageChannel(to, 'A'), FREQUENCY, window[0], window[1]).angleRadians();
