@@ -15,6 +15,9 @@ import com.powsybl.simuemt.extensions.GeneratorModel;
 import com.powsybl.simuemt.extensions.LoadModel;
 import com.powsybl.simuemt.extensions.circuit.LoadBranches;
 import com.powsybl.simuemt.extensions.circuit.NumericalAids;
+import com.powsybl.simuemt.extensions.event.BusFault;
+import com.powsybl.simuemt.extensions.event.EmtEvent;
+import com.powsybl.simuemt.extensions.event.FaultClearing;
 import com.powsybl.simuemt.extensions.infinitebus.InfiniteBusEmf;
 import com.powsybl.simuemt.extensions.infinitebus.InfiniteBusGeneratorModel;
 
@@ -37,7 +40,8 @@ import java.util.stream.Stream;
  * B1a}, {@code B1b}, {@code B1c}.
  *
  * <ul>
- *     <li>a line: its series resistance and inductance ({@code _RLC}), {@code 16L/Dt} across the inductance;</li>
+ *     <li>a line: its series resistance and inductance ({@code _RLC}), {@code 16L/Dt} across the inductance; and at each end, half its
+ *     shunt susceptance as a capacitance to earth, {@code Dt/16C} in series with it;</li>
  *     <li>a load, constant impedance: per phase, from {@link LoadBranches} at the load flow's voltage, its resistance then its
  *     inductance to earth through a node of its own, {@code 16L/Dt} across the inductance;</li>
  *     <li>an infinite-bus generator: per phase a cosine source ({@code _Vsine}, active in the steady state) at the EMF that puts
@@ -46,8 +50,14 @@ import java.util.stream.Stream;
  *     <li>every bus phase: its 1 Gohm earth reference, whose voltage scope ({@code ?v}, scope {@code vb:REF_<node>}) is the node's
  *     voltage.</li>
  * </ul>
- * EMTP starts the run from its own steady-state solution, every source active from {@code -1} s. Anything else the network holds -
- * another kind of generator or load, a line's shunt admittance, a transformer, a switch - is refused, said so, until written.
+ * And each {@link BusFault} the run goes through, branch by branch ({@link BusFault#branches}): an ideal switch ({@code _Sw0}) from the
+ * bus phase to a node of its own, closing and opening at {@link NumericalAids#switchingInstant}, then the branch's closed resistance
+ * ({@link BusFault#onResistanceOhm}) to earth or to the other phase - as ATP writes it. Cleared at its current's first zero after the
+ * order, the switch's current margin 0, or at the order, a margin no current reaches - ATP's own.
+ *
+ * <p>EMTP starts the run from its own steady-state solution, every source active from {@code -1} s. Anything else the network holds -
+ * another kind of generator or load, a line's shunt conductance, a transformer, a switch - or the run goes through is refused, said
+ * so, until written.
  *
  * @author Jean-Baptiste Heyberger : jean-baptiste.heyberger@supergrid-institute.com
  */
@@ -57,6 +67,8 @@ public final class EmtpNetlistWriter {
     /** What EMTP takes as "active in the steady state" for a source's start, and as never for its stop. */
     private static final String STEADY_STATE_START = "-1";
     private static final String NEVER = "1E15";
+    /** A switch's current margin no current reaches: it opens at the order, whatever its current - ATP's {@code ANY_CURRENT_AMPERES}. */
+    private static final double ANY_CURRENT_AMPERES = 1.0e9;
 
     private EmtpNetlistWriter() {
     }
@@ -68,7 +80,20 @@ public final class EmtpNetlistWriter {
 
     /** {@code network}'s netlist, written into {@code directory}; refused for a network this does not write yet. */
     public static Path write(Network network, Path directory, EmtpSimulationSettings settings) {
-        List<String> refused = unsupported(network);
+        return write(network, directory, settings, List.of());
+    }
+
+    /** {@code network}'s netlist through {@code events}, written into {@code directory}; refused for a network or an event this does
+     * not write yet. */
+    public static Path write(Network network, Path directory, EmtpSimulationSettings settings, List<? extends EmtEvent> events) {
+        List<String> refused = new ArrayList<>(unsupported(network));
+        for (EmtEvent event : events) {
+            if (!(event instanceof BusFault fault)) {
+                refused.add("event " + event.getClass().getSimpleName() + " is of a kind not written yet");
+            } else if (network.getBusBreakerView().getBus(fault.busId()) == null) {
+                refused.add("fault '" + fault.id() + "' is on bus '" + fault.busId() + "', which the network has not");
+            }
+        }
         if (!refused.isEmpty()) {
             throw new PowsyblException("SimuEmt Plus: EMTP cannot write network '" + network.getId() + "' yet: " + String.join("; ", refused));
         }
@@ -81,6 +106,12 @@ public final class EmtpNetlistWriter {
         }
         for (Generator generator : network.getGenerators()) {
             writeInfiniteBus(devices, generator, settings);
+        }
+        int faultBranch = 0;
+        for (EmtEvent event : events) {
+            for (BusFault.Branch branch : ((BusFault) event).branches()) {
+                writeFaultBranch(devices, (BusFault) event, branch, ++faultBranch, settings);
+            }
         }
         for (Bus bus : network.getBusBreakerView().getBuses()) {
             for (String phase : PHASES) {
@@ -112,7 +143,37 @@ public final class EmtpNetlistWriter {
             String to = node(line.getTerminal2().getBusBreakerView().getBus().getId(), phase.charAt(0));
             lines.add("_RLC", id(line) + "_" + phase, List.of(from, to), rl(line.getR(), inductance));
             damping(lines, id(line) + "_D" + phase, from, to, inductance, settings, "the series inductance");
+            charging(lines, id(line) + "_C1" + phase, from, line.getB1(), settings);
+            charging(lines, id(line) + "_C2" + phase, to, line.getB2(), settings);
         }
+    }
+
+    /** A line end's charging, {@code susceptanceS} to earth from {@code node}: its capacitance, {@code Dt/16C} in series with it - one
+     * branch, as ATP's card; none without susceptance. */
+    private static void charging(Devices lines, String name, String node, double susceptanceS, EmtpSimulationSettings settings) {
+        if (susceptanceS == 0.0) {
+            return;
+        }
+        double capacitance = susceptanceS / omega(settings);
+        lines.comment(NumericalAids.COMMENT_MARKER + ": the R, Dt/16C in series with the line charging");
+        lines.add("_RLC", name, List.of(node), number(NumericalAids.shuntCapacitanceDampingOhm(capacitance, settings.timeStepSeconds())) + ",0,"
+                + number(capacitance) + ",0,0,");
+    }
+
+    /**
+     * Branch {@code index} of a fault, numbered across the run's faults: its switch from its first phase on the fault's bus to node
+     * {@code FLT<index>}, then its closed resistance to earth or to its other phase.
+     */
+    private static void writeFaultBranch(Devices lines, BusFault fault, BusFault.Branch branch, int index, EmtpSimulationSettings settings) {
+        String inner = "FLT" + index;
+        String label = sanitize(fault.id()) + "_" + branch.label();
+        double margin = fault.clearing() == FaultClearing.AT_ORDER ? ANY_CURRENT_AMPERES : 0.0;
+        lines.add("_Sw0", label, List.of(node(fault.busId(), branch.from()), inner),
+                number(NumericalAids.switchingInstant(fault.closeTimeSeconds(), settings.timeStepSeconds())) + ","
+                        + number(NumericalAids.switchingInstant(fault.openTimeSeconds(), settings.timeStepSeconds())) + "," + number(margin)
+                        + ",0,0,,1,.1,.001,5,?i,");
+        lines.add("_RLC", label + "_R", branch.toEarth() ? List.of(inner) : List.of(inner, node(fault.busId(), branch.to())),
+                rl(fault.onResistanceOhm(), 0.0));
     }
 
     private static void writeLoad(Devices lines, Load load, EmtpSimulationSettings settings) {
@@ -198,8 +259,8 @@ public final class EmtpNetlistWriter {
     static List<String> unsupported(Network network) {
         List<String> reasons = new ArrayList<>();
         for (Line line : network.getLines()) {
-            if (line.getG1() != 0.0 || line.getB1() != 0.0 || line.getG2() != 0.0 || line.getB2() != 0.0) {
-                reasons.add("line '" + line.getId() + "' has a shunt admittance");
+            if (line.getG1() != 0.0 || line.getG2() != 0.0) {
+                reasons.add("line '" + line.getId() + "' has a shunt conductance");
             }
         }
         for (Load load : network.getLoads()) {

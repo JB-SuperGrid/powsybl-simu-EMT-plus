@@ -7,6 +7,7 @@ package com.supergrid.simuemt.emtp;
 import com.powsybl.commons.PowsyblException;
 import com.powsybl.iidm.network.Bus;
 import com.powsybl.iidm.network.Network;
+import com.powsybl.simuemt.extensions.event.BusFault;
 import com.powsybl.simuemt.testresources.ExampleNetworks;
 import org.assertj.core.api.SoftAssertions;
 import org.junit.jupiter.api.Tag;
@@ -75,10 +76,12 @@ class EmtpNetlistWriterTest {
     @Test
     void refusesWhatItDoesNotWriteYet(@TempDir Path tempDir) {
         Network network = twoBus();
-        network.getLine("L1_2").setB1(2.5e-4);
+        network.getLine("L1_2").setG1(1.0e-6);
 
         assertThatThrownBy(() -> EmtpNetlistWriter.write(network, tempDir, SETTINGS)).isInstanceOf(PowsyblException.class)
-                .hasMessageContaining("line 'L1_2' has a shunt admittance");
+                .hasMessageContaining("line 'L1_2' has a shunt conductance");
+        assertThatThrownBy(() -> EmtpNetlistWriter.write(twoBus(), tempDir, SETTINGS, List.of(new BusFault("F", "B9", 'A', 0.2, 0.3))))
+                .isInstanceOf(PowsyblException.class).hasMessageContaining("fault 'F' is on bus 'B9', which the network has not");
     }
 
     /**
