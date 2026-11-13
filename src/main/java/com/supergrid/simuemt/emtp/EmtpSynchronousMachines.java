@@ -11,6 +11,7 @@ import com.powsybl.simuemt.extensions.GeneratorModel;
 import com.powsybl.simuemt.extensions.circuit.MachineInitialState;
 import com.powsybl.simuemt.extensions.circuit.MachineSequenceImpedances;
 import com.powsybl.simuemt.extensions.excitation.ExcitationSystemModel;
+import com.powsybl.simuemt.extensions.excitation.SimplifiedAvrModel;
 import com.powsybl.simuemt.extensions.excitation.limiter.DiscontinuousExcitationControlModel;
 import com.powsybl.simuemt.extensions.excitation.limiter.OverexcitationLimiterModel;
 import com.powsybl.simuemt.extensions.excitation.limiter.PowerFactorVarControllerModel;
@@ -59,7 +60,14 @@ import static com.supergrid.simuemt.emtp.EmtpNetlistWriter.number;
  * voltage put it within 4e-5. The control signal goes on each phase's header right after its stator pin - the star point has no pin
  * of its own when earthed inside -, named after the machine, {@code GEN_Vf}.
  *
- * <p>Refused, until written: zero-sequence data ({@code GeneratorFortescue}), saturation, and any enabled excitation system,
+ * <p>An enabled {@link SimplifiedAvrModel} drives that control instead, as ATP's TACS has it: the machine observes its {@code vd}
+ * and {@code vq} per unit, on the header after the control signal ({@code GEN_vd}, {@code GEN_vq}); a function ({@code _c_fu}) the
+ * voltage error {@code Vref - sqrt(vd^2 + vq^2)}, {@code Vref = Vt0 + Efd0 / Ka} - the reference that puts the regulator at
+ * equilibrium on the load flow, in place of the model's own setpoint, as upstream's backends compute it -; and a transfer function
+ * with limits ({@code _c_fslim}) {@code Ka / (1 + sTa)} from it to {@code GEN_Vf}, starting at {@code Efd0}, held within the model's
+ * minimum and maximum output - its state with it: EMTP's limits are dynamic, as a limited TACS s-block's.
+ *
+ * <p>Refused, until written: zero-sequence data ({@code GeneratorFortescue}), saturation, and any other enabled excitation system,
  * stabilizer, limiter or turbine-governor - one disabled holds what it would have regulated, as in upstream's backends.
  *
  * @author Jean-Baptiste Heyberger : jean-baptiste.heyberger@supergrid-institute.com
@@ -75,8 +83,16 @@ final class EmtpSynchronousMachines {
     private static final String PRECISION = "PR=100 1e-06 300 0 1e-06,";
     /** Field voltage, torque, power, field voltage {@code vf}, speed: {@code vf} controlled. */
     private static final String CONTROLS = "CTRL=0 0 0 1 0,";
-    /** Observe and scope requests EMTPWorks' form writes, every one off. */
+    /** Observe and scope requests EMTPWorks' form writes, every one off but for a regulator's. */
     private static final int OBSERVABLES = 31;
+    /** The positions of {@code vd} and {@code vq} among them; 2 asks for the signal to be observed. */
+    private static final int OBSERVE_VD = 10;
+    private static final int OBSERVE_VQ = 16;
+    private static final String OBSERVED = "2";
+
+    /** A control device: its part and its lines. */
+    record Device(String part, List<String> lines) {
+    }
 
     private EmtpSynchronousMachines() {
     }
@@ -107,7 +123,7 @@ final class EmtpSynchronousMachines {
             reasons.add(e.getMessage());
         }
         for (Object extension : generator.getExtensions()) {
-            if (isEnabled(extension)) {
+            if (isEnabled(extension) && !(extension instanceof SimplifiedAvrModel)) {
                 reasons.add("its " + extension.getClass().getSimpleName() + " is not written yet");
             }
         }
@@ -145,10 +161,12 @@ final class EmtpSynchronousMachines {
         double mechanicalSpeed = omega * 2.0 / machine.getNumberOfPoles();
         double speedDeviationDamping = machine.getDamping() * ratedMva * 1.0e6 / (mechanicalSpeed * mechanicalSpeed);
 
+        boolean regulated = regulator(generator) != null;
         List<String> lines = new ArrayList<>();
         for (int p = 0; p < 3; p++) {
-            // Pin k on the bus phase, the field-voltage control signal, a blank pin.
-            lines.add("_SM;" + name + "abc".charAt(p) + ";5;3;" + phaseNodes[p] + "," + fieldVoltageSignal(name) + ",,");
+            // Pin k on the bus phase, the field-voltage control signal, the observed signals, a blank pin.
+            lines.add("_SM;" + name + "abc".charAt(p) + (regulated ? ";7;5;" : ";5;3;") + phaseNodes[p] + "," + fieldVoltageSignal(name) + ","
+                    + (regulated ? signal(name, "vd") + "," + signal(name, "vq") + "," : "") + ",");
         }
         lines.add("V=" + number(terminalKv) + " " + number(terminalKv) + " " + number(terminalKv) + ",1kVRMSLL,");
         lines.add("P=" + number(angle) + " " + number(Math.IEEEremainder(angle - 120.0, 360.0)) + " "
@@ -176,24 +194,56 @@ final class EmtpSynchronousMachines {
         // H in place of the moment of inertia; SI units for the scopes and the observe signals.
         lines.add("MSu=1 0 0,");
         lines.add(PRECISION);
-        // Its controls per unit; the field voltage controlled, held by its constant.
+        // Its controls per unit; the field voltage controlled, held by its constant or driven by its regulator.
         lines.add("CTRLu=1,");
         lines.add(CONTROLS);
-        lines.add("OBSu=0 0,");
-        lines.add("OBS=" + String.join(" ", Collections.nCopies(OBSERVABLES, "0")) + ",");
+        // The scopes in SI, the observed signals per unit.
+        lines.add("OBSu=0 1,");
+        List<String> observe = new ArrayList<>(Collections.nCopies(OBSERVABLES, "0"));
+        if (regulated) {
+            observe.set(OBSERVE_VD, OBSERVED);
+            observe.set(OBSERVE_VQ, OBSERVED);
+        }
+        lines.add("OBS=" + String.join(" ", observe) + ",");
         return lines;
     }
 
-    /** The constant that holds the machine's field voltage: its device, its signal at the load flow's field voltage, per unit, from
-     * the start (step mode). */
-    static List<String> fieldVoltage(Generator generator, String name) {
-        double efd = MachineInitialState.subtransient(generator, subtransient(generator), 0.0).efd();
-        return List.of("_c_cst;" + name + "_VF;1;1;" + fieldVoltageSignal(name) + ",", number(efd) + ",S1,");
+    /**
+     * The control devices that drive the machine's field voltage: the constant that holds it at the load flow's, per unit, from the
+     * start (step mode); or its regulator's voltage error and lag.
+     */
+    static List<Device> fieldVoltage(Generator generator, String name) {
+        MachineInitialState initial = MachineInitialState.subtransient(generator, subtransient(generator), 0.0);
+        double efd = initial.efd();
+        SimplifiedAvrModel avr = regulator(generator);
+        if (avr == null) {
+            return List.of(new Device("_c_cst", List.of("_c_cst;" + name + "_VF;1;1;" + fieldVoltageSignal(name) + ",", number(efd) + ",S1,")));
+        }
+        double ka = avr.getGain();
+        String error = signal(name, "VERR");
+        return List.of(
+                // Its output, its input, no reset; starting at Efd0, within the model's limits; Ka times 1 over 1 + Ta s, the
+                // coefficients in increasing powers of s.
+                new Device("_c_fslim", List.of("_c_fslim;" + name + "_AVR;4;4;" + fieldVoltageSignal(name) + "," + error + ",0,0,",
+                        number(efd) + "," + number(avr.getMaxOutput()) + "," + number(avr.getMinOutput()) + ",1,1,2," + number(ka) + ",S1,",
+                        "1", ";", "1 " + number(avr.getTimeConstant()))),
+                new Device("_c_fu", List.of("_c_fu;" + name + "_VERR;3;3;" + error + "," + signal(name, "vd") + "," + signal(name, "vq") + ",",
+                        number(efd / ka) + ",S1,",
+                        number(initial.terminalVoltage() + efd / ka) + "-SQRT(u[1]*u[1]+u[2]*u[2])")));
+    }
+
+    /** The machine's enabled simplified voltage regulator, or {@code null}. */
+    private static SimplifiedAvrModel regulator(Generator generator) {
+        return generator.getExtension(ExcitationSystemModel.class) instanceof SimplifiedAvrModel avr && avr.isEnabled() ? avr : null;
     }
 
     /** The machine's field-voltage control signal: EMTP finds it by its {@code Vf}. */
     private static String fieldVoltageSignal(String name) {
-        return name + "_Vf";
+        return signal(name, "Vf");
+    }
+
+    private static String signal(String name, String quantity) {
+        return name + "_" + quantity;
     }
 
     private static SubtransientMachineModel subtransient(Generator generator) {
