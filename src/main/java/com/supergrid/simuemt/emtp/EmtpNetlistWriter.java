@@ -11,7 +11,9 @@ import com.powsybl.iidm.network.Identifiable;
 import com.powsybl.iidm.network.Line;
 import com.powsybl.iidm.network.Load;
 import com.powsybl.iidm.network.Network;
+import com.powsybl.iidm.network.ThreeWindingsTransformer;
 import com.powsybl.iidm.network.TwoWindingsTransformer;
+import com.powsybl.iidm.network.extensions.ThreeWindingsTransformerFortescue;
 import com.powsybl.iidm.network.extensions.TwoWindingsTransformerFortescue;
 import com.powsybl.iidm.network.extensions.WindingConnectionType;
 import com.powsybl.simuemt.extensions.GeneratorModel;
@@ -19,6 +21,7 @@ import com.powsybl.simuemt.extensions.LoadModel;
 import com.powsybl.simuemt.extensions.circuit.LoadBranches;
 import com.powsybl.simuemt.extensions.circuit.NumericalAids;
 import com.powsybl.simuemt.extensions.circuit.TapCorrectedImpedance;
+import com.powsybl.simuemt.extensions.circuit.ThreeWindingsTransformerWindings;
 import com.powsybl.simuemt.extensions.circuit.TransformerWindings;
 import com.powsybl.simuemt.extensions.circuit.VectorGroupOffsets;
 import com.powsybl.simuemt.extensions.circuit.ZeroSequenceFluxPath;
@@ -121,6 +124,9 @@ public final class EmtpNetlistWriter {
         }
         for (TwoWindingsTransformer transformer : network.getTwoWindingsTransformers()) {
             writeTransformer(devices, transformer, settings);
+        }
+        for (ThreeWindingsTransformer transformer : network.getThreeWindingsTransformers()) {
+            writeThreeWindingsTransformer(devices, transformer, settings);
         }
         for (Load load : network.getLoads()) {
             writeLoad(devices, load, settings);
@@ -244,6 +250,79 @@ public final class EmtpNetlistWriter {
         }
         earthReference(lines, id + "_1", windings.connection1(), windings.groundingR1(), windings.groundingX1(), neutral1, side1, settings);
         earthReference(lines, id + "_2", windings.connection2(), windings.groundingR2(), windings.groundingX2(), neutral2, side2, settings);
+    }
+
+    /**
+     * A three-winding transformer as ATP writes it: per phase one three-winding unit, here winding 1's leakage, an ideal unit of one
+     * primary and two secondaries ({@code _Tr0}, six pins, each winding at its own rated voltage), and windings 2's and 3's leakages.
+     * Each winding its leg's r/x, a ratio tap changer's step folded in, referred from the star bus's voltage to the leg's ({@link
+     * TapCorrectedImpedance#referredFromStarBus}); the three legs' excitation admittances summed, referred to winding 1, across it.
+     * Without winding connections each leg is star-earthed at its own rated voltage; with them ({@code ThreeWindingsTransformerFortescue}
+     * and its clock numbers), wired as {@link ThreeWindingsTransformerWindings} gives, as a two-winding transformer is.
+     */
+    private static void writeThreeWindingsTransformer(Devices lines, ThreeWindingsTransformer transformer, EmtpSimulationSettings settings) {
+        ThreeWindingsTransformerWindings windings = ThreeWindingsTransformerWindings.of(transformer);
+        List<ThreeWindingsTransformer.Leg> legs = List.of(transformer.getLeg1(), transformer.getLeg2(), transformer.getLeg3());
+        TapCorrectedImpedance[] values = new TapCorrectedImpedance[3];
+        String[][] legNodes = new String[3][];
+        String[] neutrals = new String[3];
+        WindingConnectionType[] connections = new WindingConnectionType[3];
+        String id = id(transformer);
+        for (int k = 0; k < 3; k++) {
+            values[k] = TapCorrectedImpedance.ofLeg(legs.get(k)).referredFromStarBus(transformer.getRatedU0());
+            legNodes[k] = phaseNodes(legs.get(k).getTerminal().getBusBreakerView().getBus().getId());
+            connections[k] = windings == null ? WindingConnectionType.Y_GROUNDED : windings.connection(k + 1);
+            neutrals[k] = windings == null ? "" : neutral(connections[k], windings.groundingR(k + 1), windings.groundingX(k + 1), "N" + id + "_" + (k + 1));
+        }
+        // The legs' excitation admittances at winding 1, a third of it across a delta winding.
+        double g1 = 0.0;
+        double b1 = 0.0;
+        for (TapCorrectedImpedance leg : values) {
+            double toWinding1 = leg.ratedU() / values[0].ratedU() * (leg.ratedU() / values[0].ratedU());
+            g1 += leg.g() * toWinding1;
+            b1 += Math.abs(leg.b()) * toWinding1;
+        }
+        g1 /= TransformerWindings.windingImpedanceFactor(connections[0]);
+        b1 /= TransformerWindings.windingImpedanceFactor(connections[0]);
+        double[] windingKv = new double[3];
+        for (int k = 0; k < 3; k++) {
+            // Without connections, each winding at its leg's rated voltage, as ATP's VRAT fields: only the ratios count.
+            windingKv[k] = windings == null ? values[k].ratedU() : TransformerWindings.windingVoltage(connections[k], values[k].ratedU());
+        }
+        for (int unit = 0; unit < 3; unit++) {
+            String phase = PHASES[unit];
+            String[] from = new String[3];
+            String[] to = new String[3];
+            for (int k = 0; k < 3; k++) {
+                int[] terminals = windings == null ? new int[] {unit, TransformerWindings.NEUTRAL} : windings.terminals(k + 1, unit);
+                from[k] = terminal(legNodes[k], terminals[0], neutrals[k]);
+                to[k] = terminal(legNodes[k], terminals[1], neutrals[k]);
+            }
+            String primary = "T" + id + "_1" + phase;
+            String winding2 = "T" + id + "_2" + phase;
+            String winding3 = "T" + id + "_3" + phase;
+            String[] inner = {primary, winding2, winding3};
+            for (int k = 0; k < 3; k++) {
+                double factor = TransformerWindings.windingImpedanceFactor(connections[k]);
+                lines.add("_RLC", id + "_W" + (k + 1) + phase, List.of(from[k], inner[k]),
+                        rl(factor * values[k].r(), factor * values[k].x() / omega(settings)));
+            }
+            lines.add("_Tr0", id + "_" + phase, List.of(primary, to[0], winding2, to[1], winding3, to[2]),
+                    number(windingKv[0]) + ",2,1,0,0,0,0", number(windingKv[1]), number(windingKv[2]));
+            List<String> across1 = to[0].isEmpty() ? List.of(primary) : List.of(primary, to[0]);
+            if (g1 != 0.0) {
+                lines.add("_RLC", id + "_RM" + phase, across1, rl(1.0 / g1, 0.0));
+            }
+            if (b1 != 0.0) {
+                lines.add("_RLC", id + "_LM" + phase, across1, rl(0.0, 1.0 / (omega(settings) * b1)));
+            }
+        }
+        if (windings != null) {
+            for (int k = 0; k < 3; k++) {
+                earthReference(lines, id + "_" + (k + 1), connections[k], windings.groundingR(k + 1), windings.groundingX(k + 1), neutrals[k],
+                        legNodes[k], settings);
+            }
+        }
     }
 
     /** A side's star point: earth ({@code ""}) when solidly earthed, the node {@code name} otherwise; none for a delta. */
@@ -372,12 +451,12 @@ public final class EmtpNetlistWriter {
         }
 
         /** A device: its header line - part, name, its pins twice, its nodes - and its data line. */
-        void add(String part, String name, List<String> nodes, String data) {
+        void add(String part, String name, List<String> nodes, String... data) {
             List<String> block = blocks.computeIfAbsent(part, k -> new ArrayList<>());
             block.addAll(pendingComments);
             pendingComments.clear();
             block.add(part + ";" + name + ";" + nodes.size() + ";" + nodes.size() + ";" + String.join(",", nodes) + ",");
-            block.add(data);
+            block.addAll(List.of(data));
         }
 
         List<String> lines() {
@@ -420,7 +499,17 @@ public final class EmtpNetlistWriter {
                 reasons.add("transformer '" + transformer.getId() + "' has a phase tap changer");
             }
         }
-        Stream.of(network.getThreeWindingsTransformerStream(), network.getShuntCompensatorStream(),
+        for (ThreeWindingsTransformer transformer : network.getThreeWindingsTransformers()) {
+            List<String> windingReasons = ThreeWindingsTransformerWindings.unsupportedReasons(transformer);
+            if (!windingReasons.isEmpty()) {
+                reasons.add("transformer '" + transformer.getId() + "': " + String.join(", ", windingReasons));
+            } else if (ZeroSequenceFluxPath.of(transformer.getExtension(ThreeWindingsTransformerFortescue.class)) != null) {
+                reasons.add("transformer '" + transformer.getId() + "' has a zero-sequence flux path, a fourth winding per unit");
+            } else if (transformer.getLegStream().anyMatch(leg -> leg.getOptionalPhaseTapChanger().isPresent())) {
+                reasons.add("transformer '" + transformer.getId() + "' has a leg with a phase tap changer");
+            }
+        }
+        Stream.of(network.getShuntCompensatorStream(),
                         network.getSwitchStream(), network.getHvdcLineStream(), network.getStaticVarCompensatorStream(),
                         network.getBatteryStream(), network.getVoltageSourceConverterStream())
                 .flatMap(s -> s.map(Identifiable::getId))
