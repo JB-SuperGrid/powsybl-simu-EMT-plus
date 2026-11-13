@@ -68,6 +68,8 @@ import java.util.stream.Stream;
  *     <li>an infinite-bus generator: per phase a cosine source ({@code _Vsine}, active in the steady state) at the EMF that puts
  *     its bus on the load flow ({@link InfiniteBusEmf}), behind the network's short-circuit resistance - its milliohm at least - and
  *     inductance, {@code 16L/Dt} across it;</li>
+ *     <li>a synchronous machine, EMTP's own ({@code _SM}), the circuit its data describe under the exact definitions, its field
+ *     and its mechanical power held ({@link EmtpSynchronousMachines});</li>
  *     <li>every bus phase: its 1 Gohm earth reference, whose voltage scope ({@code ?v}, scope {@code vb:REF_<node>}) is the node's
  *     voltage.</li>
  * </ul>
@@ -133,7 +135,13 @@ public final class EmtpNetlistWriter {
             writeLoad(devices, load, settings);
         }
         for (Generator generator : network.getGenerators()) {
-            writeInfiniteBus(devices, generator, settings);
+            if (EmtpSynchronousMachines.isMachine(generator)) {
+                Bus bus = generator.getTerminal().getBusBreakerView().getBus();
+                devices.addBlock("_SM", EmtpSynchronousMachines.lines(generator, id(generator), phaseNodes(bus.getId()),
+                        VectorGroupOffsets.of(network).degrees(bus), settings));
+            } else {
+                writeInfiniteBus(devices, generator, settings);
+            }
         }
         int faultBranch = 0;
         for (EmtEvent event : events) {
@@ -632,6 +640,14 @@ public final class EmtpNetlistWriter {
             block.addAll(List.of(data));
         }
 
+        /** A device written whole - its header lines and its data - as a part of several pins per phase has it. */
+        void addBlock(String part, List<String> device) {
+            List<String> block = blocks.computeIfAbsent(part, k -> new ArrayList<>());
+            block.addAll(pendingComments);
+            pendingComments.clear();
+            block.addAll(device);
+        }
+
         List<String> lines() {
             return blocks.values().stream().flatMap(List::stream).toList();
         }
@@ -658,8 +674,13 @@ public final class EmtpNetlistWriter {
             }
         }
         for (Generator generator : network.getGenerators()) {
-            if (!(generator.getExtension(GeneratorModel.class) instanceof InfiniteBusGeneratorModel)) {
-                reasons.add("generator '" + generator.getId() + "' is not an infinite bus");
+            if (EmtpSynchronousMachines.isMachine(generator)) {
+                List<String> machineReasons = EmtpSynchronousMachines.unsupportedReasons(generator);
+                if (!machineReasons.isEmpty()) {
+                    reasons.add("generator '" + generator.getId() + "': " + String.join(", ", machineReasons));
+                }
+            } else if (!(generator.getExtension(GeneratorModel.class) instanceof InfiniteBusGeneratorModel)) {
+                reasons.add("generator '" + generator.getId() + "' is neither an infinite bus nor a synchronous machine");
             }
         }
         for (TwoWindingsTransformer transformer : network.getTwoWindingsTransformers()) {
