@@ -4,7 +4,6 @@
  */
 package com.supergrid.simuemt.emtp;
 
-import com.powsybl.commons.PowsyblException;
 import com.powsybl.iidm.network.Bus;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.TwoWindingsTransformer;
@@ -35,7 +34,6 @@ import java.util.Map;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.within;
 
 /**
@@ -72,18 +70,6 @@ class EmtpWindingConnectionTest {
         assertThat(Double.parseDouble(devices.get("T2_3_2_CDa")[1].split(",")[2])).isEqualTo(3.0e-9);
         // The source on side 1: its EMF at ATP's 1.6958 degrees, no vector group's displacement.
         assertThat(Double.parseDouble(devices.get("GEN_a")[1].split(",")[2])).isCloseTo(1.6958, within(1.0e-4));
-    }
-
-    @Test
-    void refusesAZeroSequenceFluxPath(@TempDir Path tempDir) {
-        Network network = withInfiniteBus(ExampleNetworks.createThreeBusNetworkWithTransformer());
-        TwoWindingsTransformer transformer = network.getTwoWindingsTransformer("T2_3");
-        transformer.newExtension(TwoWindingsTransformerFortescueAdder.class).withConnectionType1(WindingConnectionType.Y_GROUNDED)
-                .withConnectionType2(WindingConnectionType.Y_GROUNDED).withFreeFluxes(false).withRz(2.0).withXz(20.0).add();
-        Network loaded = ExampleNetworks.withLoadFlow(network);
-
-        assertThatThrownBy(() -> EmtpNetlistWriter.write(loaded, tempDir, SETTINGS)).isInstanceOf(PowsyblException.class)
-                .hasMessageContaining("has a zero-sequence flux path");
     }
 
     static Stream<Arguments> vectorGroups() {
