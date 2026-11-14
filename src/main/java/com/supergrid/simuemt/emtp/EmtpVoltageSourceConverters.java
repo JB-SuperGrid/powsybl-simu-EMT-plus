@@ -7,16 +7,25 @@ package com.supergrid.simuemt.emtp;
 import com.powsybl.iidm.network.DcGround;
 import com.powsybl.iidm.network.DcLine;
 import com.powsybl.iidm.network.DcNode;
+import com.powsybl.iidm.network.DcSwitch;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.VoltageSourceConverter;
+import com.powsybl.simuemt.extensions.arrester.ZnOArrester;
+import com.powsybl.simuemt.extensions.arrester.ZnOSegment;
 import com.powsybl.simuemt.extensions.circuit.NumericalAids;
+import com.powsybl.simuemt.extensions.event.BreakerAction;
+import com.powsybl.simuemt.extensions.event.DcFault;
+import com.powsybl.simuemt.extensions.event.DcSwitchOperation;
+import com.powsybl.simuemt.extensions.event.EmtEvent;
 import com.powsybl.simuemt.extensions.hvdc.AveragedDcChopperModel;
 import com.powsybl.simuemt.extensions.hvdc.AveragedVscInitialState;
 import com.powsybl.simuemt.extensions.hvdc.AveragedVscModel;
+import com.powsybl.simuemt.extensions.hvdc.DcBreakerModel;
 import com.powsybl.simuemt.extensions.hvdc.DcChopperModel;
 import com.powsybl.simuemt.extensions.hvdc.DcEarthingModel;
 import com.powsybl.simuemt.extensions.hvdc.DcLineModel;
 import com.powsybl.simuemt.extensions.hvdc.DcVoltageDroopLaw;
+import com.powsybl.simuemt.extensions.hvdc.HybridDcBreakerModel;
 import com.powsybl.simuemt.extensions.hvdc.LumpedDcLineModel;
 import com.powsybl.simuemt.extensions.hvdc.VoltageSourceConverterModel;
 import com.powsybl.simuemt.extensions.hvdc.VscProtectionModel;
@@ -31,7 +40,12 @@ import com.powsybl.simuemt.extensions.hvdc.control.SrfPll;
 import com.powsybl.simuemt.extensions.hvdc.control.VscControlModel;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.stream.Stream;
 
 import static com.supergrid.simuemt.emtp.EmtpNetlistWriter.number;
 import static com.supergrid.simuemt.emtp.EmtpSynchronousMachines.firstOrder;
@@ -45,7 +59,9 @@ import static com.supergrid.simuemt.emtp.EmtpSynchronousMachines.function;
  * <p><b>The DC side.</b> A DC node is a single node, earthed through 1 Gohm as a bus phase is, its voltage scope ({@code vb:REF_<node>})
  * the node's. A DC line is its resistance and its {@link LumpedDcLineModel}'s inductance in one branch, {@code 16L/Dt} across it, and
  * half its capacitance to earth at each end behind {@code Dt/16C}; or its resistance alone. A DC ground is its resistance to earth, a
- * solid one 0.01 ohm, as ATP's.
+ * solid one 0.01 ohm, as ATP's. A DC switch closed, its resistance; a {@link HybridDcBreakerModel} opened through the run, its switch
+ * and its ZnO absorber across it ({@link #dcSwitch}); a {@link DcFault}, a switch to earth or to the other DC node through its
+ * resistance, letting go of its current at its order.
  *
  * <p><b>The converter's power stage.</b> Per phase, an EMF - a controlled voltage source ({@code _cV}) - from the converter's star
  * point, isolated (1 Gohm to earth), through the phase reactor's resistance and inductance to its bus, {@code 16L/Dt} across the
@@ -77,8 +93,11 @@ import static com.supergrid.simuemt.emtp.EmtpSynchronousMachines.function;
  * terminal 1 - through a switch closed in the steady state and opened at the first step - a source stopped is a short circuit -, as
  * ATP's stand-ins.
  *
- * <p>Refused, until written: an MMC, a DC reactor, a grid-forming control, a PLL but the SRF and DDSRF ones, a DC voltage droop, a
- * protection, a DC midpoint earthing, a chopper but the averaged one.
+ * <p>A converter in {@code DC_DROOP}: its active power's reference less its {@link DcVoltageDroopLaw}'s reduction as its DC voltage
+ * moves, within its {@code [minP, maxP]}.
+ *
+ * <p>Refused, until written: an MMC, a DC reactor, a grid-forming control, a PLL but the SRF and DDSRF ones, a protection, a DC
+ * midpoint earthing, a chopper but the averaged one.
  *
  * @author Jean-Baptiste Heyberger : jean-baptiste.heyberger@supergrid-institute.com
  */
@@ -92,6 +111,10 @@ final class EmtpVoltageSourceConverters {
     private static final double GROUND_CONNECTION_OHM = 1.0e-2;
     /** The least time constant a recovery ramp's tracking takes: upstream's. */
     private static final double MIN_TRACKING_TIME_CONSTANT = 1.0e-4;
+    /** A switch's current margin no current reaches: it opens at the order, whatever its current. */
+    private static final double ANY_CURRENT_AMPERES = 1.0e9;
+    /** The lowest a ZnO column's first segment starts from, pu of its reference voltage: EMTP's must start above zero. */
+    private static final double ZNO_FIRST_SEGMENT_PU = 1.0e-3;
 
     private EmtpVoltageSourceConverters() {
     }
@@ -124,9 +147,6 @@ final class EmtpVoltageSourceConverters {
         if (chopper != null && !(chopper instanceof AveragedDcChopperModel)) {
             reasons.add("its chopper but the averaged one is not written yet");
         }
-        if (DcVoltageDroopLaw.of(converter, AveragedVscInitialState.of(converter, model)).isPresent()) {
-            reasons.add("its DC voltage droop is not written yet");
-        }
         return reasons;
     }
 
@@ -135,12 +155,35 @@ final class EmtpVoltageSourceConverters {
         List<String> reasons = new ArrayList<>();
         network.getDcLineStream().filter(line -> line.getExtension(DcLineModel.class) != null && !(line.getExtension(DcLineModel.class) instanceof LumpedDcLineModel))
                 .forEach(line -> reasons.add("DC line '" + line.getId() + "''s model but the lumped one is not written yet"));
-        network.getDcSwitchStream().forEach(dcSwitch -> reasons.add("DC switch '" + dcSwitch.getId() + "' is not written yet"));
         return reasons;
     }
 
-    /** The DC side's devices: its nodes' earth references, its lines, its grounds. */
-    static List<EmtpSynchronousMachines.Device> dcSide(Network network, EmtpSimulationSettings settings) {
+    /** Why the DC events cannot be written yet - empty if they can: a DC switch operated but a hybrid breaker's opening, once. */
+    static List<String> unsupportedDcEventReasons(Network network, List<? extends EmtEvent> events) {
+        List<String> reasons = new ArrayList<>();
+        Map<String, Integer> operations = new HashMap<>();
+        for (EmtEvent event : events) {
+            if (event instanceof DcFault fault) {
+                for (String node : Stream.of(fault.dcNodeId(), fault.otherDcNodeId()).filter(Objects::nonNull).toList()) {
+                    if (network.getDcNode(node) == null) {
+                        reasons.add("DC fault '" + fault.id() + "' is on DC node '" + node + "', which the network has not");
+                    }
+                }
+            } else if (event instanceof DcSwitchOperation operation) {
+                DcSwitch dcSwitch = network.getDcSwitch(operation.switchId());
+                if (dcSwitch == null) {
+                    reasons.add("DC switch '" + operation.switchId() + "' is operated, which the network has not");
+                } else if (!(dcSwitch.getExtension(DcBreakerModel.class) instanceof HybridDcBreakerModel) || dcSwitch.isOpen()
+                        || operation.action() != BreakerAction.OPEN || operations.merge(dcSwitch.getId(), 1, Integer::sum) > 1) {
+                    reasons.add("DC switch '" + dcSwitch.getId() + "' is operated but as a closed hybrid breaker opened once, which is not written yet");
+                }
+            }
+        }
+        return reasons;
+    }
+
+    /** The DC side's devices: its nodes' earth references, its lines, its grounds, its switches, its faults through {@code events}. */
+    static List<EmtpSynchronousMachines.Device> dcSide(Network network, EmtpSimulationSettings settings, List<? extends EmtEvent> events) {
         List<EmtpSynchronousMachines.Device> devices = new ArrayList<>();
         for (DcNode node : network.getDcNodes()) {
             devices.add(element("_RLC", "REF_" + dcNode(node), List.of(dcNode(node)), number(NumericalAids.BUS_EARTH_REFERENCE_OHM) + ",0,0,0,0,?v,"));
@@ -167,7 +210,75 @@ final class EmtpVoltageSourceConverters {
             devices.add(element("_RLC", sanitize(ground.getId()), List.of(dcNode(ground.getDcTerminal().getDcNode())),
                     number(ground.getR() > 0.0 ? ground.getR() : GROUND_CONNECTION_OHM) + ",0,0,0,0,"));
         }
+        for (DcSwitch dcSwitch : network.getDcSwitches()) {
+            Optional<DcSwitchOperation> opening = events.stream().filter(e -> e instanceof DcSwitchOperation o && o.switchId().equals(dcSwitch.getId()))
+                    .map(DcSwitchOperation.class::cast).findFirst();
+            dcSwitch(devices, dcSwitch, opening.map(DcSwitchOperation::timeSeconds).orElse(Double.NaN), settings);
+        }
+        int index = 0;
+        for (EmtEvent event : events) {
+            if (event instanceof DcFault fault) {
+                // Its switch lets go of its current at the order: a DC current has no zero to wait for.
+                String inner = "DFLT" + ++index;
+                String id = sanitize(fault.id());
+                devices.add(element("_Sw0", id, List.of(dcNode(network.getDcNode(fault.dcNodeId())), inner),
+                        number(NumericalAids.switchingInstant(fault.closeTimeSeconds(), settings.timeStepSeconds())) + ","
+                                + number(NumericalAids.switchingInstant(fault.openTimeSeconds(), settings.timeStepSeconds())) + "," + number(ANY_CURRENT_AMPERES)
+                                + ",0,0,,1,.1,.001,5,?i,"));
+                List<String> to = fault.otherDcNodeId() == null ? List.of(inner) : List.of(inner, dcNode(network.getDcNode(fault.otherDcNodeId())));
+                devices.add(element("_RLC", id + "_R", to, number(Math.max(fault.resistanceOhm(), NumericalAids.FAULT_ON_RESISTANCE_OHM)) + ",0,0,0,0,"));
+            }
+        }
         return devices;
+    }
+
+    /**
+     * A DC switch, as upstream's backends write it. Left alone, its state: closed, its resistance - {@link
+     * NumericalAids#FAULT_ON_RESISTANCE_OHM} at the least - and a {@link HybridDcBreakerModel}'s reactor, {@code 16L/Dt} across it; open,
+     * nothing. A hybrid breaker opened at {@code openingSeconds}: its reactor, if any, from DC node 1 to a node of its own, then its main
+     * branch - that resistance and a switch closed from the steady state on, opened at the order whatever its current - and across it its
+     * energy absorber, an EMTP ZnO column (its first segment from {@link #ZNO_FIRST_SEGMENT_PU} at the least: EMTP joins it to the origin
+     * linearly, at currents nothing reads); with a reactor, the breaker's RC across them ({@link NumericalAids#DC_BREAKER_SNUBBER_F}).
+     */
+    private static void dcSwitch(List<EmtpSynchronousMachines.Device> devices, DcSwitch dcSwitch, double openingSeconds, EmtpSimulationSettings settings) {
+        String id = sanitize(dcSwitch.getId());
+        String node1 = dcNode(dcSwitch.getDcNode1());
+        String node2 = dcNode(dcSwitch.getDcNode2());
+        double resistance = Math.max(dcSwitch.getR(), NumericalAids.FAULT_ON_RESISTANCE_OHM);
+        HybridDcBreakerModel model = dcSwitch.getExtension(DcBreakerModel.class) instanceof HybridDcBreakerModel hybrid ? hybrid : null;
+        double reactor = model == null ? 0.0 : model.getReactorInductance();
+        if (Double.isNaN(openingSeconds)) {
+            if (!dcSwitch.isOpen()) {
+                devices.add(element("_RLC", id, List.of(node1, node2), number(resistance) + "," + number(reactor) + ",0,0,0,"));
+                if (reactor > 0.0) {
+                    devices.add(element("_RLC", id + "_D", List.of(node1, node2),
+                            number(NumericalAids.seriesInductanceDampingOhm(reactor, settings.timeStepSeconds())) + ",0,0,0,0,"));
+                }
+            }
+            return;
+        }
+        String side = node1;
+        if (reactor > 0.0) {
+            side = id + "_X";
+            devices.add(element("_RLC", id + "_L", List.of(node1, side), "0," + number(reactor) + ",0,0,0,"));
+            devices.add(element("_RLC", id + "_LD", List.of(node1, side),
+                    number(NumericalAids.seriesInductanceDampingOhm(reactor, settings.timeStepSeconds())) + ",0,0,0,0,"));
+            devices.add(element("_RLC", id + "_RC", List.of(side, node2), number(NumericalAids.DC_BREAKER_SNUBBER_OHM) + ",0,"
+                    + number(NumericalAids.DC_BREAKER_SNUBBER_F) + ",0,0,"));
+        }
+        String inner = id + "_S";
+        devices.add(element("_RLC", id + "_R", List.of(side, inner), number(resistance) + ",0,0,0,0,"));
+        devices.add(element("_Sw0", id, List.of(inner, node2), "-1," + number(NumericalAids.switchingInstant(openingSeconds, settings.timeStepSeconds())) + ","
+                + number(ANY_CURRENT_AMPERES) + ",0,0,,1,.1,.001,5,?i,"));
+        ZnOArrester arrester = model.getArrester();
+        List<String> lines = new ArrayList<>(List.of("_ZnO;" + id + "_ZNO;2;2;" + side + "," + node2 + ",",
+                number(arrester.referenceVoltage()) + ",,,1e-06,15,5,1,?i,"));
+        for (int k = 0; k < arrester.segments().size(); k++) {
+            ZnOSegment segment = arrester.segments().get(k);
+            double minimum = k == 0 ? Math.max(segment.minVoltage(), ZNO_FIRST_SEGMENT_PU) : segment.minVoltage();
+            lines.add(number(segment.coefficient()) + " " + number(segment.exponent()) + " " + number(minimum));
+        }
+        devices.add(new EmtpSynchronousMachines.Device("_ZnO", lines));
     }
 
     /** The DC node's EMTP node. */
@@ -271,20 +382,7 @@ final class EmtpVoltageSourceConverters {
         String qError = id + "_IQE";
         double trackingGain = 1.0 / Math.max(tau, MIN_TRACKING_TIME_CONSTANT);
         if (initial.activePowerControl()) {
-            String reference = number(initial.activePower());
-            if (ramp) {
-                String pref = id + "_PREF";
-                String prefRate = id + "_PREFR";
-                String tracking = "(" + number(trackingGain) + ")*(u[2]*u[3]-u[4])";
-                String toward = "(" + number(trackingGain) + ")*(" + number(initial.activePower()) + "-u[4])";
-                String limited = "0.5*((" + toward + "+" + number(frt.activePowerRecoveryRate()) + ")-ABS(" + toward + "-" + number(frt.activePowerRecoveryRate()) + "))";
-                String clamped = "0.5*((" + limited + "-" + number(frt.activePowerRecoveryRate()) + ")+ABS(" + limited + "+" + number(frt.activePowerRecoveryRate()) + "))";
-                devices.add(function(id + "_PREFR", prefRate, List.of(w, vac, dLimitedRef, pref), 0.0, "u[1]*" + tracking + "+(1-u[1])*" + clamped));
-                devices.add(integrator(id + "_PREF", pref, prefRate, 1.0, initial.activePower()));
-                devices.add(function(id + "_IDE", dError, List.of(pref, p), 0.0, "u[1]-u[2]"));
-            } else {
-                devices.add(function(id + "_IDE", dError, List.of(p), 0.0, reference + "-u[1]"));
-            }
+            activePowerError(devices, converter, initial, frt, p, vac, vdc, trackingGain);
         } else {
             devices.add(function(id + "_IDE", dError, List.of(vdc), 0.0, number(initial.dcVoltage() / initial.dcNominalVoltage()) + "-u[1]"));
         }
@@ -489,6 +587,58 @@ final class EmtpVoltageSourceConverters {
                 "(u[1]*u[3]+u[2]*u[4])*u[5]+(u[2]*u[3]-u[1]*u[4])*u[6]"));
         devices.add(function(emfPower, emfPower, List.of(id + "_PE1", id + "_PE2", id + "_PEP", id + "_PEN"), power0, "u[1]+u[2]+u[3]+u[4]"));
         return emfPower;
+    }
+
+    /**
+     * The active-power loop's error {@code <id>_IDE}: its reference less the power. The reference its setpoint, or with a recovery ramp a
+     * reference following the power the d axis's command delivers while the ride-through acts and back to the setpoint along the ramp;
+     * then, in {@code DC_DROOP}, less its {@link DcVoltageDroopLaw}'s reduction {@code sum g_s (clamp(Vdc, s) - clamp(Vdc0, s))} ({@code
+     * <id>_VR}, added back to the command the ramp's reference follows), within {@code [minP, maxP]}.
+     */
+    private static void activePowerError(List<EmtpSynchronousMachines.Device> devices, VoltageSourceConverter converter, AveragedVscInitialState initial,
+                                         FaultRideThrough frt, String p, String vac, String vdc, double trackingGain) {
+        String id = sanitize(converter.getId());
+        Optional<DcVoltageDroopLaw> law = DcVoltageDroopLaw.of(converter, initial);
+        String reduction = id + "_VR";
+        if (law.isPresent()) {
+            List<String> terms = new ArrayList<>();
+            for (DcVoltageDroopLaw.Segment segment : law.get().segments()) {
+                terms.add("(" + number(segment.gain()) + ")*(" + clampBetween("u[1]", number(segment.minVoltage()), number(segment.maxVoltage())) + "-("
+                        + number(segment.clamp(law.get().dcVoltage0())) + "))");
+            }
+            devices.add(function(reduction, reduction, List.of(vdc), 0.0, String.join("+", terms)));
+        }
+        String reference = number(initial.activePower());
+        List<String> inputs = new ArrayList<>(List.of(p));
+        if (frt.hasActivePowerRecoveryRamp()) {
+            String pref = id + "_PREF";
+            String prefRate = id + "_PREFR";
+            String commanded = "u[2]*u[3]" + (law.isPresent() ? "+u[5]" : "");
+            String tracking = "(" + number(trackingGain) + ")*(" + commanded + "-u[4])";
+            String toward = "(" + number(trackingGain) + ")*(" + number(initial.activePower()) + "-u[4])";
+            String rate = number(frt.activePowerRecoveryRate());
+            String limited = "0.5*((" + toward + "+" + rate + ")-ABS(" + toward + "-" + rate + "))";
+            String clamped = "0.5*((" + limited + "-" + rate + ")+ABS(" + limited + "+" + rate + "))";
+            List<String> rampInputs = new ArrayList<>(List.of(id + "_FRT", vac, id + "_IDLIM", pref));
+            if (law.isPresent()) {
+                rampInputs.add(reduction);
+            }
+            devices.add(function(prefRate, prefRate, rampInputs, 0.0, "u[1]*" + tracking + "+(1-u[1])*" + clamped));
+            devices.add(integrator(pref, pref, prefRate, 1.0, initial.activePower()));
+            inputs.add(pref);
+            reference = "u[2]";
+        }
+        if (law.isPresent()) {
+            inputs.add(reduction);
+            reference = clampBetween(reference + "-u[" + inputs.size() + "]", number(law.get().minPower()), number(law.get().maxPower()));
+        }
+        devices.add(function(id + "_IDE", id + "_IDE", inputs, 0.0, reference + "-u[1]"));
+    }
+
+    /** {@code x} within {@code [low, high]}: {@code min(max(x, low), high)}. */
+    private static String clampBetween(String x, String low, String high) {
+        String floored = "0.5*((" + x + ")+(" + low + ")+ABS((" + x + ")-(" + low + ")))";
+        return "0.5*((" + floored + ")+(" + high + ")-ABS((" + floored + ")-(" + high + ")))";
     }
 
     /** The SRF PLL's PI on {@code input}, a q-axis voltage, its angle {@code theta = angle0 + omega t + int(Kp vq + Ki int vq)}. */

@@ -6,6 +6,9 @@ package com.supergrid.simuemt.emtp;
 
 import com.powsybl.simuemt.extensions.circuit.NumericalAids;
 import com.powsybl.simuemt.extensions.event.BusFault;
+import com.powsybl.simuemt.extensions.event.DcFault;
+import com.powsybl.simuemt.extensions.event.DcSwitchOperation;
+import com.powsybl.simuemt.extensions.event.EmtEvent;
 import com.powsybl.simuemt.extensions.event.FaultClearing;
 import com.powsybl.simuemt.pscad.PscadEdition;
 import com.powsybl.simuemt.pscad.PscadOutput;
@@ -20,8 +23,10 @@ import java.io.IOException;
 import java.io.Writer;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.function.DoubleFunction;
 
 import static org.assertj.core.api.Assertions.within;
 
@@ -58,41 +63,78 @@ class EmtpVscFaultAgainstPscadTest {
     private static final double PSCAD_SHIFT = 2.0;
     private static final double DURATION = 0.1;
     private static final double OHMS = 5.0;
-    private static final List<String> CHANNELS = List.of("VSC1_P", "VSC1_Q", "VSC1_VAC", "VSC1_VDC", "VSC2_P", "VSC2_Q", "VSC2_VAC", "VSC2_VDC");
+    private static final List<Channel> MONOPOLE = converters("VSC1", "VSC2");
     /** Per channel, pu: before the fault and in the last 100 ms, then through the fault and the recovery. */
     private static final double SETTLED_TOLERANCE = 1.0e-3;
     private static final double TRANSIENT_TOLERANCE = 0.02;
 
+    /** A channel compared: its EMTP scope, PSCAD's, the base both are divided by. */
+    record Channel(String label, String emtp, String pscad, double base) {
+    }
+
     @Test
     void aFaultAtB2RunsInEmtpAsInPscadProfessional() throws IOException {
-        compare("vsc-monopole-infinite-buses-2", "ABC", "vsc-fault", 5.0e-3, SETTLED_TOLERANCE, TRANSIENT_TOLERANCE);
+        compare("vsc-monopole-infinite-buses-2", start -> List.of(fault("ABC", start)), MONOPOLE, "vsc-fault", 5.0e-3, SETTLED_TOLERANCE,
+                TRANSIENT_TOLERANCE, true);
     }
 
     @Test
     void anUnbalancedFaultAtB2RunsInEmtpAsInPscadProfessionalThroughTheSequences() throws IOException {
-        compare("vsc-monopole-infinite-buses", "A", "vsc-unbalanced-fault", 10.0e-3, SETTLED_TOLERANCE, TRANSIENT_TOLERANCE);
+        compare("vsc-monopole-infinite-buses", start -> List.of(fault("A", start)), MONOPOLE, "vsc-unbalanced-fault", 10.0e-3, SETTLED_TOLERANCE,
+                TRANSIENT_TOLERANCE, true);
     }
 
-    private static void compare(String bench, String phases, String name, double window, double settledTolerance, double transientTolerance)
-            throws IOException {
+    /**
+     * Step 3's: {@code vsc-three-terminal-dc-breaker}, its three stations on their DC voltage droops, DC2L - DCL2's end behind the hybrid
+     * breaker DCB - faulted to earth through 10 ohm for good, DCB ordered open 3 ms on: its ZnO absorber taking the line's current down,
+     * VSC3 left alone on the faulted line, VSC1 and VSC2 on their droops - swinging against each other between 0.3 and 0.8 pu, the DC
+     * voltage between 0.83 and 1.16 pu, still 450 ms on in both: held to PSCAD's through to the end as through the fault, settled before
+     * it alone. Each station's measurements and the DC nodes' voltages, by 5 ms windows.
+     *
+     * <p>Run 2026-11-14, 60 s the two: within 1.1e-2 pu of PSCAD's through the fault and the swing (VSC2's P, 1.03e-2), the DC nodes'
+     * voltages within 5.3e-3 (DC2L, held near 0.085 pu by the fault, VSC3 at 1.09 pu of power into it on its current limit).
+     */
+    @Test
+    void aDcFaultClearedByTheHybridBreakerRunsInEmtpAsInPscadProfessional() throws IOException {
+        List<Channel> channels = new ArrayList<>(converters("VSC1", "VSC2", "VSC3"));
+        for (String node : List.of("DC1P", "DC2P", "DC2L", "DC3P")) {
+            channels.add(new Channel(node, EmtpVoltageSourceConverters.dcVoltageScope(node), "V_" + node, 500.0e3));
+        }
+        compare("vsc-three-terminal-dc-breaker", start -> List.of(new DcFault("FDC", "DC2L", 10.0, start, start + 10.0),
+                DcSwitchOperation.opening("DCB", start + 3.0e-3)), channels, "vsc-dc-breaker", 5.0e-3, SETTLED_TOLERANCE, TRANSIENT_TOLERANCE, false);
+    }
+
+    private static List<Channel> converters(String... ids) {
+        List<Channel> channels = new ArrayList<>();
+        for (String id : ids) {
+            for (String quantity : List.of("_P", "_Q", "_VAC", "_VDC")) {
+                channels.add(new Channel(id + quantity, "control:" + id + quantity, id + quantity, 1.0));
+            }
+        }
+        return channels;
+    }
+
+    private static void compare(String bench, DoubleFunction<List<? extends EmtEvent>> events, List<Channel> channels, String name, double window,
+                                double settledTolerance, double transientTolerance, boolean settlesAfter) throws IOException {
         EmtpOutput emtp = EmtpRunner.run(EmtpNetlistWriter.write(EmtpVoltageSourceConverterTest.bench(bench), Path.of("target", "emtp", name),
-                new EmtpSimulationSettings(TIME_STEP, EMTP_FAULT + 0.45, FREQUENCY), List.of(fault(phases, EMTP_FAULT))), EmtpSettings.defaults()).output();
+                new EmtpSimulationSettings(TIME_STEP, EMTP_FAULT + 0.45, FREQUENCY), events.apply(EMTP_FAULT)), EmtpSettings.defaults()).output();
         double pscadFault = EMTP_FAULT + PSCAD_SHIFT;
         PscadOutput pscad = PscadProSimulation.run(EmtpVoltageSourceConverterTest.bench(bench), Path.of("target", "pscad", name),
-                new PscadSimulationSettings(TIME_STEP, pscadFault + 0.45, FREQUENCY, PscadEdition.PROFESSIONAL), List.of(fault(phases, pscadFault)),
+                new PscadSimulationSettings(TIME_STEP, pscadFault + 0.45, FREQUENCY, PscadEdition.PROFESSIONAL), events.apply(pscadFault),
                 PscadProSettings.defaults()).output();
 
-        double[] worstSettled = new double[CHANNELS.size()];
-        double[] worstTransient = new double[CHANNELS.size()];
+        double[] worstSettled = new double[channels.size()];
+        double[] worstTransient = new double[channels.size()];
         double fault = NumericalAids.switchingInstant(EMTP_FAULT, TIME_STEP);
         try (Writer csv = Files.newBufferedWriter(Path.of("target", "emtp", name + "-against-pscad.csv"))) {
-            csv.write("t," + String.join(",", CHANNELS.stream().flatMap(c -> java.util.stream.Stream.of(c + "_EMTP", c + "_PSCAD")).toList()) + "\n");
+            csv.write("t," + String.join(",", channels.stream().flatMap(c -> java.util.stream.Stream.of(c.label() + "_EMTP", c.label() + "_PSCAD")).toList()) + "\n");
             for (double t = fault - 0.05; t + window <= EMTP_FAULT + 0.45 + 1.0e-9; t += window) {
                 StringBuilder line = new StringBuilder(String.format(Locale.ROOT, "%.3f", t - fault));
-                boolean settled = t + window <= fault || t >= EMTP_FAULT + 0.35;
-                for (int k = 0; k < CHANNELS.size(); k++) {
-                    double e = emtp.mean("control:" + CHANNELS.get(k), t, t + window);
-                    double p = pscad.mean(CHANNELS.get(k), t + PSCAD_SHIFT, t + window + PSCAD_SHIFT);
+                boolean settled = t + window <= fault || settlesAfter && t >= EMTP_FAULT + 0.35;
+                for (int k = 0; k < channels.size(); k++) {
+                    Channel channel = channels.get(k);
+                    double e = emtp.mean(channel.emtp(), t, t + window) / channel.base();
+                    double p = pscad.mean(channel.pscad(), t + PSCAD_SHIFT, t + window + PSCAD_SHIFT) / channel.base();
                     line.append(String.format(Locale.ROOT, ",%.5f,%.5f", e, p));
                     double[] worst = settled ? worstSettled : worstTransient;
                     worst[k] = Math.max(worst[k], Math.abs(e - p));
@@ -101,11 +143,12 @@ class EmtpVscFaultAgainstPscadTest {
             }
         }
         SoftAssertions softly = new SoftAssertions();
-        for (int k = 0; k < CHANNELS.size(); k++) {
-            System.out.printf(Locale.ROOT, "%s, %s: settled within %.2e pu, through the fault %.2e pu of PSCAD's%n", name, CHANNELS.get(k), worstSettled[k],
+        for (int k = 0; k < channels.size(); k++) {
+            String label = channels.get(k).label();
+            System.out.printf(Locale.ROOT, "%s, %s: settled within %.2e pu, through the fault %.2e pu of PSCAD's%n", name, label, worstSettled[k],
                     worstTransient[k]);
-            softly.assertThat(worstSettled[k]).as("%s, %s settled against PSCAD's, pu", name, CHANNELS.get(k)).isCloseTo(0.0, within(settledTolerance));
-            softly.assertThat(worstTransient[k]).as("%s, %s through the fault against PSCAD's, pu", name, CHANNELS.get(k))
+            softly.assertThat(worstSettled[k]).as("%s, %s settled against PSCAD's, pu", name, label).isCloseTo(0.0, within(settledTolerance));
+            softly.assertThat(worstTransient[k]).as("%s, %s through the fault against PSCAD's, pu", name, label)
                     .isCloseTo(0.0, within(transientTolerance));
         }
         softly.assertAll();

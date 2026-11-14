@@ -9,6 +9,9 @@ import com.powsybl.iidm.network.Bus;
 import com.powsybl.iidm.network.DcNode;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.VoltageSourceConverter;
+import com.powsybl.simuemt.extensions.circuit.NumericalAids;
+import com.powsybl.simuemt.extensions.event.DcFault;
+import com.powsybl.simuemt.extensions.event.DcSwitchOperation;
 import com.powsybl.simuemt.preprocessing.EmtExtensionsXmlReader;
 import com.powsybl.simuemt.preprocessing.EmtNetworkPreprocessor;
 import com.powsybl.simuemt.testresources.ExampleNetworks;
@@ -72,6 +75,20 @@ class EmtpVoltageSourceConverterTest {
         List<String> bipole = Files.readAllLines(EmtpNetlistWriter.write(bench("vsc-bipole-infinite-buses"), tempDir.resolve("bipole"),
                 new EmtpSimulationSettings(20.0e-6, 0.2, FREQUENCY)), StandardCharsets.ISO_8859_1);
         assertThat(bipole).filteredOn(line -> !line.startsWith("!")).allMatch(line -> line.length() <= EmtpNetlistWriter.MAX_LINE);
+    }
+
+    /** A hybrid DC breaker opened through a DC fault (example 4 with DCB): its main branch's switch closed from the steady state, opened
+     * at the order whatever its current; its ZnO absorber across it, its first segment from 1e-3 pu; the fault's switch and resistance. */
+    @Test
+    void writesAHybridBreakerOpenedThroughADcFault(@TempDir Path tempDir) throws IOException {
+        List<String> lines = Files.readAllLines(EmtpNetlistWriter.write(bench("vsc-three-terminal-dc-breaker"), tempDir,
+                new EmtpSimulationSettings(20.0e-6, 0.2, FREQUENCY), List.of(new DcFault("FDC", "DC2L", 10.0, 0.1, 1.0),
+                        DcSwitchOperation.opening("DCB", 0.103))), StandardCharsets.ISO_8859_1);
+
+        assertThat(lines).contains("_Sw0;DCB;2;2;DCB_S,DC2L,", "_RLC;DCB_R;2;2;DC2P,DCB_S,", "_ZnO;DCB_ZNO;2;2;DC2P,DC2L,",
+                "750000.0000000000,,,1e-06,15,5,1,?i,", "10000.00000000000 26.00000000000000 0.001000000000000000", "_Sw0;FDC;2;2;DC2L,DFLT1,");
+        String main = lines.get(lines.indexOf("_Sw0;DCB;2;2;DCB_S,DC2L,") + 1);
+        assertThat(main).startsWith("-1," + EmtpNetlistWriter.number(NumericalAids.switchingInstant(0.103, 20.0e-6)) + ",1000000000.000000,");
     }
 
     /**
