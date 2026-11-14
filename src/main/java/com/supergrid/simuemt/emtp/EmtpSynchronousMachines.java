@@ -14,6 +14,8 @@ import com.powsybl.simuemt.extensions.circuit.NumericalAids;
 import com.powsybl.simuemt.extensions.excitation.Ac1AModel;
 import com.powsybl.simuemt.extensions.excitation.Ac6AInitialState;
 import com.powsybl.simuemt.extensions.excitation.Ac6AModel;
+import com.powsybl.simuemt.extensions.excitation.Ac8BInitialState;
+import com.powsybl.simuemt.extensions.excitation.Ac8BModel;
 import com.powsybl.simuemt.extensions.excitation.Dc1AModel;
 import com.powsybl.simuemt.extensions.excitation.ExcitationSystemModel;
 import com.powsybl.simuemt.extensions.excitation.ExponentialSaturation;
@@ -107,6 +109,12 @@ import static com.supergrid.simuemt.emtp.EmtpNetlistWriter.number;
  * the exciter {@code TE dVE/dt = VR - VFE}, {@code VFE = KE VE + SE(VE) VE + KD Ifd}, an integrator whose input a smooth step cuts while
  * {@code VE} is at 0 and still falling; and AC1A's rectifier.
  *
+ * <p>An enabled {@link Ac8BModel} drives it as ATP's TACS has it, at rest on upstream's {@link Ac8BInitialState}: the error {@code Vref
+ * + Vs - VC}; its PID {@code KPR e + KIR/s e + (KDR/TDR)(e - e/(1 + sTDR))} within {@code [VRMIN, VRMAX]}, the integrator's input cut
+ * by ATP's limiter steps while past a limit and pushed further (Dynawo's {@code LimitedPI}); {@code EFE = KA / (1 + sTA)} within the
+ * same limits, a static gain when {@code TA = 0}; the exciter {@code TE dVE/dt = EFE - VFE}, held while {@code VFE} is at {@code VFEMAX}
+ * and rising or {@code VE} at {@code VEMIN} and falling; and AC1A's rectifier.
+ *
  * <p>An enabled {@link Pss1AModel} with any of them adds its output to that error, as ATP's TACS has it: the machine observes its rotor's speed
  * per unit ({@code Omega_1}, its one mass's, on the header before {@code vd} and {@code vq}); a function its deviation {@code w - 1};
  * three transfer functions ({@code _c_fs}) the washout {@code Ks sTw / (1 + sTw)} and the two lead-lags {@code (1 + sT1) / (1 + sT2)},
@@ -185,7 +193,7 @@ final class EmtpSynchronousMachines {
         }
         for (Object extension : generator.getExtensions()) {
             if (isEnabled(extension) && !(extension instanceof SimplifiedAvrModel) && !(extension instanceof St1AModel) && !(extension instanceof Dc1AModel)
-                    && !(extension instanceof Ac1AModel) && !(extension instanceof Ac6AModel)
+                    && !(extension instanceof Ac1AModel) && !(extension instanceof Ac6AModel) && !(extension instanceof Ac8BModel)
                     && !(extension instanceof Pss1AModel)
                     && !(extension instanceof Tgov1Model)) {
                 reasons.add("its " + extension.getClass().getSimpleName() + " is not written yet");
@@ -358,6 +366,10 @@ final class EmtpSynchronousMachines {
         }
         if (excitation instanceof Ac6AModel ac6a) {
             devices.addAll(ac6a(ac6a, generator, name, initial, pss != null));
+            return devices;
+        }
+        if (excitation instanceof Ac8BModel ac8b) {
+            devices.addAll(ac8b(ac8b, generator, name, initial, pss != null));
             return devices;
         }
         SimplifiedAvrModel avr = (SimplifiedAvrModel) excitation;
@@ -654,6 +666,78 @@ final class EmtpSynchronousMachines {
         return devices;
     }
 
+    /** AC8B's devices, from the observed {@code vd}, {@code vq} and field current to the field voltage's control signal; the
+     * stabilizer's output {@code VS} added to its error if {@code stabilized}. */
+    private static List<Device> ac8b(Ac8BModel ac8b, Generator generator, String name, MachineInitialState initial, boolean stabilized) {
+        double efd0 = initial.efd();
+        double vt0 = initial.terminalVoltage();
+        Ac8BInitialState state = Ac8BInitialState.of(generator, ac8b, efd0);
+        ExponentialSaturation saturation = ac8b.saturation();
+        String vt = signal(name, "VT");
+        String fieldCurrent = signal(name, FIELD_CURRENT);
+        String ve = signal(name, "VE");
+        List<Device> devices = new ArrayList<>();
+        devices.add(function(name + "_VT", vt, List.of(signal(name, "vd"), signal(name, "vq")), vt0, "SQRT(u[1]*u[1]+u[2]*u[2])"));
+        String measured = vt;
+        if (ac8b.getTransducerTimeConstant() > 0.0) {
+            measured = signal(name, "VC");
+            devices.add(firstOrder(name + "_VC", measured, vt, vt0, 1.0, 1.0, 0.0, ac8b.getTransducerTimeConstant()));
+        }
+        double error0 = state.reference() - state.voltage();
+        String errorSignal = signal(name, "VERR");
+        devices.add(function(name + "_VERR", errorSignal, stabilized ? List.of(measured, signal(name, "VS")) : List.of(measured), error0,
+                number(state.reference()) + "-u[1]" + (stabilized ? "+u[2]" : "")));
+        // The PID's sum KPR e + (KDR/TDR)(e - lag(e)) + I, I = KIR/s on e cut while the sum is past a limit and e pushes it further.
+        List<String> sumInputs = new ArrayList<>(List.of(errorSignal));
+        StringBuilder sum = new StringBuilder("(" + number(ac8b.getProportionalGain()) + ")*u[1]");
+        if (ac8b.getDerivativeGain() > 0.0) {
+            String lag = signal(name, "DL");
+            devices.add(firstOrder(name + "_DL", lag, errorSignal, error0, 1.0, 1.0, 0.0, ac8b.getDerivativeTimeConstant()));
+            sumInputs.add(lag);
+            sum.append("+(").append(number(ac8b.getDerivativeGain() / ac8b.getDerivativeTimeConstant())).append(")*(u[1]-u[").append(sumInputs.size()).append("])");
+        }
+        String sumSignal = signal(name, "PS");
+        if (ac8b.getIntegralGain() > 0.0) {
+            String integral = signal(name, "PI");
+            String gated = signal(name, "PY");
+            sumInputs.add(integral);
+            sum.append("+u[").append(sumInputs.size()).append("]");
+            String pushesUp = limiterStep("u[1]");
+            devices.add(function(name + "_PY", gated, List.of(errorSignal, sumSignal), 0.0, "u[1]*(1-" + limiterStep("(u[2]-(" + number(ac8b.getRegulatorOutputMax()) + "))")
+                    + "*" + pushesUp + "-" + limiterStep("((" + number(ac8b.getRegulatorOutputMin()) + ")-u[2])") + "*(1-" + pushesUp + "))"));
+            devices.add(new Device("_c_fs", List.of("_c_fs;" + name + "_PI;2;2;" + integral + "," + gated + ",", number(state.regulatorIntegral()) + ",1,1,2,"
+                    + number(ac8b.getIntegralGain()) + ",S1,", "1", ";", "0 1")));
+        }
+        devices.add(function(name + "_PS", sumSignal, sumInputs, state.regulatorOutput(), sum.toString()));
+        String pid = signal(name, "PO");
+        devices.add(new Device("_c_lim", List.of("_c_lim;" + name + "_PO;2;2;" + pid + "," + sumSignal + ",",
+                number(ac8b.getRegulatorOutputMax()) + "," + number(ac8b.getRegulatorOutputMin()) + ",1,S1,")));
+        String exciterDrive = signal(name, "EFE");
+        if (ac8b.getRegulatorTimeConstant() > 0.0) {
+            devices.add(new Device("_c_fslim", List.of("_c_fslim;" + name + "_EFE;4;4;" + exciterDrive + "," + pid + ",0,0,",
+                    number(state.exciterField()) + "," + number(ac8b.getRegulatorOutputMax()) + "," + number(ac8b.getRegulatorOutputMin()) + ",1,1,2,"
+                            + number(ac8b.getRegulatorGain()) + ",S1,", "1", ";", "1 " + number(ac8b.getRegulatorTimeConstant()))));
+        } else {
+            devices.add(new Device("_c_lim", List.of("_c_lim;" + name + "_EFE;2;2;" + exciterDrive + "," + pid + ",",
+                    number(ac8b.getRegulatorOutputMax()) + "," + number(ac8b.getRegulatorOutputMin()) + "," + number(ac8b.getRegulatorGain()) + ",S1,")));
+        }
+        String exciterField = signal(name, "VFE");
+        devices.add(function(name + "_VFE", exciterField, List.of(ve, fieldCurrent), state.exciterField(),
+                "(" + number(ac8b.getExciterConstant()) + ")*u[1]+(" + number(saturation.aex()) + ")*EXP((" + number(saturation.bex()) + ")*u[1])*u[1]+("
+                        + number(ac8b.getDemagnetizingFactor()) + ")*u[2]"));
+        // TE dVE/dt = EFE - VFE, held while VFE is at VFEMAX and rising or VE at VEMIN and falling.
+        String rising = signal(name, "VEW");
+        devices.add(function(name + "_VEW", rising, List.of(exciterDrive, exciterField), 0.5, limiterStep("(u[1]-u[2])")));
+        String gated = signal(name, "VEY");
+        devices.add(function(name + "_VEY", gated, List.of(exciterDrive, exciterField, ve, rising), 0.0,
+                "(u[1]-u[2])*(1-" + limiterStep("(u[2]-(" + number(ac8b.getExciterFieldMax()) + "))") + "*u[4]-"
+                        + limiterStep("((" + number(ac8b.getExciterVoltageMin()) + ")-u[3])") + "*(1-u[4]))"));
+        devices.add(new Device("_c_fs", List.of("_c_fs;" + name + "_VE;2;2;" + ve + "," + gated + ",", number(state.exciterVoltage()) + ",1,1,2,1,S1,",
+                "1", ";", "0 " + number(ac8b.getExciterTimeConstant()))));
+        devices.addAll(rectifier(name, ve, ac8b.getRectifierLoadingFactor(), efd0, state.exciterVoltage()));
+        return devices;
+    }
+
     /** ATP's limiter step {@code 0.5 (1 + x / sqrt(x^2 + eps))} on the expression {@code x} ({@link NumericalAids#LIMITER_STEP_EPSILON}). */
     private static String limiterStep(String x) {
         return "0.5*(1+" + x + "/SQRT(" + x + "*" + x + "+" + number(NumericalAids.LIMITER_STEP_EPSILON) + "))";
@@ -726,7 +810,7 @@ final class EmtpSynchronousMachines {
     /** Whether the machine's excitation system reads its field current: an ST1A's ceiling or field-current limiter, an AC1A. */
     private static boolean readsFieldCurrent(Generator generator) {
         return regulator(generator) instanceof St1AModel st1a && (st1a.getRectifierLoadingFactor() != 0.0 || st1a.getFieldCurrentLimiterGain() != 0.0)
-                || regulator(generator) instanceof Ac1AModel || regulator(generator) instanceof Ac6AModel;
+                || regulator(generator) instanceof Ac1AModel || regulator(generator) instanceof Ac6AModel || regulator(generator) instanceof Ac8BModel;
     }
 
     /** A first-order transfer function {@code gain (n0 + n1 s) / (1 + d1 s)} from {@code input} to {@code output}, at rest at {@code
@@ -750,7 +834,7 @@ final class EmtpSynchronousMachines {
     private static ExcitationSystemModel regulator(Generator generator) {
         ExcitationSystemModel excitation = generator.getExtension(ExcitationSystemModel.class);
         return (excitation instanceof SimplifiedAvrModel || excitation instanceof St1AModel || excitation instanceof Dc1AModel
-                || excitation instanceof Ac1AModel || excitation instanceof Ac6AModel) && excitation.isEnabled()
+                || excitation instanceof Ac1AModel || excitation instanceof Ac6AModel || excitation instanceof Ac8BModel) && excitation.isEnabled()
                 ? excitation : null;
     }
 
