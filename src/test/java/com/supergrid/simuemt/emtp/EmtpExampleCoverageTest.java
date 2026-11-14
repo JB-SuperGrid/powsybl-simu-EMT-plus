@@ -79,8 +79,17 @@ class EmtpExampleCoverageTest {
             "createTwoBusNetworkWithOpenEndedLine",
             "createThreeBusNetworkWithTransformerOpenAtItsSecondary",
             "createThreeBusNetworkWithThreeWindingsTransformerOpenAtLegThree",
+            "vsc-bipole-converter-transformers",
+            "vsc-bipole-converter-transformers-metallic-return",
+            "vsc-bipole-infinite-buses",
+            "vsc-bipole-infinite-buses-metallic-return",
+            "vsc-three-terminal",
+            "vsc-monopole",
             "vsc-monopole-2",
+            "vsc-monopole-infinite-buses",
             "vsc-monopole-infinite-buses-2",
+            "vsc-monopole-infinite-buses-ground-resistance",
+            "vsc-monopole-infinite-buses-metallic-return",
             "two-bus");
 
     /** Every example written, or refused naming what it holds that is not written yet; the written ones pinned. */
@@ -173,9 +182,11 @@ class EmtpExampleCoverageTest {
             softly.assertThat(errors[0]).as("%s, %s's steady state, pu", name, bus.getId()).isCloseTo(0.0, within(pu));
             softly.assertThat(errors[1]).as("%s, %s's steady state, degrees", name, bus.getId()).isCloseTo(0.0, within(degrees));
             softly.assertThat(errors[2]).as("%s, %s's last period, pu", name, bus.getId()).isCloseTo(0.0, within(pu));
-            // vsc-monopole-2's machines, free of any governor, carry VSC2's reactor losses (0.65 MW), which the load flow leaves out: the
-            // network slows down, its angles 0.04 degree off at 0.2 s (0.18 at 0.8 s; run 2026-11-14) - its steady state within 0.01.
-            double lastDegrees = "vsc-monopole-2".equals(name) ? 0.05 : degrees;
+            // A VSC example's DC voltage station carries the converters' reactor losses (2.6e-3 pu of a 250 MVA converter's, 0.65 MW), which
+            // the load flow leaves out: its converter bus 0.02 to 0.03 degree off behind a converter transformer, and vsc-monopole's and
+            // vsc-monopole-2's machines, free of any governor, slowing down - their angles 0.04 degree off at 0.2 s, 0.18 at 0.8 s (runs
+            // 2026-11-14). Their steady state within 0.01.
+            double lastDegrees = name.startsWith("vsc-") ? 0.05 : degrees;
             softly.assertThat(errors[3]).as("%s, %s's last period, degrees", name, bus.getId()).isCloseTo(0.0, within(lastDegrees));
         }
         System.out.printf(Locale.ROOT, "%s: buses within %.1e pu and %.1e degree%n", name, worstPu, worstDegrees);

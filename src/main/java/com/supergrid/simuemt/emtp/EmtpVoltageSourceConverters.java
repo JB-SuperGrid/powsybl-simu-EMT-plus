@@ -20,11 +20,13 @@ import com.powsybl.simuemt.extensions.hvdc.DcVoltageDroopLaw;
 import com.powsybl.simuemt.extensions.hvdc.LumpedDcLineModel;
 import com.powsybl.simuemt.extensions.hvdc.VoltageSourceConverterModel;
 import com.powsybl.simuemt.extensions.hvdc.VscProtectionModel;
+import com.powsybl.simuemt.extensions.hvdc.control.Ddsrf;
+import com.powsybl.simuemt.extensions.hvdc.control.DdsrfPll;
+import com.powsybl.simuemt.extensions.hvdc.control.DualSequenceCurrentControl;
 import com.powsybl.simuemt.extensions.hvdc.control.FaultRideThrough;
 import com.powsybl.simuemt.extensions.hvdc.control.GridFollowingControl;
-import com.powsybl.simuemt.extensions.hvdc.control.NoSequenceSeparation;
+import com.powsybl.simuemt.extensions.hvdc.control.NegativeSequenceInjection;
 import com.powsybl.simuemt.extensions.hvdc.control.OuterLoops;
-import com.powsybl.simuemt.extensions.hvdc.control.SingleSequenceCurrentControl;
 import com.powsybl.simuemt.extensions.hvdc.control.SrfPll;
 import com.powsybl.simuemt.extensions.hvdc.control.VscControlModel;
 
@@ -62,13 +64,21 @@ import static com.supergrid.simuemt.emtp.EmtpSynchronousMachines.function;
  * and the EMFs {@code Vb (ed cos(theta + phi) - eq sin(theta + phi))}. The switches - the ride-through's, the integrations' - ATP's plain
  * logic. Every block at rest on the load flow ({@link AveragedVscInitialState}).
  *
+ * <p><b>Its sequences</b>, a {@link Ddsrf}'s: the voltage and the current read in a frame turning the other way too, each sequence less
+ * the other's twice-frequency ripple rebuilt from that sequence's filtered value; the measurements and the ride-through on the positive
+ * sequence; a {@link DdsrfPll} on its decoupled {@code vq}. A {@link DualSequenceCurrentControl}: the positive sequence's loop on its
+ * decoupled current and voltage, the negative sequence's in its own frame, {@code e- = LPF(v-*) - (R - jX) i- - u-}, on zero or a
+ * {@link NegativeSequenceInjection}'s reference within the crest the q axis leaves; the EMFs the two sequences' sum, the DC current
+ * their power - each sequence's own and the ripple of each with the other.
+ *
  * <p><b>Started from the load flow.</b> A controlled source is a short circuit in EMTP's steady state: each EMF is stood in for by a
  * cosine source at its load-flow phasor, in series with it and active in the steady state only, as EMTP's own documentation does it; each
- * converter's DC pole by a DC source at its load-flow voltage through a switch closed in the steady state and opened at the first step -
- * a source stopped is a short circuit -, as ATP's stand-ins.
+ * converter's DC voltage by a DC source across its terminals at its load-flow voltage - a negative pole's converter has its neutral on
+ * terminal 1 - through a switch closed in the steady state and opened at the first step - a source stopped is a short circuit -, as
+ * ATP's stand-ins.
  *
- * <p>Refused, until written: an MMC, a DC reactor, a grid-forming control, a sequence separation, a PLL but the SRF one, a current control
- * but the single-sequence one, a DC voltage droop, a protection, a DC midpoint earthing, a chopper but the averaged one.
+ * <p>Refused, until written: an MMC, a DC reactor, a grid-forming control, a PLL but the SRF and DDSRF ones, a DC voltage droop, a
+ * protection, a DC midpoint earthing, a chopper but the averaged one.
  *
  * @author Jean-Baptiste Heyberger : jean-baptiste.heyberger@supergrid-institute.com
  */
@@ -101,14 +111,8 @@ final class EmtpVoltageSourceConverters {
             return reasons;
         }
         GridFollowingControl control = GridFollowingControl.of(converter);
-        if (!(control.getSequenceSeparation() instanceof NoSequenceSeparation)) {
-            reasons.add("its sequence separation is not written yet");
-        }
-        if (!(control.getSynchronization() instanceof SrfPll)) {
-            reasons.add("its PLL but the SRF one is not written yet");
-        }
-        if (!(control.getCurrentControl() instanceof SingleSequenceCurrentControl)) {
-            reasons.add("its current control but the single-sequence one is not written yet");
+        if (!(control.getSynchronization() instanceof SrfPll || control.getSynchronization() instanceof DdsrfPll)) {
+            reasons.add("its PLL but the SRF and DDSRF ones are not written yet");
         }
         if (converter.getExtension(VscProtectionModel.class) != null) {
             reasons.add("its protection is not written yet");
@@ -200,52 +204,14 @@ final class EmtpVoltageSourceConverters {
         String zero = id + "_ZERO";
         List<EmtpSynchronousMachines.Device> devices = new ArrayList<>();
 
-        // The power stage, AC side, phase by phase: the EMF, its stand-in, the reactor; the bus voltage's probe.
-        double resistanceOhm = initial.phaseReactorResistanceOhm(model);
-        double inductanceH = initial.phaseReactorInductanceH(model, omega);
         double emfMagnitude = Math.hypot(initial.directEmf(), initial.quadratureEmf()) * vbpk;
         double emfAngle = angle0 + Math.atan2(initial.quadratureEmf(), initial.directEmf());
         String[] v = new String[3];
         String[] i = new String[3];
-        for (int k = 0; k < 3; k++) {
-            char phase = "abc".charAt(k);
-            double offset = -2.0 * Math.PI / 3.0 * (k == 2 ? -1 : k);
-            String reactorStart = id + "_K" + phase;
-            String standIn = id + "_M" + phase;
-            String junction = id + "_J" + phase;
-            v[k] = id + "_V" + phase;
-            i[k] = id + "_I" + phase;
-            devices.add(element("_RLC", id + "_R" + phase, List.of(reactorStart, junction), number(resistanceOhm) + ",0,0,0,0,"));
-            devices.add(element("_RLC", id + "_L" + phase, List.of(junction, phaseNodes[k]), "0," + number(inductanceH) + ",0,0,0,"));
-            devices.add(element("_RLC", id + "_LD" + phase, List.of(junction, phaseNodes[k]),
-                    number(NumericalAids.seriesInductanceDampingOhm(inductanceH, settings.timeStepSeconds())) + ",0,0,0,0,"));
-            // The EMF's stand-in, in the steady state only.
-            devices.add(element("_Vsine", id + "_STD" + phase, List.of(reactorStart, standIn), number(emfMagnitude) + "," + number(settings.nominalFrequencyHz()) + ","
-                    + number(Math.toDegrees(emfAngle + offset)) + ",-1,1E-15,"));
-            devices.add(element("_cV", id + "_CV" + phase, List.of(standIn, star, id + "_EMF" + phase, id + "_CVV" + phase, i[k], id + "_CVP" + phase),
-                    "-1,1E15,0,?v,?i,?p,>v,>i,>p,"));
-            devices.add(element("_cI", id + "_PR" + phase, List.of(phaseNodes[k], "", zero, v[k], id + "_PRI" + phase, id + "_PRP" + phase),
-                    "-1,1E15,0,0,0,0,>v,0,0,"));
-        }
-        devices.add(element("_RLC", id + "_NREF", List.of(star), number(NumericalAids.BUS_EARTH_REFERENCE_OHM) + ",0,0,0,0,"));
-        devices.add(new EmtpSynchronousMachines.Device("_c_cst", List.of("_c_cst;" + id + "_ZERO;1;1;" + zero + ",", "0,S1,")));
-
-        // The DC side: the current source between its ties, the capacitor, the DC voltages' probes, the pole's stand-in.
-        String poleTie = id + "_DCP";
-        String returnTie = id + "_DCR";
+        powerStage(devices, converter, model, initial, phaseNodes, v, i, emfMagnitude, emfAngle, omega, settings);
         String dcCurrent = id + "_IDC";
-        // EMTP's controlled current source drives its current out of its first pin into its second one through the network: from the pole.
-        devices.add(element("_cI", id + "_DC", List.of(poleTie, returnTie, dcCurrent, id + "_DCV", id + "_DCI", id + "_DCPW"), "-1,1E15,0,0,0,0,0,0,0,"));
-        devices.add(element("_RLC", id + "_TP", List.of(poleTie, pole), number(NumericalAids.CURRENT_SOURCE_TIE_RESISTANCE_OHM) + ",0,0,0,0,"));
-        devices.add(element("_RLC", id + "_TR", List.of(returnTie, ret), number(NumericalAids.CURRENT_SOURCE_TIE_RESISTANCE_OHM) + ",0,0,0,0,"));
-        devices.add(element("_RLC", id + "_CDC", List.of(pole, ret), "0,0," + number(initial.dcCapacitanceF(model)) + ",0,0,"));
         String vPole = id + "_VDP";
         String vReturn = id + "_VDR";
-        devices.add(element("_cI", id + "_PRDP", List.of(pole, "", zero, vPole, id + "_PRDPI", id + "_PRDPP"), "-1,1E15,0,0,0,0,>v,0,0,"));
-        devices.add(element("_cI", id + "_PRDR", List.of(ret, "", zero, vReturn, id + "_PRDRI", id + "_PRDRP"), "-1,1E15,0,0,0,0,>v,0,0,"));
-        String standInNode = id + "_DCS";
-        devices.add(element("_Vp", id + "_DCSTD", List.of(standInNode, ""), number(converter.getDcTerminal1().getDcNode().getV() * 1.0e3) + ",-1,1E15,"));
-        devices.add(element("_Sw0", id + "_DCSW", List.of(standInNode, pole), "-1," + number(settings.timeStepSeconds()) + ",1E9,0,0,,1,.1,.001,5,"));
 
         // The control: Park transform on the PLL's angle.
         String theta = id + "_TH";
@@ -258,19 +224,30 @@ final class EmtpVoltageSourceConverters {
         // The source's current is counted from its star point to its EMF, out of the converter: negated, the current from the bus into it.
         devices.add(park(id + "_ID", idPu, i, theta, "COS", -ibpk, initial.directCurrent(), false));
         devices.add(park(id + "_IQ", iqPu, i, theta, "SIN", -ibpk, initial.quadratureCurrent(), true));
-        String pllIntegral = id + "_PLI";
-        String deviation = id + "_PLD";
-        String angleIntegral = id + "_PLA";
-        devices.add(integrator(id + "_PLI", pllIntegral, vq, 1.0, 0.0));
-        devices.add(function(id + "_PLD", deviation, List.of(vq, pllIntegral), 0.0, "(" + number(control.getPllProportionalGain()) + ")*u[1]+("
-                + number(control.getPllIntegralGain()) + ")*u[2]"));
-        devices.add(integrator(id + "_PLA", angleIntegral, deviation, 1.0, 0.0));
-        devices.add(function(id + "_TH", theta, List.of(angleIntegral), angle0, "(" + number(angle0) + ")+(" + number(omega) + ")*t+u[1]"));
+        // The PLL - on the positive sequence's decoupled q-axis voltage alone, a DDSRF's (named ahead: EMTP's devices are in no order).
+        pll(devices, id, control, control.getSynchronization() instanceof DdsrfPll ? id + "_BE2" : vq, theta, angle0, omega);
 
-        // The measurements, through their lag.
-        String p = measurement(devices, id + "_P", List.of(vd, vq, idPu, iqPu), "u[1]*u[3]+u[2]*u[4]", tau, initial.activePower());
-        String q = measurement(devices, id + "_Q", List.of(vd, vq, idPu, iqPu), "u[2]*u[3]-u[1]*u[4]", tau, initial.reactivePower());
-        String vac = measurement(devices, id + "_VAC", List.of(vd, vq), "SQRT(u[1]*u[1]+u[2]*u[2])", tau, initial.terminalVoltage());
+        // The sequences, if the control separates them (a DDSRF): each sequence's voltage and current, the other's twice-frequency ripple
+        // taken off - or the whole measurement, read in the positive frame, as the positive sequence.
+        Sequences voltage = new Sequences(vd, vq, null, null, null, null);
+        Sequences current = new Sequences(idPu, iqPu, null, null, null, null);
+        String cos2 = id + "_C2";
+        String sin2 = id + "_S2";
+        if (control.getSequenceSeparation() instanceof Ddsrf ddsrf) {
+            devices.add(function(cos2, cos2, List.of(theta), Math.cos(2.0 * angle0), "COS(2*u[1])"));
+            devices.add(function(sin2, sin2, List.of(theta), Math.sin(2.0 * angle0), "SIN(2*u[1])"));
+            voltage = ddsrf(devices, ddsrf, id + "_B", vd, vq, v, theta, vbpk, cos2, sin2, initial.terminalVoltage(), 0.0);
+            current = ddsrf(devices, ddsrf, id + "_Z", idPu, iqPu, i, theta, -ibpk, cos2, sin2, initial.directCurrent(), initial.quadratureCurrent());
+        }
+        String pd = voltage.positiveD();
+        String pq = voltage.positiveQ();
+        String cd = current.positiveD();
+        String cq = current.positiveQ();
+
+        // The measurements, through their lag - on the positive sequence, once the control separates them.
+        String p = measurement(devices, id + "_P", List.of(pd, pq, cd, cq), "u[1]*u[3]+u[2]*u[4]", tau, initial.activePower());
+        String q = measurement(devices, id + "_Q", List.of(pd, pq, cd, cq), "u[2]*u[3]-u[1]*u[4]", tau, initial.reactivePower());
+        String vac = measurement(devices, id + "_VAC", List.of(pd, pq), "SQRT(u[1]*u[1]+u[2]*u[2])", tau, initial.terminalVoltage());
         String vdc = measurement(devices, id + "_VDC", List.of(vPole, vReturn), "(u[1]-u[2])/" + number(dcBaseVolts), tau,
                 initial.dcVoltage() / initial.dcNominalVoltage());
 
@@ -343,7 +320,20 @@ final class EmtpVoltageSourceConverters {
         devices.add(function(id + "_IQB", qFirst, List.of(qRaw), initial.quadratureCurrent(), clampExpression("u[1]", imax)));
         String squared = "(" + number(maxCurrent * maxCurrent) + "-u[1]*u[1])";
         String headroom = "SQRT(0.5*(" + squared + "+" + number(MEASUREMENT_EPS) + "+ABS(" + squared + "-" + number(MEASUREMENT_EPS) + ")))";
-        devices.add(function(id + "_IDMAX", dLimit, List.of(qFirst, w), maxCurrent, "(1-u[2])*" + imax + "+u[2]*" + headroom));
+        // A negative-sequence injection: its current, through the ride-through, within the crest the q axis leaves; the d axis's after both.
+        boolean dualSequence = control.getCurrentControl() instanceof DualSequenceCurrentControl;
+        NegativeSequenceInjection injection = control.getCurrentControl() instanceof DualSequenceCurrentControl dual
+                && dual.strategy() instanceof NegativeSequenceInjection k ? k : null;
+        String[] negativeReference = null;
+        if (injection != null) {
+            negativeReference = negativeSequenceReference(devices, id, injection, maxCurrent, w, qFirst, voltage);
+            String crest = "(" + imax + "-u[3]*u[4])";
+            String crestSquared = "(" + crest + "*" + crest + "-u[1]*u[1])";
+            String afterBoth = "SQRT(0.5*(" + crestSquared + "+" + number(MEASUREMENT_EPS) + "+ABS(" + crestSquared + "-" + number(MEASUREMENT_EPS) + ")))";
+            devices.add(function(id + "_IDMAX", dLimit, List.of(qFirst, w, id + "_YG", id + "_YE"), maxCurrent, "(1-u[2])*" + imax + "+u[2]*" + afterBoth));
+        } else {
+            devices.add(function(id + "_IDMAX", dLimit, List.of(qFirst, w), maxCurrent, "(1-u[2])*" + imax + "+u[2]*" + headroom));
+        }
         devices.add(function(id + "_IQMAX", qLimit, List.of(dFirst, w), maxCurrent, "(1-u[2])*" + headroom + "+u[2]*" + imax));
         String qRef = id + "_IQLIM";
         devices.add(function(id + "_IDLIM", dLimitedRef, List.of(dRaw, dLimit), initial.directCurrent(), clampExpression("u[1]", "u[2]")));
@@ -364,39 +354,229 @@ final class EmtpVoltageSourceConverters {
                 "(" + number(qKi) + ")*u[1]*" + windupGate("u[2]", "u[3]", "u[1]") + "*(1-u[4])"));
         devices.add(integrator(id + "_IQI", qIntegral, qRate, 1.0, initial.quadratureCurrent()));
 
-        // The inner current loops, decoupled: e = v + jX i - u.
-        String ud = innerPi(devices, id + "_UD", dLimitedRef, idPu, control, r * initial.directCurrent());
-        String uq = innerPi(devices, id + "_UQ", qRef, iqPu, control, r * initial.quadratureCurrent());
+        // The inner current loops, decoupled: e = v + jX i - u - on the positive sequence, a dual-sequence loop's, its decoupled voltage
+        // fed forward (the negative sequence's filtered one in its own loop: each part of the bus's once in the EMF, as ATP's).
+        String loopD = dualSequence ? cd : idPu;
+        String loopQ = dualSequence ? cq : iqPu;
+        String feedD = dualSequence ? pd : vd;
+        String feedQ = dualSequence ? pq : vq;
+        String ud = innerPi(devices, id + "_UD", dLimitedRef, loopD, control, r * initial.directCurrent());
+        String uq = innerPi(devices, id + "_UQ", qRef, loopQ, control, r * initial.quadratureCurrent());
         String ed = id + "_ED";
         String eq = id + "_EQ";
-        devices.add(function(id + "_ED", ed, List.of(vd, iqPu, ud), initial.directEmf(), "u[1]+(" + number(x) + ")*u[2]-u[3]"));
-        devices.add(function(id + "_EQ", eq, List.of(vq, idPu, uq), initial.quadratureEmf(), "u[1]-(" + number(x) + ")*u[2]-u[3]"));
+        devices.add(function(id + "_ED", ed, List.of(feedD, loopQ, ud), initial.directEmf(), "u[1]+(" + number(x) + ")*u[2]-u[3]"));
+        devices.add(function(id + "_EQ", eq, List.of(feedQ, loopD, uq), initial.quadratureEmf(), "u[1]-(" + number(x) + ")*u[2]-u[3]"));
+        // The negative sequence's loop, in its frame turning the other way: e- = LPF(v-*) - (R - jX) i- - u-, on zero or the injection's.
+        String edNegative = id + "_EDN";
+        String eqNegative = id + "_EQN";
+        if (dualSequence) {
+            negativeSequenceLoop(devices, id, control, x, voltage, current, negativeReference);
+        }
         // The EMFs a step ahead of the angle the PLL tracks: EMTP's network takes a control signal a step after the control computes it,
         // as ATP's does - its EMFs rebuilt a step ahead too.
         String ahead = "+" + number(omega * settings.timeStepSeconds());
+        // The negative sequence's frame turns the other way: phase b's angle the positive frame's phase c's, and c's b's.
+        String third = number(2.0 * Math.PI / 3.0);
+        List<String> emfInputs = dualSequence ? List.of(ed, eq, theta, edNegative, eqNegative) : List.of(ed, eq, theta);
         for (int k = 0; k < 3; k++) {
-            char phase = "abc".charAt(k);
-            String shift = ahead + (k == 0 ? "" : k == 1 ? "-" + number(2.0 * Math.PI / 3.0) : "+" + number(2.0 * Math.PI / 3.0));
-            double offset = k == 0 ? 0.0 : k == 1 ? -2.0 * Math.PI / 3.0 : 2.0 * Math.PI / 3.0;
-            devices.add(function(id + "_EMF" + phase, id + "_EMF" + phase, List.of(ed, eq, theta),
-                    emfMagnitude * Math.cos(emfAngle + offset), "(" + number(vbpk) + ")*(u[1]*COS(u[3]" + shift + ")-u[2]*SIN(u[3]" + shift + "))"));
+            String shift = ahead + (k == 0 ? "" : k == 1 ? "-" + third : "+" + third);
+            String negative = ahead + (k == 0 ? "" : k == 1 ? "+" + third : "-" + third);
+            devices.add(function(id + "_EMF" + "abc".charAt(k), id + "_EMF" + "abc".charAt(k), emfInputs, emfMagnitude * Math.cos(emfAngle - 2.0 * Math.PI / 3.0 * (k == 2 ? -1 : k)),
+                    "(" + number(vbpk) + ")*(u[1]*COS(u[3]" + shift + ")-u[2]*SIN(u[3]" + shift + ")"
+                            + (dualSequence ? "+u[4]*COS(u[3]" + negative + ")+u[5]*SIN(u[3]" + negative + ")" : "") + ")"));
         }
 
-        // The DC current: the EMFs' power over the DC voltage, less the chopper's.
+        // The DC current: the EMFs' power over the DC voltage, less the chopper's. With a sequence each, the power of E = E+ e^j theta +
+        // E- e^-j theta into I alike: each sequence's own and the twice-frequency ripple of each with the other, in the frame the EMF
+        // was computed in.
+        String emfPower = emfPower(devices, id, initial, dualSequence, current, cos2, sin2);
         String chopper = "";
-        List<String> dcInputs = new ArrayList<>(List.of(ed, eq, idPu, iqPu, vPole, vReturn));
+        List<String> dcInputs = new ArrayList<>(List.of(emfPower, vPole, vReturn));
         if (converter.getExtension(DcChopperModel.class) instanceof AveragedDcChopperModel averaged) {
             double span = averaged.getFullConductionVoltage() - averaged.getActivationVoltage();
             String duty = id + "_DCH";
             devices.add(function(id + "_DCH", duty, List.of(vPole, vReturn), 0.0, clamp01("((u[1]-u[2])/" + number(dcBaseVolts) + "-" + number(averaged.getActivationVoltage())
                     + ")/" + number(span))));
             dcInputs.add(duty);
-            chopper = "-u[7]*(u[5]-u[6])/" + number(averaged.resistanceOhm(initial.dcNominalVoltage()));
+            chopper = "-u[4]*(u[2]-u[3])/" + number(averaged.resistanceOhm(initial.dcNominalVoltage()));
         }
         String floor = number(DC_VOLTAGE_FLOOR_PU * dcBaseVolts);
-        devices.add(function(id + "_IDCF", dcCurrent, dcInputs, initial.dcCurrent() * 1.0e3, "(u[1]*u[3]+u[2]*u[4])*" + number(initial.baseApparentPower() * 1.0e6)
-                + "/(0.5*((u[5]-u[6])+" + floor + "+ABS((u[5]-u[6])-" + floor + ")))" + chopper));
+        devices.add(function(id + "_IDCF", dcCurrent, dcInputs, initial.dcCurrent() * 1.0e3, "u[1]*" + number(initial.baseApparentPower() * 1.0e6)
+                + "/(0.5*((u[2]-u[3])+" + floor + "+ABS((u[2]-u[3])-" + floor + ")))" + chopper));
         return devices;
+    }
+
+    /** {@code converter}'s power stage: AC side, phase by phase, its EMF, its stand-in, its reactor and its bus's probe - {@code v} and {@code
+     * i} filled with the probes' and the EMFs' current signals -; DC side, its current source, its capacitor, its probes, its pole's
+     * stand-in. */
+    private static void powerStage(List<EmtpSynchronousMachines.Device> devices, VoltageSourceConverter converter, AveragedVscModel model,
+                                   AveragedVscInitialState initial, String[] phaseNodes, String[] v, String[] i, double emfMagnitude, double emfAngle,
+                                   double omega, EmtpSimulationSettings settings) {
+        String id = sanitize(converter.getId());
+        String pole = dcNode(converter.getDcTerminal1().getDcNode());
+        String ret = dcNode(converter.getDcTerminal2().getDcNode());
+        String star = id + "_N";
+        String zero = id + "_ZERO";
+        // The power stage, AC side, phase by phase: the EMF, its stand-in, the reactor; the bus voltage's probe.
+        double resistanceOhm = initial.phaseReactorResistanceOhm(model);
+        double inductanceH = initial.phaseReactorInductanceH(model, omega);
+        for (int k = 0; k < 3; k++) {
+            char phase = "abc".charAt(k);
+            double offset = -2.0 * Math.PI / 3.0 * (k == 2 ? -1 : k);
+            String reactorStart = id + "_K" + phase;
+            String standIn = id + "_M" + phase;
+            String junction = id + "_J" + phase;
+            v[k] = id + "_V" + phase;
+            i[k] = id + "_I" + phase;
+            devices.add(element("_RLC", id + "_R" + phase, List.of(reactorStart, junction), number(resistanceOhm) + ",0,0,0,0,"));
+            devices.add(element("_RLC", id + "_L" + phase, List.of(junction, phaseNodes[k]), "0," + number(inductanceH) + ",0,0,0,"));
+            devices.add(element("_RLC", id + "_LD" + phase, List.of(junction, phaseNodes[k]),
+                    number(NumericalAids.seriesInductanceDampingOhm(inductanceH, settings.timeStepSeconds())) + ",0,0,0,0,"));
+            // The EMF's stand-in, in the steady state only.
+            devices.add(element("_Vsine", id + "_STD" + phase, List.of(reactorStart, standIn), number(emfMagnitude) + "," + number(settings.nominalFrequencyHz()) + ","
+                    + number(Math.toDegrees(emfAngle + offset)) + ",-1,1E-15,"));
+            devices.add(element("_cV", id + "_CV" + phase, List.of(standIn, star, id + "_EMF" + phase, id + "_CVV" + phase, i[k], id + "_CVP" + phase),
+                    "-1,1E15,0,?v,?i,?p,>v,>i,>p,"));
+            devices.add(element("_cI", id + "_PR" + phase, List.of(phaseNodes[k], "", zero, v[k], id + "_PRI" + phase, id + "_PRP" + phase),
+                    "-1,1E15,0,0,0,0,>v,0,0,"));
+        }
+        devices.add(element("_RLC", id + "_NREF", List.of(star), number(NumericalAids.BUS_EARTH_REFERENCE_OHM) + ",0,0,0,0,"));
+        devices.add(new EmtpSynchronousMachines.Device("_c_cst", List.of("_c_cst;" + id + "_ZERO;1;1;" + zero + ",", "0,S1,")));
+
+        // The DC side: the current source between its ties, the capacitor, the DC voltages' probes, the pole's stand-in.
+        String poleTie = id + "_DCP";
+        String returnTie = id + "_DCR";
+        String dcCurrent = id + "_IDC";
+        // EMTP's controlled current source drives its current out of its first pin into its second one through the network: from the pole.
+        devices.add(element("_cI", id + "_DC", List.of(poleTie, returnTie, dcCurrent, id + "_DCV", id + "_DCI", id + "_DCPW"), "-1,1E15,0,0,0,0,0,0,0,"));
+        devices.add(element("_RLC", id + "_TP", List.of(poleTie, pole), number(NumericalAids.CURRENT_SOURCE_TIE_RESISTANCE_OHM) + ",0,0,0,0,"));
+        devices.add(element("_RLC", id + "_TR", List.of(returnTie, ret), number(NumericalAids.CURRENT_SOURCE_TIE_RESISTANCE_OHM) + ",0,0,0,0,"));
+        devices.add(element("_RLC", id + "_CDC", List.of(pole, ret), "0,0," + number(initial.dcCapacitanceF(model)) + ",0,0,"));
+        String vPole = id + "_VDP";
+        String vReturn = id + "_VDR";
+        devices.add(element("_cI", id + "_PRDP", List.of(pole, "", zero, vPole, id + "_PRDPI", id + "_PRDPP"), "-1,1E15,0,0,0,0,>v,0,0,"));
+        devices.add(element("_cI", id + "_PRDR", List.of(ret, "", zero, vReturn, id + "_PRDRI", id + "_PRDRP"), "-1,1E15,0,0,0,0,>v,0,0,"));
+        String standInNode = id + "_DCS";
+        // Across the converter's terminals, its DC voltage from the load flow: a negative pole's converter has its neutral on terminal 1.
+        double dcVolts = (converter.getDcTerminal1().getDcNode().getV() - converter.getDcTerminal2().getDcNode().getV()) * 1.0e3;
+        devices.add(element("_Vp", id + "_DCSTD", List.of(standInNode, ret), number(dcVolts) + ",-1,1E15,"));
+        devices.add(element("_Sw0", id + "_DCSW", List.of(standInNode, pole), "-1," + number(settings.timeStepSeconds()) + ",1E9,0,0,,1,.1,.001,5,"));
+    }
+
+    /** The EMFs' instantaneous power, {@code <id>_PE}, from {@code <id>_ED}, {@code <id>_EQ} into {@code current}: with a sequence each, the
+     * power of {@code E = E+ e^j theta + E- e^-j theta} into {@code I} alike, each sequence's own and the twice-frequency ripple of each
+     * with the other, in the frame the EMF was computed in - in five functions, each header within EMTP's line. */
+    private static String emfPower(List<EmtpSynchronousMachines.Device> devices, String id, AveragedVscInitialState initial, boolean dualSequence,
+                                   Sequences current, String cos2, String sin2) {
+        String emfPower = id + "_PE";
+        double power0 = initial.directEmf() * initial.directCurrent() + initial.quadratureEmf() * initial.quadratureCurrent();
+        String ed = id + "_ED";
+        String eq = id + "_EQ";
+        if (!dualSequence) {
+            devices.add(function(emfPower, emfPower, List.of(ed, eq, current.positiveD(), current.positiveQ()), power0, "u[1]*u[3]+u[2]*u[4]"));
+            return emfPower;
+        }
+        String edNegative = id + "_EDN";
+        String eqNegative = id + "_EQN";
+        String cd = current.positiveD();
+        String cq = current.positiveQ();
+        // Each sequence's own on a function of its own: one of eight inputs ran past EMTP's 100 characters under five-character ids.
+        devices.add(function(id + "_PE1", id + "_PE1", List.of(ed, eq, cd, cq), power0, "u[1]*u[3]+u[2]*u[4]"));
+        devices.add(function(id + "_PE2", id + "_PE2", List.of(edNegative, eqNegative, current.negativeD(), current.negativeQ()), 0.0, "u[1]*u[3]+u[2]*u[4]"));
+        devices.add(function(id + "_PEP", id + "_PEP", List.of(ed, eq, current.negativeD(), current.negativeQ(), cos2, sin2), 0.0,
+                "(u[1]*u[3]+u[2]*u[4])*u[5]-(u[2]*u[3]-u[1]*u[4])*u[6]"));
+        devices.add(function(id + "_PEN", id + "_PEN", List.of(edNegative, eqNegative, cd, cq, cos2, sin2), 0.0,
+                "(u[1]*u[3]+u[2]*u[4])*u[5]+(u[2]*u[3]-u[1]*u[4])*u[6]"));
+        devices.add(function(emfPower, emfPower, List.of(id + "_PE1", id + "_PE2", id + "_PEP", id + "_PEN"), power0, "u[1]+u[2]+u[3]+u[4]"));
+        return emfPower;
+    }
+
+    /** The SRF PLL's PI on {@code input}, a q-axis voltage, its angle {@code theta = angle0 + omega t + int(Kp vq + Ki int vq)}. */
+    private static void pll(List<EmtpSynchronousMachines.Device> devices, String id, GridFollowingControl control, String input, String theta,
+                            double angle0, double omega) {
+        devices.add(integrator(id + "_PLI", id + "_PLI", input, 1.0, 0.0));
+        devices.add(function(id + "_PLD", id + "_PLD", List.of(input, id + "_PLI"), 0.0, "(" + number(control.getPllProportionalGain()) + ")*u[1]+("
+                + number(control.getPllIntegralGain()) + ")*u[2]"));
+        devices.add(integrator(id + "_PLA", id + "_PLA", id + "_PLD", 1.0, 0.0));
+        devices.add(function(id + "_TH", theta, List.of(id + "_PLA"), angle0, "(" + number(angle0) + ")+(" + number(omega) + ")*t+u[1]"));
+    }
+
+    /** The negative sequence's current loop on {@code reference} - zero when {@code null}, or a negative-sequence injection's -, in its own
+     * frame: {@code e- = LPF(v-*) - (R - jX) i- - u-}, {@code <id>_EDN} and {@code <id>_EQN}. */
+    private static void negativeSequenceLoop(List<EmtpSynchronousMachines.Device> devices, String id, GridFollowingControl control, double x,
+                                             Sequences voltage, Sequences current, String[] reference) {
+        String[] negativeReference = reference;
+        if (negativeReference == null) {
+            String zeroRef = id + "_I0";
+            devices.add(new EmtpSynchronousMachines.Device("_c_cst", List.of("_c_cst;" + zeroRef + ";1;1;" + zeroRef + ",", "0,S1,")));
+            negativeReference = new String[] {zeroRef, zeroRef};
+        }
+        String udNegative = innerPi(devices, id + "_UDN", negativeReference[0], current.negativeD(), control, 0.0);
+        String uqNegative = innerPi(devices, id + "_UQN", negativeReference[1], current.negativeQ(), control, 0.0);
+        devices.add(function(id + "_EDN", id + "_EDN", List.of(voltage.negativeFilteredD(), current.negativeQ(), udNegative), 0.0,
+                "u[1]-(" + number(x) + ")*u[2]-u[3]"));
+        devices.add(function(id + "_EQN", id + "_EQN", List.of(voltage.negativeFilteredQ(), current.negativeD(), uqNegative), 0.0,
+                "u[1]+(" + number(x) + ")*u[2]-u[3]"));
+    }
+
+    /** A measured quantity's dq components on each sequence: the negative sequence's {@code null} when the control does not separate
+     * them, the positive sequence's then the whole measurement in the positive frame. */
+    private record Sequences(String positiveD, String positiveQ, String negativeD, String negativeQ, String negativeFilteredD, String negativeFilteredQ) {
+    }
+
+    /**
+     * A {@link Ddsrf} on one measured quantity, {@code prefix} naming its signals: its components in the negative frame ({@code x- = S
+     * e^+j theta}), then each sequence less the other's twice-frequency ripple, rebuilt from that sequence's filtered components - with
+     * {@code x = d + jq}, {@code x+* = x+ - e^-j2theta LPF(x-*)}, {@code x-* = x- - e^+j2theta LPF(x+*)}. Its filters at rest on the
+     * steady state: the positive sequence at {@code positiveD0}, {@code positiveQ0}, the negative at zero.
+     */
+    private static Sequences ddsrf(List<EmtpSynchronousMachines.Device> devices, Ddsrf ddsrf, String prefix, String positiveD, String positiveQ,
+                                   String[] phases, String theta, double base, String cos2, String sin2, double positiveD0, double positiveQ0) {
+        String negativeD = prefix + "ND";
+        String negativeQ = prefix + "NQ";
+        // The negative frame turns the other way: phases b and c swapped in the positive frame's transform, its q axis not negated.
+        String[] swapped = {phases[0], phases[2], phases[1]};
+        devices.add(park(negativeD, negativeD, swapped, theta, "COS", base, 0.0, false));
+        devices.add(park(negativeQ, negativeQ, swapped, theta, "SIN", base, 0.0, false));
+        String[] decoupled = {prefix + "E1", prefix + "E2", prefix + "E3", prefix + "E4"};
+        String[] filtered = {prefix + "F1", prefix + "F2", prefix + "F3", prefix + "F4"};
+        double[] steady = {positiveD0, positiveQ0, 0.0, 0.0};
+        devices.add(function(decoupled[0], decoupled[0], List.of(positiveD, filtered[2], filtered[3], cos2, sin2), steady[0], "u[1]-(u[2]*u[4]+u[3]*u[5])"));
+        devices.add(function(decoupled[1], decoupled[1], List.of(positiveQ, filtered[2], filtered[3], cos2, sin2), steady[1], "u[1]-(u[3]*u[4]-u[2]*u[5])"));
+        devices.add(function(decoupled[2], decoupled[2], List.of(negativeD, filtered[0], filtered[1], cos2, sin2), steady[2], "u[1]-(u[2]*u[4]-u[3]*u[5])"));
+        devices.add(function(decoupled[3], decoupled[3], List.of(negativeQ, filtered[0], filtered[1], cos2, sin2), steady[3], "u[1]-(u[3]*u[4]+u[2]*u[5])"));
+        double timeConstant = 1.0 / (2.0 * Math.PI * ddsrf.filterFrequency());
+        for (int k = 0; k < 4; k++) {
+            devices.add(firstOrder(filtered[k], filtered[k], decoupled[k], steady[k], 1.0, 1.0, 0.0, timeConstant));
+        }
+        return new Sequences(decoupled[0], decoupled[1], decoupled[2], decoupled[3], filtered[2], filtered[3]);
+    }
+
+    /**
+     * A {@link NegativeSequenceInjection}'s current reference, {@code {d, q}} in the negative frame: {@code k} times the negative
+     * sequence's filtered voltage, 90 degrees behind it, drawn - {@code i- = +j k v-} in that frame, which reads the phasors conjugated -,
+     * weighted by the ride-through; scaled down, its direction kept, to the crest {@code Imax - |q+|} the positive sequence's reactive
+     * current leaves ({@code <id>_YG} the scale, {@code <id>_YE} the unscaled magnitude).
+     */
+    private static String[] negativeSequenceReference(List<EmtpSynchronousMachines.Device> devices, String id, NegativeSequenceInjection injection,
+                                                      double maxCurrent, String frt, String qFirst, Sequences voltage) {
+        String k = number(injection.reactiveCurrentGain());
+        String rawD = id + "_YC";
+        String rawQ = id + "_YD";
+        String magnitude = id + "_YE";
+        String scale = id + "_YG";
+        devices.add(function(rawD, rawD, List.of(frt, voltage.negativeFilteredQ()), 0.0, "-u[1]*" + k + "*u[2]"));
+        devices.add(function(rawQ, rawQ, List.of(frt, voltage.negativeFilteredD()), 0.0, "u[1]*" + k + "*u[2]"));
+        devices.add(function(magnitude, magnitude, List.of(rawD, rawQ), 0.0, "SQRT(u[1]*u[1]+u[2]*u[2])"));
+        String room = "0.5*((" + number(maxCurrent) + "-ABS(u[1]))+ABS(" + number(maxCurrent) + "-ABS(u[1])))";
+        String floored = "0.5*(u[2]+" + number(MEASUREMENT_EPS) + "+ABS(u[2]-" + number(MEASUREMENT_EPS) + "))";
+        String ratio = "(" + room + ")/(" + floored + ")";
+        devices.add(function(scale, scale, List.of(qFirst, magnitude), 1.0, "0.5*(" + ratio + "+1-ABS(" + ratio + "-1))"));
+        String referenceD = id + "_YH";
+        String referenceQ = id + "_YI";
+        devices.add(function(referenceD, referenceD, List.of(scale, rawD), 0.0, "u[1]*u[2]"));
+        devices.add(function(referenceQ, referenceQ, List.of(scale, rawQ), 0.0, "u[1]*u[2]"));
+        return new String[] {referenceD, referenceQ};
     }
 
     /** A PI {@code KP (ref - meas) + KI int(ref - meas)}, its integral at {@code initialOutput}: the inner current loop's. */
