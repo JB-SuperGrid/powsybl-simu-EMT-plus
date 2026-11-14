@@ -26,6 +26,8 @@ import com.powsybl.simuemt.extensions.excitation.SimplifiedAvrModel;
 import com.powsybl.simuemt.extensions.excitation.St1AModel;
 import com.powsybl.simuemt.extensions.excitation.St4BInitialState;
 import com.powsybl.simuemt.extensions.excitation.St4BModel;
+import com.powsybl.simuemt.extensions.excitation.St5BInitialState;
+import com.powsybl.simuemt.extensions.excitation.St5BModel;
 import com.powsybl.simuemt.extensions.governor.GoverProportionalModel;
 import com.powsybl.simuemt.extensions.governor.Tgov1Model;
 import com.powsybl.simuemt.extensions.governor.TurbineGovernorModel;
@@ -650,6 +652,38 @@ class EmtpSynchronousMachineTest {
         assertShortFollowsParksEquations(network, 560.0, false, 1.0, 0.45, "machine-st4b-fault");
     }
 
+    /**
+     * Upstream's ST5B ({@code ExampleNetworks#st5BModel}: KR 200, T1 0.004 s, KC 0.004, VR within -4 and 5, TC1/TB1 0.8/6 s, TC2/TB2
+     * 0.08/0.01 s) on the loaded bench, rotor free, shorted solidly at the line's far end: VR to its limit inside its lead-lag, the field
+     * voltage held at the ceiling the terminal voltage takes down - against the reference driven by the same ST5B ({@link
+     * ParkShortCircuitReference.St5B}). Kept in {@code target/emtp/machine-st5b-short}.
+     *
+     * <p>Run 2026-11-14: 45 crests, the worst 1.5e-5 off, every instant within 1.8 us of the first's delay; the ceiling's share, 0.0494
+     * pu at the 43rd crest where the field held leaves 0.0588.
+     */
+    @Test
+    @Tag("emtp")
+    void theSt5BMachineFollowsParksEquationsThroughTheShort() {
+        Network network = loadedMachineWithFieldHeld();
+        network.getGenerator("GEN").addExtension(ExcitationSystemModel.class, ExampleNetworks.st5BModel());
+        assertShortFollowsParksEquations(network, 0.0, false, 1.0, 0.45, "machine-st5b-short");
+    }
+
+    /**
+     * The same ST5B through the resistive fault, the unloaded machine faulted through 560 ohm a phase. Kept in {@code
+     * target/emtp/machine-st5b-fault}.
+     *
+     * <p>Run 2026-11-14: 43 crests, the worst 2.3e-5 off, every instant within 0.2 us of the first's; 0.833 pu at the 43rd crest where
+     * the field held leaves 0.708.
+     */
+    @Test
+    @Tag("emtp")
+    void theSt5BMachineFollowsParksEquationsThroughAResistiveFault() {
+        Network network = unloadedMachineWithFieldHeld();
+        network.getGenerator("GEN").addExtension(ExcitationSystemModel.class, ExampleNetworks.st5BModel());
+        assertShortFollowsParksEquations(network, 560.0, false, 1.0, 0.45, "machine-st5b-fault");
+    }
+
     @Test
     @Tag("emtp")
     void theRegulatedMachineHoldsItsVoltageThroughAResistiveFault() {
@@ -736,6 +770,14 @@ class EmtpSynchronousMachineTest {
                     m.activePowerFactor(), m.getRectifierLoadingFactor(), m.getExciterVoltageMax(), state.reference(), state.regulatorIntegral(),
                     state.regulatorOutput(), state.innerIntegral());
         }
+        ParkShortCircuitReference.St5B st5b = null;
+        if (generator.getExtension(ExcitationSystemModel.class) instanceof St5BModel m && m.isEnabled()) {
+            St5BInitialState state = St5BInitialState.of(generator, m, MachineInitialState.subtransient(generator, machine, 0.0).efd());
+            St5BModel.TimeConstants own = m.getTimeConstants();
+            st5b = new ParkShortCircuitReference.St5B(m.getTransducerTimeConstant(), m.getRegulatorGain(), m.getExciterTimeConstant(),
+                    m.getRectifierLoadingFactor(), m.getMaxOutput(), m.getMinOutput(), own.lead1(), own.lag1(), own.lead2(), own.lag2(), state.reference(),
+                    state.regulatorOutput());
+        }
         ParkShortCircuitReference.Stabilizer stabilizer = generator.getExtension(PssModel.class) instanceof Pss1AModel pss && pss.isEnabled()
                 ? new ParkShortCircuitReference.Stabilizer(pss.getGain(), pss.getWashoutTimeConstant(), pss.getLeadTimeConstant(), pss.getLagTimeConstant(),
                         pss.getLeadTimeConstant2(), pss.getLagTimeConstant2(), pss.getOutputLimit()) : null;
@@ -743,7 +785,7 @@ class EmtpSynchronousMachineTest {
                 ? new ParkShortCircuitReference.Governor(tgov1.getDroop(), tgov1.getGovernorTimeConstant(), tgov1.getValveMin(), tgov1.getValveMax(),
                         tgov1.getTurbineLeadTimeConstant(), tgov1.getTurbineLagTimeConstant(), tgov1.getTurbineDamping()) : null;
         ParkShortCircuitReference reference = new ParkShortCircuitReference(machine, (line.getR() + faultOhms) / baseOhms, line.getX() / baseOhms, FREQUENCY,
-                v, i, speedHeld, regulator, st1a, dc1a, ac1a, ac6a, ac8b, st4b, stabilizer, governor);
+                v, i, speedHeld, regulator, st1a, dc1a, ac1a, ac6a, ac8b, st4b, st5b, stabilizer, governor);
 
         String b1a = EmtpNetlistWriter.voltageScope("B1", 'A');
         double[] before = SwitchingWindows.leadingUpTo(faultStart, 0.02, TIME_STEP);
