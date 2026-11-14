@@ -34,9 +34,10 @@ import static org.assertj.core.api.Assertions.within;
  * holds that the writer does not write yet, said by name - nothing left out silently. The examples it writes are pinned, so that what
  * the writer gains or loses shows; and - tagged {@code emtp} - each is run live, every bus on the load flow.
  *
- * <p>2026-11-14, upstream's {@code b5cea5b0}: 26 of its 131 examples written. Its refusals, the most frequent first: power electronics
- * (VSCs, MMCs, their DC sides), load models (infinite buses, induction motors, constant power), shunts, wind turbines, open-ended lines
- * and transformers open at a winding, line models and zero-sequence data, arresters, excitation limiters, governors but TGOV1, PSS2A.
+ * <p>2026-11-14, upstream's {@code 6346a20c}: 32 of its 132 examples written - since the shunts, the grounds and the open ends. Its
+ * refusals, the most frequent first: power electronics (VSCs, MMCs, their DC sides, SVCs, batteries), load models (infinite buses,
+ * induction motors, constant power), wind turbines, switches, line models and zero-sequence data, arresters, excitation limiters,
+ * governors but TGOV1, PSS2A.
  *
  * @author Jean-Baptiste Heyberger : jean-baptiste.heyberger@supergrid-institute.com
  */
@@ -45,7 +46,7 @@ class EmtpExampleCoverageTest {
     private static final double FREQUENCY = 50.0;
     private static final EmtpSimulationSettings SETTINGS = new EmtpSimulationSettings(20.0e-6, 0.2, FREQUENCY);
 
-    /** The examples the writer writes whole, 2026-11-14. */
+    /** The examples the writer writes whole, 2026-11-14: 26 at first, the shunts', the ground's and the open ends' since. */
     private static final List<String> WRITTEN = List.of(
             "createThreeBusNetworkWithTransformerAndEmtExtensions",
             "createThreeBusNetworkWithTransformerMagnetizingBranchAndTap",
@@ -72,6 +73,12 @@ class EmtpExampleCoverageTest {
             "createThreeBusNetworkWithPurePhaseShiftingTransformer",
             "createThreeBusNetworkWithPurePhaseShiftingYnd11Transformer",
             "createTwoBusNetworkWithLineDisconnectedAtBothEnds",
+            "createTwoBusNetworkWithShuntCapacitor",
+            "createTwoBusNetworkWithShuntReactor",
+            "createTwoBusNetworkWithGround",
+            "createTwoBusNetworkWithOpenEndedLine",
+            "createThreeBusNetworkWithTransformerOpenAtItsSecondary",
+            "createThreeBusNetworkWithThreeWindingsTransformerOpenAtLegThree",
             "two-bus");
 
     /** Every example written, or refused naming what it holds that is not written yet; the written ones pinned. */
@@ -111,12 +118,18 @@ class EmtpExampleCoverageTest {
      * cleanly alone; {@link EmtpTransformerTest}'s magnetized transformer, its current a real one's, within 1e-4. */
     private static final String MAGNETIZED_AND_TAPPED = "createThreeBusNetworkWithTransformerMagnetizingBranchAndTap";
 
+    /** The one example off its load flow by construction: its {@code Ground} earths B2 solidly, phase by phase, as ATP's deck does, where
+     * the load flow knows nothing of it - B2 held at earth instead, within 1% of its voltage. */
+    private static final String GROUNDED = "createTwoBusNetworkWithGround";
+
     /**
      * Each example written, run live: every bus within 1e-4 pu and 0.01 degree of the load flow, displaced by its vector group, in EMTP's
-     * steady state and its last period - but {@link #MAGNETIZED_AND_TAPPED}. Kept in {@code target/emtp/example-*}.
+     * steady state and its last period - but {@link #MAGNETIZED_AND_TAPPED}, and {@link #GROUNDED}, its bus earthed. Kept in {@code
+     * target/emtp/example-*}.
      *
-     * <p>Run 2026-11-14, the 26 in some 25 s: every bus within 4.5e-5 pu and 2.3e-3 degree - TGOV1's machine's angle the farthest, its
-     * governor's droop on the speed's settling -, but the magnetized and tapped transformer's, 1.0e-2 pu and 0.087 degree.
+     * <p>Run 2026-11-14, the 32 in some 30 s: every bus within 4.5e-5 pu and 2.3e-3 degree - TGOV1's machine's angle the farthest, its
+     * governor's droop on the speed's settling -, but the magnetized and tapped transformer's, 1.0e-2 pu and 0.087 degree; the grounded
+     * B2 at 2.5e-4 of its voltage; the open ends' within 8.3e-6 pu.
      */
     @ParameterizedTest(name = "{0}")
     @MethodSource("written")
@@ -142,6 +155,15 @@ class EmtpExampleCoverageTest {
             double angle = bus.getAngle() + offsets.degrees(bus);
             EmtpSteadyState.Phasor phasor = steadyState.voltage(EmtpNetlistWriter.node(bus.getId(), 'a')).orElseThrow();
             var fundamental = output.fundamentalPhasor(EmtpNetlistWriter.voltageScope(bus.getId(), 'A'), FREQUENCY, last[0], last[1]);
+            if (GROUNDED.equals(name)) {
+                if ("B2".equals(bus.getId())) {
+                    System.out.printf(Locale.ROOT, "%s: B2 at %.2e of its voltage, %.2e the last period%n", name, phasor.magnitude() / crest,
+                            fundamental.magnitude() / crest);
+                    softly.assertThat(phasor.magnitude() / crest).as("%s, B2 earthed, steady state", name).isLessThan(0.01);
+                    softly.assertThat(fundamental.magnitude() / crest).as("%s, B2 earthed, last period", name).isLessThan(0.01);
+                }
+                continue;
+            }
             double[] errors = {phasor.magnitude() / crest - 1.0, Math.IEEEremainder(phasor.angleDegrees() - angle, 360.0),
                 fundamental.magnitude() / crest - 1.0, Math.IEEEremainder(-Math.toDegrees(fundamental.angleRadians()) - angle, 360.0)};
             worstPu = Math.max(worstPu, Math.max(Math.abs(errors[0]), Math.abs(errors[2])));

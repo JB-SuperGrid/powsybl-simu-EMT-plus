@@ -7,10 +7,12 @@ package com.supergrid.simuemt.emtp;
 import com.powsybl.commons.PowsyblException;
 import com.powsybl.iidm.network.Bus;
 import com.powsybl.iidm.network.Generator;
+import com.powsybl.iidm.network.Ground;
 import com.powsybl.iidm.network.Identifiable;
 import com.powsybl.iidm.network.Line;
 import com.powsybl.iidm.network.Load;
 import com.powsybl.iidm.network.Network;
+import com.powsybl.iidm.network.ShuntCompensator;
 import com.powsybl.iidm.network.ThreeWindingsTransformer;
 import com.powsybl.iidm.network.TwoWindingsTransformer;
 import com.powsybl.iidm.network.extensions.ThreeWindingsTransformerFortescue;
@@ -81,10 +83,14 @@ import java.util.stream.Stream;
  * ({@link BusFault#onResistanceOhm}) to earth or to the other phase - as ATP writes it. Cleared at its current's first zero after the
  * order, the switch's current margin 0, or at the order, a margin no current reaches - ATP's own.
  *
+ * <p>A shunt compensator, per phase to earth: its conductance's resistance, its susceptance a reactor's inductance or a bank's
+ * capacitance with {@code Dt/16C} in series, as ATP's; a ground, a 0.01 ohm earthing per phase, as ATP's. A branch's or a transformer's
+ * end disconnected in the network is a node of its own, earthed through 1 Gohm as a bus is, as upstream's backends give an open end.
+ *
  * <p>EMTP starts the run from its own steady-state solution, every source active from {@code -1} s. An element disconnected at every end
  * is out of service and not written. Anything else the network holds - another kind of generator or load, a line's shunt conductance,
- * an element disconnected at some ends only, a line model, zero-sequence data or an arrester on a line or a transformer, a ground, a
- * switch - or the run goes through is refused, said so, until written.
+ * a line model, zero-sequence data or an arrester on a line or a transformer, a switch - or the run goes through is refused, said so,
+ * until written.
  *
  * @author Jean-Baptiste Heyberger : jean-baptiste.heyberger@supergrid-institute.com
  */
@@ -146,6 +152,19 @@ public final class EmtpNetlistWriter {
                 writeLoad(devices, load, settings);
             }
         }
+        for (ShuntCompensator shunt : network.getShuntCompensators()) {
+            if (inService(shunt)) {
+                writeShunt(devices, shunt, settings);
+            }
+        }
+        for (Ground ground : network.getGrounds()) {
+            if (inService(ground)) {
+                for (String phase : PHASES) {
+                    devices.add("_RLC", id(ground) + "_" + phase, List.of(node(ground.getTerminal().getBusBreakerView().getBus().getId(), phase.charAt(0))),
+                            rl(GROUND_CONNECTION_OHM, 0.0));
+                }
+            }
+        }
         for (Generator generator : network.getGeneratorStream().filter(EmtpNetlistWriter::inService).toList()) {
             if (EmtpSynchronousMachines.isMachine(generator)) {
                 Bus bus = generator.getTerminal().getBusBreakerView().getBus();
@@ -164,10 +183,12 @@ public final class EmtpNetlistWriter {
                 writeFaultBranch(devices, (BusFault) event, branch, ++faultBranch, settings);
             }
         }
-        for (Bus bus : network.getBusBreakerView().getBuses()) {
+        List<String> referenced = new ArrayList<>(network.getBusBreakerView().getBusStream().map(Identifiable::getId).toList());
+        referenced.addAll(openEnds(network));
+        for (String busId : referenced) {
             for (String phase : PHASES) {
-                String node = node(bus.getId(), phase.charAt(0));
-                devices.comment(NumericalAids.COMMENT_MARKER + ": 1 Gohm earth reference of bus " + bus.getId() + " - its voltage scope the bus's");
+                String node = node(busId, phase.charAt(0));
+                devices.comment(NumericalAids.COMMENT_MARKER + ": 1 Gohm earth reference of bus " + busId + " - its voltage scope the bus's");
                 devices.add("_RLC", "REF_" + node, List.of(node), number(NumericalAids.BUS_EARTH_REFERENCE_OHM) + ",0,0,0,0,?v,");
             }
         }
@@ -190,8 +211,8 @@ public final class EmtpNetlistWriter {
     private static void writeLine(Devices lines, Line line, EmtpSimulationSettings settings) {
         double inductance = line.getX() / omega(settings);
         for (String phase : PHASES) {
-            String from = node(line.getTerminal1().getBusBreakerView().getBus().getId(), phase.charAt(0));
-            String to = node(line.getTerminal2().getBusBreakerView().getBus().getId(), phase.charAt(0));
+            String from = node(endId(line, line.getTerminal1(), 1), phase.charAt(0));
+            String to = node(endId(line, line.getTerminal2(), 2), phase.charAt(0));
             lines.add("_RLC", id(line) + "_" + phase, List.of(from, to), rl(line.getR(), inductance));
             damping(lines, id(line) + "_D" + phase, from, to, inductance, settings, "the series inductance");
             charging(lines, id(line) + "_C1" + phase, from, line.getB1(), settings);
@@ -218,8 +239,8 @@ public final class EmtpNetlistWriter {
         // The excitation admittance, given at side 2, referred to winding 1 - the other way from the leakage.
         double g1 = corrected.g() / toSide1;
         double b1 = Math.abs(corrected.b()) / toSide1;
-        String bus1 = transformer.getTerminal1().getBusBreakerView().getBus().getId();
-        String bus2 = transformer.getTerminal2().getBusBreakerView().getBus().getId();
+        String bus1 = endId(transformer, transformer.getTerminal1(), 1);
+        String bus2 = endId(transformer, transformer.getTerminal2(), 2);
         for (String phase : PHASES) {
             String winding1 = "T" + id(transformer) + "_1" + phase;
             String winding2 = "T" + id(transformer) + "_2" + phase;
@@ -251,14 +272,14 @@ public final class EmtpNetlistWriter {
         double g1 = corrected.g() / toSide1 / factor1;
         double b1 = Math.abs(corrected.b()) / toSide1 / factor1;
         String id = id(transformer);
-        String[] side1 = phaseNodes(transformer.getTerminal1().getBusBreakerView().getBus().getId());
+        String[] side1 = phaseNodes(endId(transformer, transformer.getTerminal1(), 1));
         double alpha = transformer.getOptionalPhaseTapChanger().map(changer -> changer.getCurrentStep().getAlpha()).orElse(0.0);
         if (alpha != 0.0) {
             // A phase tap changer's angle, cascaded ahead of the bank on side 1: the bank's displacement is wiring, the tap's an angle
             // no wiring produces; its rho is already in side 2's rated voltage.
             side1 = coupling(lines, "PS" + id(transformer), side1, 1.0, alpha);
         }
-        String[] side2 = phaseNodes(transformer.getTerminal2().getBusBreakerView().getBus().getId());
+        String[] side2 = phaseNodes(endId(transformer, transformer.getTerminal2(), 2));
         String neutral1 = neutral(windings.connection1(), windings.groundingR1(), windings.groundingX1(), "N" + id + "_1");
         String neutral2 = neutral(windings.connection2(), windings.groundingR2(), windings.groundingX2(), "N" + id + "_2");
         ZeroSequenceFluxPath fluxPath = ZeroSequenceFluxPath.of(transformer.getExtension(TwoWindingsTransformerFortescue.class));
@@ -336,7 +357,7 @@ public final class EmtpNetlistWriter {
         String id = id(transformer);
         for (int k = 0; k < 3; k++) {
             values[k] = TapCorrectedImpedance.ofLeg(legs.get(k)).referredFromStarBus(transformer.getRatedU0());
-            legNodes[k] = phaseNodes(legs.get(k).getTerminal().getBusBreakerView().getBus().getId());
+            legNodes[k] = phaseNodes(endId(transformer, legs.get(k).getTerminal(), k + 1));
             double alpha = legs.get(k).getOptionalPhaseTapChanger().map(changer -> changer.getCurrentStep().getAlpha()).orElse(0.0);
             if (alpha != 0.0) {
                 // The leg's tap angle, cascaded between its bus and its windings. The leg lags the star by the tap's angle
@@ -427,8 +448,8 @@ public final class EmtpNetlistWriter {
         double g1 = corrected.g() / toSide1;
         double b1 = Math.abs(corrected.b()) / toSide1;
         String id = id(transformer);
-        String[] side1 = phaseNodes(transformer.getTerminal1().getBusBreakerView().getBus().getId());
-        String[] side2 = phaseNodes(transformer.getTerminal2().getBusBreakerView().getBus().getId());
+        String[] side1 = phaseNodes(endId(transformer, transformer.getTerminal1(), 1));
+        String[] side2 = phaseNodes(endId(transformer, transformer.getTerminal2(), 2));
         String[] middle = new String[3];
         for (int p = 0; p < 3; p++) {
             middle[p] = "T" + id + "_1" + PHASES[p];
@@ -462,7 +483,7 @@ public final class EmtpNetlistWriter {
         for (int k = 0; k < 3; k++) {
             ThreeWindingsTransformer.Leg leg = legs.get(k);
             TapCorrectedImpedance values = TapCorrectedImpedance.ofLeg(leg).referredFromStarBus(ratedU0);
-            String[] bus = phaseNodes(leg.getTerminal().getBusBreakerView().getBus().getId());
+            String[] bus = phaseNodes(endId(transformer, leg.getTerminal(), k + 1));
             double ratio = values.ratedU() / ratedU0;
             double inductance = values.x() / omega(settings);
             String legId = id + "_" + (k + 1);
@@ -681,13 +702,6 @@ public final class EmtpNetlistWriter {
                 reasons.add("line '" + line.getId() + "' has a shunt conductance");
             }
         }
-        // An end disconnected while another is connected - an open-ended line, a transformer open at a winding - is not written yet.
-        network.getConnectableStream().map(c -> (com.powsybl.iidm.network.Connectable<?>) c).filter(c -> c.getTerminals().size() > 1).forEach(c -> {
-            long connected = c.getTerminals().stream().filter(t -> ((com.powsybl.iidm.network.Terminal) t).getBusBreakerView().getBus() != null).count();
-            if (connected > 0 && connected < c.getTerminals().size()) {
-                reasons.add("'" + c.getId() + "' is disconnected at some of its ends, which is not written yet");
-            }
-        });
         // What a line or a transformer carries beyond its circuit and its winding connections - a line model, zero-sequence data, an
         // arrester - is not written yet: refused rather than left out.
         Stream.of(network.getLineStream(), network.getTwoWindingsTransformerStream(), network.getThreeWindingsTransformerStream())
@@ -726,12 +740,67 @@ public final class EmtpNetlistWriter {
                 reasons.add("transformer '" + transformer.getId() + "': " + String.join(", ", windingReasons));
             }
         }
-        Stream.of(network.getGroundStream(), network.getShuntCompensatorStream(),
+        Stream.of(
                         network.getSwitchStream(), network.getHvdcLineStream(), network.getStaticVarCompensatorStream(),
                         network.getBatteryStream(), network.getVoltageSourceConverterStream())
                 .flatMap(s -> s.map(Identifiable::getId))
                 .forEach(id -> reasons.add("'" + id + "' is of a kind not written yet"));
         return reasons;
+    }
+
+    /** The resistance of a {@link Ground}'s solid earthing, per phase: ATP's. */
+    private static final double GROUND_CONNECTION_OHM = 1.0e-2;
+
+    /**
+     * A shunt compensator, per phase to earth, as ATP writes it: its conductance's resistance; its susceptance a reactor's inductance
+     * ({@code B < 0}) or a bank's capacitance ({@code B > 0}), {@code Dt/16C} in series with the bank as with a line's charging.
+     */
+    private static void writeShunt(Devices lines, ShuntCompensator shunt, EmtpSimulationSettings settings) {
+        double g = shunt.getG();
+        double b = shunt.getB();
+        String busId = shunt.getTerminal().getBusBreakerView().getBus().getId();
+        for (String phase : PHASES) {
+            String node = node(busId, phase.charAt(0));
+            if (g != 0.0) {
+                lines.add("_RLC", id(shunt) + "_G" + phase, List.of(node), rl(1.0 / g, 0.0));
+            }
+            if (b < 0.0) {
+                lines.add("_RLC", id(shunt) + "_L" + phase, List.of(node), rl(0.0, -1.0 / (b * omega(settings))));
+            } else if (b > 0.0) {
+                double capacitance = b / omega(settings);
+                lines.comment(NumericalAids.COMMENT_MARKER + ": the R, Dt/16C in series with the capacitor bank");
+                lines.add("_RLC", id(shunt) + "_C" + phase, List.of(node), number(NumericalAids.shuntCapacitanceDampingOhm(capacitance, settings.timeStepSeconds()))
+                        + ",0," + number(capacitance) + ",0,0,");
+            }
+        }
+    }
+
+    /** The node of {@code connectable}'s end {@code side} on {@code terminal}: its bus's, or, disconnected, a node of its own - {@code
+     * <id>_O<side>} - as upstream's backends give an open end, nothing between it and the bus it would be on. */
+    private static String endId(Identifiable<?> connectable, com.powsybl.iidm.network.Terminal terminal, int side) {
+        Bus bus = terminal.getBusBreakerView().getBus();
+        return bus != null ? bus.getId() : openEnd(connectable, side);
+    }
+
+    private static String openEnd(Identifiable<?> connectable, int side) {
+        return sanitize(connectable.getId()) + "_O" + side;
+    }
+
+    /** The open ends of the branches and transformers in service: each its node, earthed through 1 Gohm as a bus is. */
+    private static List<String> openEnds(Network network) {
+        List<String> ends = new ArrayList<>();
+        Stream.of(network.getLineStream(), network.getTwoWindingsTransformerStream(), network.getThreeWindingsTransformerStream())
+                .flatMap(st -> st.map(c -> (com.powsybl.iidm.network.Connectable<?>) c))
+                .filter(EmtpNetlistWriter::inService)
+                .forEach(c -> {
+                    List<? extends com.powsybl.iidm.network.Terminal> terminals = c.getTerminals();
+                    for (int k = 0; k < terminals.size(); k++) {
+                        if (terminals.get(k).getBusBreakerView().getBus() == null) {
+                            ends.add(openEnd(c, k + 1));
+                        }
+                    }
+                });
+        return ends;
     }
 
     /** Whether {@code connectable} is connected at some end - disconnected at every one, it is out of service. */
