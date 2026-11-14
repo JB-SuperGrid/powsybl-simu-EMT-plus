@@ -31,6 +31,8 @@ import com.powsybl.simuemt.extensions.circuit.TransformerWindings;
 import com.powsybl.simuemt.extensions.circuit.VectorGroupOffsets;
 import com.powsybl.simuemt.extensions.circuit.ZeroSequenceFluxPath;
 import com.powsybl.simuemt.extensions.event.BusFault;
+import com.powsybl.simuemt.extensions.event.DcFault;
+import com.powsybl.simuemt.extensions.event.DcSwitchOperation;
 import com.powsybl.simuemt.extensions.event.EmtEvent;
 import com.powsybl.simuemt.extensions.event.FaultClearing;
 import com.powsybl.simuemt.extensions.infinitebus.InfiniteBusEmf;
@@ -121,12 +123,16 @@ public final class EmtpNetlistWriter {
     public static Path write(Network network, Path directory, EmtpSimulationSettings settings, List<? extends EmtEvent> events) {
         List<String> refused = new ArrayList<>(unsupported(network));
         for (EmtEvent event : events) {
+            if (event instanceof DcFault || event instanceof DcSwitchOperation) {
+                continue;
+            }
             if (!(event instanceof BusFault fault)) {
                 refused.add("event " + event.getClass().getSimpleName() + " is of a kind not written yet");
             } else if (network.getBusBreakerView().getBus(fault.busId()) == null) {
                 refused.add("fault '" + fault.id() + "' is on bus '" + fault.busId() + "', which the network has not");
             }
         }
+        refused.addAll(EmtpVoltageSourceConverters.unsupportedDcEventReasons(network, events));
         if (!refused.isEmpty()) {
             throw new PowsyblException("SimuEmt Plus: EMTP cannot write network '" + network.getId() + "' yet: " + String.join("; ", refused));
         }
@@ -178,7 +184,7 @@ public final class EmtpNetlistWriter {
             }
         }
         // The DC side and its voltage source converters.
-        for (EmtpSynchronousMachines.Device device : EmtpVoltageSourceConverters.dcSide(network, settings)) {
+        for (EmtpSynchronousMachines.Device device : EmtpVoltageSourceConverters.dcSide(network, settings, events)) {
             devices.addBlock(device.part(), device.lines());
         }
         for (com.powsybl.iidm.network.VoltageSourceConverter converter : network.getVoltageSourceConverters()) {
@@ -190,8 +196,10 @@ public final class EmtpNetlistWriter {
         }
         int faultBranch = 0;
         for (EmtEvent event : events) {
-            for (BusFault.Branch branch : ((BusFault) event).branches()) {
-                writeFaultBranch(devices, (BusFault) event, branch, ++faultBranch, settings);
+            if (event instanceof BusFault fault) {
+                for (BusFault.Branch branch : fault.branches()) {
+                    writeFaultBranch(devices, fault, branch, ++faultBranch, settings);
+                }
             }
         }
         List<String> referenced = new ArrayList<>(network.getBusBreakerView().getBusStream().map(Identifiable::getId).toList());
