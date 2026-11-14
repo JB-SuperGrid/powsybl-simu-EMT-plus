@@ -24,6 +24,8 @@ import com.powsybl.simuemt.extensions.excitation.SimplifiedAvrModel;
 import com.powsybl.simuemt.extensions.excitation.St1AModel;
 import com.powsybl.simuemt.extensions.excitation.St4BInitialState;
 import com.powsybl.simuemt.extensions.excitation.St4BModel;
+import com.powsybl.simuemt.extensions.excitation.St5BInitialState;
+import com.powsybl.simuemt.extensions.excitation.St5BModel;
 import com.powsybl.simuemt.extensions.excitation.limiter.DiscontinuousExcitationControlModel;
 import com.powsybl.simuemt.extensions.excitation.limiter.OverexcitationLimiterModel;
 import com.powsybl.simuemt.extensions.excitation.limiter.PowerFactorVarControllerModel;
@@ -125,6 +127,12 @@ import static com.supergrid.simuemt.emtp.EmtpNetlistWriter.number;
  * Efd}, solved for {@code VM} as ATP's - {@code clamp((KPM VA + I) / (1 + KPM KG VB))} -, its integral on {@code VA - KG VM VB}; and
  * {@code Efd = VM VB}.
  *
+ * <p>An enabled {@link St5BModel} drives it as ATP's TACS has it, at rest on upstream's {@link St5BInitialState}, without the
+ * overexcitation and underexcitation limiters that would switch its time constants: {@code u = KR (Vref - VC + Vs)}; the lead-lag {@code
+ * (1 + sTC2) / (1 + sTB2)}; {@code VR} the limited lead-lag {@code (1 + sTC1) / (1 + sTB1)} within {@code [VRMIN, VRMAX]}, the limit
+ * inside the stage (Dynawo's {@code LimitedLeadLag}); and {@code Efd = (VR - KC Ifd) / (1 + sT1)} held within {@code [VRMIN Vt, VRMAX
+ * Vt]} on the unfiltered terminal voltage.
+ *
  * <p>An enabled {@link Pss1AModel} with any of them adds its output to that error, as ATP's TACS has it: the machine observes its rotor's speed
  * per unit ({@code Omega_1}, its one mass's, on the header before {@code vd} and {@code vq}); a function its deviation {@code w - 1};
  * three transfer functions ({@code _c_fs}) the washout {@code Ks sTw / (1 + sTw)} and the two lead-lags {@code (1 + sT1) / (1 + sT2)},
@@ -206,7 +214,7 @@ final class EmtpSynchronousMachines {
         for (Object extension : generator.getExtensions()) {
             if (isEnabled(extension) && !(extension instanceof SimplifiedAvrModel) && !(extension instanceof St1AModel) && !(extension instanceof Dc1AModel)
                     && !(extension instanceof Ac1AModel) && !(extension instanceof Ac6AModel) && !(extension instanceof Ac8BModel)
-                    && !(extension instanceof St4BModel)
+                    && !(extension instanceof St4BModel) && !(extension instanceof St5BModel)
                     && !(extension instanceof Pss1AModel)
                     && !(extension instanceof Tgov1Model)) {
                 reasons.add("its " + extension.getClass().getSimpleName() + " is not written yet");
@@ -398,6 +406,10 @@ final class EmtpSynchronousMachines {
         }
         if (excitation instanceof St4BModel st4b) {
             devices.addAll(st4b(st4b, generator, name, initial, pss != null));
+            return devices;
+        }
+        if (excitation instanceof St5BModel st5b) {
+            devices.addAll(st5b(st5b, generator, name, initial, pss != null));
             return devices;
         }
         SimplifiedAvrModel avr = (SimplifiedAvrModel) excitation;
@@ -708,6 +720,46 @@ final class EmtpSynchronousMachines {
         return devices;
     }
 
+    /** ST5B's devices, from the observed {@code vd}, {@code vq} and field current to the field voltage's control signal; the
+     * stabilizer's output {@code VS} added to its input if {@code stabilized}. */
+    private static List<Device> st5b(St5BModel st5b, Generator generator, String name, MachineInitialState initial, boolean stabilized) {
+        double efd0 = initial.efd();
+        double vt0 = initial.terminalVoltage();
+        St5BInitialState state = St5BInitialState.of(generator, st5b, efd0);
+        double vr0 = state.regulatorOutput();
+        St5BModel.TimeConstants own = st5b.getTimeConstants();
+        String vt = signal(name, "VT");
+        List<Device> devices = new ArrayList<>();
+        devices.add(function(name + "_VT", vt, List.of(signal(name, "vd"), signal(name, "vq")), vt0, "SQRT(u[1]*u[1]+u[2]*u[2])"));
+        String measured = vt;
+        if (st5b.getTransducerTimeConstant() > 0.0) {
+            measured = signal(name, "VC");
+            devices.add(firstOrder(name + "_VC", measured, vt, vt0, 1.0, 1.0, 0.0, st5b.getTransducerTimeConstant()));
+        }
+        String input = signal(name, "U5");
+        devices.add(function(name + "_U5", input, stabilized ? List.of(measured, signal(name, "VS")) : List.of(measured), vr0,
+                "(" + number(st5b.getRegulatorGain()) + ")*(" + number(state.reference()) + "-u[1]" + (stabilized ? "+u[2]" : "") + ")"));
+        String first = input;
+        if (own.lag2() > 0.0) {
+            first = signal(name, "V5");
+            devices.add(firstOrder(name + "_V5", first, input, vr0, 1.0, 1.0, own.lead2(), own.lag2()));
+        }
+        String vr = signal(name, "VR");
+        devices.addAll(limitedLeadLag(name + "_VR", vr, first, own.lead1(), own.lag1(), st5b.getMinOutput(), st5b.getMaxOutput(), vr0));
+        String lagInput = signal(name, "LU5");
+        devices.add(function(name + "_LU5", lagInput, List.of(vr, signal(name, FIELD_CURRENT)), efd0,
+                "u[1]-(" + number(st5b.getRectifierLoadingFactor()) + ")*u[2]"));
+        String lag = signal(name, "L5");
+        devices.add(firstOrder(name + "_L5", lag, lagInput, efd0, 1.0, 1.0, 0.0, st5b.getExciterTimeConstant()));
+        // Efd within [VRMIN Vt, VRMAX Vt].
+        String floored = signal(name, "EFL");
+        String floor = "(" + number(st5b.getMinOutput()) + ")*u[2]";
+        String ceiling = "(" + number(st5b.getMaxOutput()) + ")*u[3]";
+        devices.add(function(name + "_EFL", floored, List.of(lag, vt), efd0, "0.5*(u[1]+" + floor + "+ABS(u[1]-" + floor + "))"));
+        devices.add(function(name + "_EF", fieldVoltageSignal(name), List.of(floored, vt, vt), efd0, "0.5*(u[1]+" + ceiling + "-ABS(u[1]-" + ceiling + "))"));
+        return devices;
+    }
+
     /**
      * Dynawo's limited PI {@code KP u + KI/s u} from {@code input} to {@code output}, as ATP writes it: its output clamped to {@code [min,
      * max]}, the integral at {@code integral0} with its input cut by ATP's limiter steps while the sum is past a limit and {@code u} pushes
@@ -945,7 +997,8 @@ final class EmtpSynchronousMachines {
     private static boolean readsFieldCurrent(Generator generator) {
         return regulator(generator) instanceof St1AModel st1a && (st1a.getRectifierLoadingFactor() != 0.0 || st1a.getFieldCurrentLimiterGain() != 0.0)
                 || regulator(generator) instanceof Ac1AModel || regulator(generator) instanceof Ac6AModel || regulator(generator) instanceof Ac8BModel
-                || regulator(generator) instanceof St4BModel st4b && st4b.getRectifierLoadingFactor() != 0.0;
+                || regulator(generator) instanceof St4BModel st4b && st4b.getRectifierLoadingFactor() != 0.0
+                || regulator(generator) instanceof St5BModel;
     }
 
     /** A first-order transfer function {@code gain (n0 + n1 s) / (1 + d1 s)} from {@code input} to {@code output}, at rest at {@code
@@ -969,7 +1022,8 @@ final class EmtpSynchronousMachines {
     private static ExcitationSystemModel regulator(Generator generator) {
         ExcitationSystemModel excitation = generator.getExtension(ExcitationSystemModel.class);
         return (excitation instanceof SimplifiedAvrModel || excitation instanceof St1AModel || excitation instanceof Dc1AModel
-                || excitation instanceof Ac1AModel || excitation instanceof Ac6AModel || excitation instanceof Ac8BModel || excitation instanceof St4BModel)
+                || excitation instanceof Ac1AModel || excitation instanceof Ac6AModel || excitation instanceof Ac8BModel || excitation instanceof St4BModel
+                || excitation instanceof St5BModel)
                 && excitation.isEnabled()
                 ? excitation : null;
     }
