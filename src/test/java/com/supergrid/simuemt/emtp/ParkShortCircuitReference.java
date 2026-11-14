@@ -44,6 +44,7 @@ final class ParkShortCircuitReference {
     private final St1A st1a;
     private final Dc1A dc1a;
     private final Ac1A ac1a;
+    private final Ac6A ac6a;
     private final Stabilizer stabilizer;
     private final Governor governor;
     private final double voltageReference;
@@ -95,6 +96,18 @@ final class ParkShortCircuitReference {
     }
 
     /**
+     * Upstream's AC6A, as ATP's TACS writes it, at rest on upstream's {@code Ac6AInitialState} ({@code reference}, {@code voltage},
+     * {@code regulator}, {@code feedback}, {@code exciterVoltage}): {@code e = Vref + Vs - VC}; {@code KA (1 + sTK) / (1 + sTA)}; Dynawo's
+     * limited lead-lag {@code (1 + sTC) / (1 + sTB)} within {@code [vaMin, vaMax]}; {@code VFE = KE VE + Aex exp(Bex VE) VE + KD Ifd};
+     * {@code VH = (1 + sTJ) / (1 + sTH) clamp(KH (VFE - VFELIM), 0, VHMAX)}; {@code VR = clamp(VA - VH, Vt vrMin, Vt vrMax)}; {@code TE
+     * dVE/dt = (VR - VFE)}, cut by ATP's limiter step while {@code VE} is at 0 and falling; AC1A's rectifier.
+     */
+    record Ac6A(double tr, double ka, double ta, double tk, double tb, double tc, double vaMax, double vaMin, double vrMax, double vrMin, double te,
+                double ke, double kc, double kd, double kh, double tj, double th, double vfeLim, double vhMax, double aex, double bex, double reference,
+                double voltage, double regulator, double feedback, double exciterVoltage) {
+    }
+
+    /**
      * Upstream's PSS1A, its output added to the regulator's error: the speed deviation {@code w - 1} through the washout {@code Ks sTw
      * / (1 + sTw)} and the lead-lags {@code (1 + sT1) / (1 + sT2)}, {@code (1 + sT3) / (1 + sT4)}, all at rest at 0, held within
      * {@code [-limit, limit]} - a clamp on the output, as ATP's after the second lead-lag and EMTP's static limiter.
@@ -123,12 +136,13 @@ final class ParkShortCircuitReference {
      * {@code null} -, its mechanical power driven by {@code governor} - held if {@code null}. */
     ParkShortCircuitReference(SubtransientMachineModel machine, double re, double xe, double frequencyHz, double[] v, double[] i,
                               boolean speedHeld, Regulator regulator, Stabilizer stabilizer, Governor governor) {
-        this(machine, re, xe, frequencyHz, v, i, speedHeld, regulator, null, null, null, stabilizer, governor);
+        this(machine, re, xe, frequencyHz, v, i, speedHeld, regulator, null, null, null, null, stabilizer, governor);
     }
 
     /** The same, its field voltage driven by an ST1A {@code st1a} if not {@code null}, in place of the simplified regulator. */
     ParkShortCircuitReference(SubtransientMachineModel machine, double re, double xe, double frequencyHz, double[] v, double[] i,
-                              boolean speedHeld, Regulator regulator, St1A st1a, Dc1A dc1a, Ac1A ac1a, Stabilizer stabilizer, Governor governor) {
+                              boolean speedHeld, Regulator regulator, St1A st1a, Dc1A dc1a, Ac1A ac1a, Ac6A ac6a, Stabilizer stabilizer,
+                              Governor governor) {
         this.omega = 2.0 * Math.PI * frequencyHz;
         this.re = re;
         this.xe = xe;
@@ -165,13 +179,14 @@ final class ParkShortCircuitReference {
         this.st1a = st1a;
         this.dc1a = dc1a;
         this.ac1a = ac1a;
-        this.stabilizer = regulator == null && st1a == null && dc1a == null && ac1a == null ? null : stabilizer;
+        this.ac6a = ac6a;
+        this.stabilizer = regulator == null && st1a == null && dc1a == null && ac1a == null && ac6a == null ? null : stabilizer;
         this.governor = governor;
         double efd = xad * fieldCurrent;
         double vt0 = Math.hypot(vdq[0], vdq[1]);
         double vr0 = dc1a != null ? (dc1a.ke() + dc1a.aex() * Math.exp(dc1a.bex() * efd)) * efd
                 : ac1a != null ? ac1a.ve0() * (ac1a.ke() + ac1a.aex() * Math.exp(ac1a.bex() * ac1a.ve0())) + ac1a.kd() * efd : 0.0;
-        this.voltageReference = ac1a != null ? vt0 + vr0 / ac1a.ka() : dc1a != null ? vt0 + vr0 / dc1a.ka() : st1a != null ? vt0 + efd / st1a.ka()
+        this.voltageReference = ac6a != null ? ac6a.reference() : ac1a != null ? vt0 + vr0 / ac1a.ka() : dc1a != null ? vt0 + vr0 / dc1a.ka() : st1a != null ? vt0 + efd / st1a.ka()
                 : regulator == null ? Double.NaN : vt0 + efd / regulator.gain();
         this.mechanicalPower = psid * iq - psiq * id;
         // The stator's flux linkages with the line's leakage added, the currents unchanged through the short.
@@ -181,6 +196,16 @@ final class ParkShortCircuitReference {
         if (dc1a != null) {
             // The regulator x[8] at Vr0, the field voltage x[18] at Efd0.
             state[8] = vr0;
+        }
+        if (ac6a != null) {
+            // The transducer x[14], KA (1 + sTK)/(1 + sTA)'s lag x[15] at the error, the limited lead-lag's state x[16], the limiter's
+            // lead-lag's lag x[17], the exciter x[18].
+            double error0 = ac6a.reference() - ac6a.voltage();
+            state[15] = error0;
+            state[16] = ac6a.tc() > 0.0 ? (ac6a.tc() - ac6a.tb()) / ac6a.tc() * ac6a.regulator() : 0.0;
+            state[8] = ac6a.regulator();
+            state[17] = ac6a.feedback();
+            state[18] = ac6a.exciterVoltage();
         }
         if (ac1a != null) {
             // The regulator x[8] at Vr0, the lead-lag's lag x[15] at Vr0 / Ka, the rate feedback's lag x[17] and the exciter x[18] at Ve0.
@@ -239,7 +264,7 @@ final class ParkShortCircuitReference {
             rates[12] = valveRate;
             rates[13] = (x[12] - x[13]) / governor.t3();
         }
-        if (regulator != null || st1a != null || dc1a != null || ac1a != null) {
+        if (regulator != null || st1a != null || dc1a != null || ac1a != null || ac6a != null) {
             double[] terminal = terminal(x, rates);
             double stabilizing = 0.0;
             if (stabilizer != null) {
@@ -259,6 +284,10 @@ final class ParkShortCircuitReference {
             }
             if (ac1a != null) {
                 ac1aRates(x, rates, Math.hypot(terminal[0], terminal[1]), stabilizing);
+                return rates;
+            }
+            if (ac6a != null) {
+                ac6aRates(x, rates, Math.hypot(terminal[0], terminal[1]), stabilizing);
                 return rates;
             }
             if (dc1a != null) {
@@ -334,6 +363,63 @@ final class ParkShortCircuitReference {
         rates[18] = (drive - x[18] * (ac1a.ke() + ac1a.aex() * Math.exp(ac1a.bex() * x[18])) - ac1a.kd() * fieldCurrent) / ac1a.te();
     }
 
+    /** AC6A's states' rates: its transducer x[14], its regulator's lag x[15], its limited lead-lag's state x[16], its limiter's
+     * lead-lag's lag x[17], its exciter x[18]. */
+    private void ac6aRates(double[] x, double[] rates, double vt, double stabilizing) {
+        double fieldCurrent = d.magnetizingReactance() * multiply(dInverse, x[0], x[1], x[2])[1];
+        rates[14] = ac6a.tr() > 0.0 ? (vt - x[14]) / ac6a.tr() : 0.0;
+        double measured = ac6a.tr() > 0.0 ? x[14] : vt;
+        double error = ac6a.reference() + stabilizing - measured;
+        double amplified = ac6a.ka() * error;
+        if (ac6a.ta() > 0.0) {
+            rates[15] = (error - x[15]) / ac6a.ta();
+            amplified = ac6a.ka() * (x[15] + ac6a.tk() / ac6a.ta() * (error - x[15]));
+        }
+        double va;
+        if (ac6a.tb() <= 0.0) {
+            va = Math.max(ac6a.vaMin(), Math.min(ac6a.vaMax(), amplified));
+        } else if (ac6a.tc() <= 0.0) {
+            double rate = (amplified - x[8]) / ac6a.tb();
+            rates[8] = x[8] >= ac6a.vaMax() && rate > 0.0 || x[8] <= ac6a.vaMin() && rate < 0.0 ? 0.0 : rate;
+            va = x[8];
+        } else {
+            double feedback = (ac6a.tc() - ac6a.tb()) / ac6a.tc();
+            va = Math.max(ac6a.vaMin(), Math.min(ac6a.vaMax(), ac6a.tc() / ac6a.tb() * (amplified - x[16])));
+            rates[16] = (feedback * va - x[16]) / ac6a.tc();
+        }
+        double ve = x[18];
+        double vfe = ac6a.ke() * ve + ac6a.aex() * Math.exp(ac6a.bex() * ve) * ve + ac6a.kd() * fieldCurrent;
+        double limited = Math.max(0.0, Math.min(ac6a.vhMax(), ac6a.kh() * (vfe - ac6a.vfeLim())));
+        double vh = limited;
+        if (ac6a.th() > 0.0) {
+            rates[17] = (limited - x[17]) / ac6a.th();
+            vh = x[17] + ac6a.tj() / ac6a.th() * (limited - x[17]);
+        }
+        double vr = Math.min(Math.max(va - vh, vt * ac6a.vrMin()), vt * ac6a.vrMax());
+        double rate = vr - vfe;
+        rates[18] = rate * (1.0 - limiterStep(-ve) * (1.0 - limiterStep(rate))) / ac6a.te();
+    }
+
+    /** ATP's limiter step {@code 0.5 (1 + x / sqrt(x^2 + 1e-8))}. */
+    private static double limiterStep(double x) {
+        return 0.5 * (1.0 + x / Math.sqrt(x * x + 1.0e-8));
+    }
+
+    /** An AC exciter's field voltage: {@code max(Ve, 1e-3) FEX(IN)}, {@code IN = min(Kc Ifd / max(Ve, 1e-3), 1)}, the rectifier's
+     * three arcs blended by ATP's smooth steps. */
+    private double rectified(double exciterVoltage, double kc, double[] x) {
+        double ve = Math.max(exciterVoltage, 1.0e-3);
+        if (kc == 0.0) {
+            return ve;
+        }
+        double fieldCurrent = d.magnetizingReactance() * multiply(dInverse, x[0], x[1], x[2])[1];
+        double in = Math.min(kc * fieldCurrent / ve, 1.0);
+        double s1 = smoothStep(in, 0.433);
+        double s2 = smoothStep(in, 0.75);
+        double arc = Math.sqrt(Math.max(0.75 - in * in, 0.0));
+        return ve * ((1.0 - s1) * (1.0 - 0.577 * in) + s1 * (1.0 - s2) * arc + s2 * 1.732 * (1.0 - in));
+    }
+
     /** ATP's smooth unit step at {@code threshold}. */
     private static double smoothStep(double x, double threshold) {
         double d = x - threshold;
@@ -343,16 +429,10 @@ final class ParkShortCircuitReference {
     /** The field voltage {@code Efd}: the regulator's state, or an ST1A's field voltage on the terminal voltage it moves. */
     private double fieldVoltage(double[] x) {
         if (ac1a != null) {
-            double ve = Math.max(x[18], 1.0e-3);
-            if (ac1a.kc() == 0.0) {
-                return ve;
-            }
-            double fieldCurrent = d.magnetizingReactance() * multiply(dInverse, x[0], x[1], x[2])[1];
-            double in = Math.min(ac1a.kc() * fieldCurrent / ve, 1.0);
-            double s1 = smoothStep(in, 0.433);
-            double s2 = smoothStep(in, 0.75);
-            double arc = Math.sqrt(Math.max(0.75 - in * in, 0.0));
-            return ve * ((1.0 - s1) * (1.0 - 0.577 * in) + s1 * (1.0 - s2) * arc + s2 * 1.732 * (1.0 - in));
+            return rectified(x[18], ac1a.kc(), x);
+        }
+        if (ac6a != null) {
+            return rectified(x[18], ac6a.kc(), x);
         }
         if (dc1a != null) {
             return x[18];
