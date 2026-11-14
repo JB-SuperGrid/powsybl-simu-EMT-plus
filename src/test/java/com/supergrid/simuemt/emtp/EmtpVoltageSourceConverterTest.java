@@ -58,6 +58,22 @@ class EmtpVoltageSourceConverterTest {
         assertThat(lines).noneMatch(line -> line.startsWith("_c_fu;VSC1_DCH;"));
     }
 
+    /** A DDSRF's control (example 1): each converter's negative frame, its sequences decoupled, its PLL on the positive sequence's
+     * decoupled q-axis voltage, a current loop per sequence and the EMFs of both; every line within EMTP's 100 characters, under the
+     * bipole's five-character ids as well. */
+    @Test
+    void writesTheSequencesOfADdsrf(@TempDir Path tempDir) throws IOException {
+        List<String> lines = Files.readAllLines(EmtpNetlistWriter.write(bench("vsc-monopole-infinite-buses"), tempDir.resolve("monopole"),
+                new EmtpSimulationSettings(20.0e-6, 0.2, FREQUENCY)), StandardCharsets.ISO_8859_1);
+
+        assertThat(lines).contains("_c_fu;VSC1_BND;5;5;VSC1_BND,VSC1_Va,VSC1_Vc,VSC1_Vb,VSC1_TH,", "_c_fs;VSC1_BF3;2;2;VSC1_BF3,VSC1_BE3,",
+                "_c_fs;VSC1_PLI;2;2;VSC1_PLI,VSC1_BE2,", "_c_fu;VSC1_EDN;4;4;VSC1_EDN,VSC1_BF3,VSC1_ZE4,VSC1_UDN,",
+                "_c_fu;VSC1_EMFa;6;6;VSC1_EMFa,VSC1_ED,VSC1_EQ,VSC1_TH,VSC1_EDN,VSC1_EQN,");
+        List<String> bipole = Files.readAllLines(EmtpNetlistWriter.write(bench("vsc-bipole-infinite-buses"), tempDir.resolve("bipole"),
+                new EmtpSimulationSettings(20.0e-6, 0.2, FREQUENCY)), StandardCharsets.ISO_8859_1);
+        assertThat(bipole).filteredOn(line -> !line.startsWith("!")).allMatch(line -> line.length() <= EmtpNetlistWriter.MAX_LINE);
+    }
+
     /**
      * Run live from EMTP's steady state over 0.5 s: every bus within 1e-4 pu and 0.01 degree of the load flow, every DC node within 1e-4
      * pu, VSC1's powers within 1e-3 pu; VSC2, on the DC voltage, carries the converters' reactor losses besides the load flow's, its power
@@ -103,7 +119,12 @@ class EmtpVoltageSourceConverterTest {
     }
 
     static Network bench() {
-        Network network = ExampleNetworks.readVscBench("vsc-monopole-infinite-buses-2", EmtExtensionsXmlReader::readNetwork);
+        return bench("vsc-monopole-infinite-buses-2");
+    }
+
+    /** Upstream's VSC bench {@code name}, preprocessed. */
+    static Network bench(String name) {
+        Network network = ExampleNetworks.readVscBench(name, EmtExtensionsXmlReader::readNetwork);
         EmtNetworkPreprocessor.preprocess(network, LocalComputationManager.getDefault());
         return network;
     }

@@ -209,6 +209,12 @@ public final class EmtpNetlistWriter {
         lines.add("Dt=" + number(settings.timeStepSeconds()) + ";");
         lines.add("tmax=" + number(settings.stopTimeSeconds()) + ";");
         lines.addAll(devices.lines());
+        // EMTP reads the first 100 characters of a line and drops the rest without a word - a device's pins cut short, its inputs
+        // miscounted ("Input count mismatch for auxiliary functions", a converter's nine-input function under VSC1P's names, 108
+        // characters; 2026-11-14): refused here, said so.
+        lines.stream().filter(l -> !l.startsWith("!") && l.length() > MAX_LINE).findFirst().ifPresent(l -> {
+            throw new PowsyblException("SimuEmt Plus: a netlist line of " + l.length() + " characters, past EMTP's " + MAX_LINE + ": " + l);
+        });
         Path netlist = directory.resolve(name(network) + ".net");
         try {
             Files.createDirectories(directory);
@@ -218,6 +224,9 @@ public final class EmtpNetlistWriter {
         }
         return netlist;
     }
+
+    /** The longest line EMTP reads whole. */
+    static final int MAX_LINE = 100;
 
     private static void writeLine(Devices lines, Line line, EmtpSimulationSettings settings) {
         double inductance = line.getX() / omega(settings);
