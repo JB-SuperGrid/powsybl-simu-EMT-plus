@@ -41,6 +41,7 @@ final class ParkShortCircuitReference {
      * Xad} through the field's resistance. */
     private final double fieldVoltagePerEfd;
     private final Regulator regulator;
+    private final Stabilizer stabilizer;
     private final double voltageReference;
     private final boolean speedHeld;
     private final double inertia;
@@ -58,18 +59,27 @@ final class ParkShortCircuitReference {
     }
 
     /**
+     * Upstream's PSS1A, its output added to the regulator's error: the speed deviation {@code w - 1} through the washout {@code Ks sTw
+     * / (1 + sTw)} and the lead-lags {@code (1 + sT1) / (1 + sT2)}, {@code (1 + sT3) / (1 + sT4)}, all at rest at 0, held within
+     * {@code [-limit, limit]} - a clamp on the output, as ATP's after the second lead-lag and EMTP's static limiter.
+     */
+    record Stabilizer(double gain, double washoutTimeConstant, double t1, double t2, double t3, double t4, double limit) {
+    }
+
+    /**
      * The machine {@code machine}, its line {@code re + j xe} per unit, at {@code frequencyHz}, before the short at terminal voltage
      * {@code v} and current {@code i} - generator convention -, each a complex number in any common reference; its speed held or
      * free.
      */
     ParkShortCircuitReference(SubtransientMachineModel machine, double re, double xe, double frequencyHz, double[] v, double[] i,
                               boolean speedHeld) {
-        this(machine, re, xe, frequencyHz, v, i, speedHeld, null);
+        this(machine, re, xe, frequencyHz, v, i, speedHeld, null, null);
     }
 
-    /** The same, its field voltage driven by {@code regulator} - held if {@code null}. */
+    /** The same, its field voltage driven by {@code regulator} - held if {@code null} -, {@code stabilizer} adding to its error - none if
+     * {@code null}. */
     ParkShortCircuitReference(SubtransientMachineModel machine, double re, double xe, double frequencyHz, double[] v, double[] i,
-                              boolean speedHeld, Regulator regulator) {
+                              boolean speedHeld, Regulator regulator, Stabilizer stabilizer) {
         this.omega = 2.0 * Math.PI * frequencyHz;
         this.re = re;
         this.xe = xe;
@@ -103,12 +113,13 @@ final class ParkShortCircuitReference {
         double fieldCurrent = (psid + (xl + xad) * id) / xad;
         this.fieldVoltagePerEfd = d.fieldResistance() / omega / xad;
         this.regulator = regulator;
+        this.stabilizer = regulator == null ? null : stabilizer;
         double efd = xad * fieldCurrent;
         this.voltageReference = regulator == null ? Double.NaN : Math.hypot(vdq[0], vdq[1]) + efd / regulator.gain();
         this.mechanicalPower = psid * iq - psiq * id;
         // The stator's flux linkages with the line's leakage added, the currents unchanged through the short.
         this.state = new double[] {psid - xe * id, -xad * id + (xad + d.fieldReactance()) * fieldCurrent, -xad * id + xad * fieldCurrent,
-            psiq - xe * iq, -xaq * iq, -xaq * iq, 1.0, 0.0, efd};
+            psiq - xe * iq, -xaq * iq, -xaq * iq, 1.0, 0.0, efd, 0.0, 0.0, 0.0};
     }
 
     /** The terminal voltage before the short in the rotor's frame, {@code {vd, vq}}. */
@@ -150,7 +161,19 @@ final class ParkShortCircuitReference {
         double[] rates = rates(x);
         if (regulator != null) {
             double[] terminal = terminal(x, rates);
-            double efdRate = (regulator.gain() * (voltageReference - Math.hypot(terminal[0], terminal[1])) - x[8]) / regulator.timeConstant();
+            double stabilizing = 0.0;
+            if (stabilizer != null) {
+                // The washout's lag of the speed deviation, then each lead-lag's lag: x[9], x[10], x[11].
+                double deviation = x[6] - 1.0;
+                double washout = stabilizer.gain() * (deviation - x[9]);
+                double first = x[10] + stabilizer.t1() / stabilizer.t2() * (washout - x[10]);
+                double second = x[11] + stabilizer.t3() / stabilizer.t4() * (first - x[11]);
+                rates[9] = (deviation - x[9]) / stabilizer.washoutTimeConstant();
+                rates[10] = (washout - x[10]) / stabilizer.t2();
+                rates[11] = (first - x[11]) / stabilizer.t4();
+                stabilizing = Math.max(-stabilizer.limit(), Math.min(stabilizer.limit(), second));
+            }
+            double efdRate = (regulator.gain() * (voltageReference + stabilizing - Math.hypot(terminal[0], terminal[1])) - x[8]) / regulator.timeConstant();
             if (x[8] >= regulator.max() && efdRate > 0.0 || x[8] <= regulator.min() && efdRate < 0.0) {
                 efdRate = 0.0;
             }
@@ -176,7 +199,7 @@ final class ParkShortCircuitReference {
             -q.damperResistance() * qi[2],
             acceleration,
             omega * (w - 1.0),
-            0.0};
+            0.0, 0.0, 0.0, 0.0};
     }
 
     /** The line's drop, {@code Re i + (Xe/w0) di/dt + jwXe i}. */

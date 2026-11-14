@@ -24,6 +24,7 @@ import com.powsybl.simuemt.extensions.machine.ClassicalMachineEquivalent;
 import com.powsybl.simuemt.extensions.machine.ClassicalMachineModel;
 import com.powsybl.simuemt.extensions.machine.MachineSaturation;
 import com.powsybl.simuemt.extensions.machine.SubtransientMachineModel;
+import com.powsybl.simuemt.extensions.pss.Pss1AModel;
 import com.powsybl.simuemt.extensions.pss.PssModel;
 
 import java.util.ArrayList;
@@ -67,6 +68,12 @@ import static com.supergrid.simuemt.emtp.EmtpNetlistWriter.number;
  * with limits ({@code _c_fslim}) {@code Ka / (1 + sTa)} from it to {@code GEN_Vf}, starting at {@code Efd0}, held within the model's
  * minimum and maximum output - its state with it: EMTP's limits are dynamic, as a limited TACS s-block's.
  *
+ * <p>An enabled {@link Pss1AModel} with it adds its output to that error, as ATP's TACS has it: the machine observes its rotor's speed
+ * per unit ({@code Omega_1}, its one mass's, on the header before {@code vd} and {@code vq}); a function its deviation {@code w - 1};
+ * three transfer functions ({@code _c_fs}) the washout {@code Ks sTw / (1 + sTw)} and the two lead-lags {@code (1 + sT1) / (1 + sT2)},
+ * {@code (1 + sT3) / (1 + sT4)}, each at rest at 0; and a limiter ({@code _c_lim}) holding the output within its limit - static, as
+ * ATP's clamp after the second lead-lag. A stabilizer without an enabled regulator drives nothing, as in upstream's backends.
+ *
  * <p>Refused, until written: zero-sequence data ({@code GeneratorFortescue}), saturation, and any other enabled excitation system,
  * stabilizer, limiter or turbine-governor - one disabled holds what it would have regulated, as in upstream's backends.
  *
@@ -89,6 +96,9 @@ final class EmtpSynchronousMachines {
     private static final int OBSERVE_VD = 10;
     private static final int OBSERVE_VQ = 16;
     private static final String OBSERVED = "2";
+
+    /** The observed speed of the machine's one mass, per unit: EMTP finds it by its {@code Omega_1}. */
+    private static final String ROTOR_SPEED = "Omega_1";
 
     /** A control device: its part and its lines. */
     record Device(String part, List<String> lines) {
@@ -123,7 +133,7 @@ final class EmtpSynchronousMachines {
             reasons.add(e.getMessage());
         }
         for (Object extension : generator.getExtensions()) {
-            if (isEnabled(extension) && !(extension instanceof SimplifiedAvrModel)) {
+            if (isEnabled(extension) && !(extension instanceof SimplifiedAvrModel) && !(extension instanceof Pss1AModel)) {
                 reasons.add("its " + extension.getClass().getSimpleName() + " is not written yet");
             }
         }
@@ -162,11 +172,21 @@ final class EmtpSynchronousMachines {
         double speedDeviationDamping = machine.getDamping() * ratedMva * 1.0e6 / (mechanicalSpeed * mechanicalSpeed);
 
         boolean regulated = regulator(generator) != null;
+        boolean stabilized = stabilizer(generator) != null;
+        List<String> observed = new ArrayList<>();
+        if (stabilized) {
+            observed.add(signal(name, ROTOR_SPEED));
+        }
+        if (regulated) {
+            observed.add(signal(name, "vd"));
+            observed.add(signal(name, "vq"));
+        }
         List<String> lines = new ArrayList<>();
         for (int p = 0; p < 3; p++) {
-            // Pin k on the bus phase, the field-voltage control signal, the observed signals, a blank pin.
-            lines.add("_SM;" + name + "abc".charAt(p) + (regulated ? ";7;5;" : ";5;3;") + phaseNodes[p] + "," + fieldVoltageSignal(name) + ","
-                    + (regulated ? signal(name, "vd") + "," + signal(name, "vq") + "," : "") + ",");
+            // Pin k on the bus phase, the field-voltage control signal, the observed signals - the masses' first -, a blank pin.
+            int pins = 3 + observed.size();
+            lines.add("_SM;" + name + "abc".charAt(p) + ";" + (pins + 2) + ";" + pins + ";" + phaseNodes[p] + "," + fieldVoltageSignal(name) + ","
+                    + observed.stream().map(signal -> signal + ",").collect(java.util.stream.Collectors.joining()) + ",");
         }
         lines.add("V=" + number(terminalKv) + " " + number(terminalKv) + " " + number(terminalKv) + ",1kVRMSLL,");
         lines.add("P=" + number(angle) + " " + number(Math.IEEEremainder(angle - 120.0, 360.0)) + " "
@@ -187,12 +207,13 @@ final class EmtpSynchronousMachines {
         lines.add("qs=" + PER_UNIT_DATA + " " + Q_WINDINGS + " " + number(machine.getQuadratureSynchronousReactance()));
         lines.add("RQ1=" + number(q.fieldResistance() / omega) + " " + number(xaq + q.fieldReactance()) + " " + number(xaq));
         lines.add("RQ2=" + number(q.damperResistance() / omega) + " " + number(xaq + q.damperReactance()) + " " + number(xaq) + " " + number(xaq));
-        // A shaft of its own, one mass - the rotor's, no exciter's -: all the external torque, H, DSR; nothing observed.
+        // A shaft of its own, one mass - the rotor's, no exciter's -: all the external torque, H, DSR; its speed observed for a
+        // stabilizer (1), nothing else.
         lines.add("MS=0 1 1 0,");
         lines.add("100 " + number(machine.getInertiaConstant()) + " " + number(speedDeviationDamping) + " 0 0 0");
-        lines.add("0 0 0 0 0");
-        // H in place of the moment of inertia; SI units for the scopes and the observe signals.
-        lines.add("MSu=1 0 0,");
+        lines.add(stabilized ? "0 1 0 0 0" : "0 0 0 0 0");
+        // H in place of the moment of inertia; SI units for the scopes, the masses' observed signals per unit.
+        lines.add("MSu=1 0 1,");
         lines.add(PRECISION);
         // Its controls per unit; the field voltage controlled, held by its constant or driven by its regulator.
         lines.add("CTRLu=1,");
@@ -221,15 +242,42 @@ final class EmtpSynchronousMachines {
         }
         double ka = avr.getGain();
         String error = signal(name, "VERR");
-        return List.of(
+        Pss1AModel pss = stabilizer(generator);
+        List<Device> devices = new ArrayList<>();
+        if (pss != null) {
+            String deviation = signal(name, "DW");
+            String washout = signal(name, "XW");
+            String firstLeadLag = signal(name, "Y1");
+            String unlimited = signal(name, "VSP");
+            devices.add(new Device("_c_fu", List.of("_c_fu;" + name + "_DW;2;2;" + deviation + "," + signal(name, ROTOR_SPEED) + ",", "0,S1,", "u[1]-1")));
+            devices.add(firstOrder(name + "_XW", washout, deviation, pss.getGain(), 0.0, pss.getWashoutTimeConstant(), pss.getWashoutTimeConstant()));
+            devices.add(firstOrder(name + "_Y1", firstLeadLag, washout, 1.0, 1.0, pss.getLeadTimeConstant(), pss.getLagTimeConstant()));
+            devices.add(firstOrder(name + "_VSP", unlimited, firstLeadLag, 1.0, 1.0, pss.getLeadTimeConstant2(), pss.getLagTimeConstant2()));
+            devices.add(new Device("_c_lim", List.of("_c_lim;" + name + "_VSL;2;2;" + signal(name, "VS") + "," + unlimited + ",",
+                    number(pss.getOutputLimit()) + "," + number(-pss.getOutputLimit()) + ",1,S1,")));
+        }
+        devices.addAll(List.of(
                 // Its output, its input, no reset; starting at Efd0, within the model's limits; Ka times 1 over 1 + Ta s, the
                 // coefficients in increasing powers of s.
                 new Device("_c_fslim", List.of("_c_fslim;" + name + "_AVR;4;4;" + fieldVoltageSignal(name) + "," + error + ",0,0,",
                         number(efd) + "," + number(avr.getMaxOutput()) + "," + number(avr.getMinOutput()) + ",1,1,2," + number(ka) + ",S1,",
                         "1", ";", "1 " + number(avr.getTimeConstant()))),
-                new Device("_c_fu", List.of("_c_fu;" + name + "_VERR;3;3;" + error + "," + signal(name, "vd") + "," + signal(name, "vq") + ",",
+                new Device("_c_fu", List.of("_c_fu;" + name + "_VERR;" + (pss == null ? "3;3;" : "4;4;") + error + "," + signal(name, "vd") + ","
+                        + signal(name, "vq") + "," + (pss == null ? "" : signal(name, "VS") + ","),
                         number(efd / ka) + ",S1,",
-                        number(initial.terminalVoltage() + efd / ka) + "-SQRT(u[1]*u[1]+u[2]*u[2])")));
+                        number(initial.terminalVoltage() + efd / ka) + (pss == null ? "" : "+u[3]") + "-SQRT(u[1]*u[1]+u[2]*u[2])"))));
+        return devices;
+    }
+
+    /** A first-order transfer function {@code gain (n0 + n1 s) / (1 + d1 s)} from {@code input} to {@code output}, at rest at 0. */
+    private static Device firstOrder(String device, String output, String input, double gain, double n0, double n1, double d1) {
+        return new Device("_c_fs", List.of("_c_fs;" + device + ";2;2;" + output + "," + input + ",", "0,1,2,2," + number(gain) + ",S1,",
+                number(n0) + " " + number(n1), ";", "1 " + number(d1)));
+    }
+
+    /** The machine's enabled PSS1A, if its regulator is written to take its output, or {@code null}. */
+    private static Pss1AModel stabilizer(Generator generator) {
+        return regulator(generator) != null && generator.getExtension(PssModel.class) instanceof Pss1AModel pss && pss.isEnabled() ? pss : null;
     }
 
     /** The machine's enabled simplified voltage regulator, or {@code null}. */

@@ -14,6 +14,8 @@ import com.powsybl.simuemt.extensions.event.BusFault;
 import com.powsybl.simuemt.extensions.event.EmtEvent;
 import com.powsybl.simuemt.extensions.excitation.ExcitationSystemModel;
 import com.powsybl.simuemt.extensions.excitation.SimplifiedAvrModel;
+import com.powsybl.simuemt.extensions.governor.Tgov1Model;
+import com.powsybl.simuemt.extensions.governor.TurbineGovernorModel;
 import com.powsybl.simuemt.extensions.machine.SubtransientMachineModel;
 import com.powsybl.simuemt.extensions.output.AbstractTimeStepTable;
 import com.powsybl.simuemt.extensions.output.Crest;
@@ -93,14 +95,42 @@ class EmtpSynchronousMachineTest {
     }
 
     @Test
-    void refusesTheMachineWhileItsStabilizerIsEnabled(@TempDir Path tempDir) {
+    void refusesTheMachineWhileItsGovernorIsEnabled(@TempDir Path tempDir) {
         Network network = EmtExtensionsXmlReader.readNetwork(ExampleNetworks.resource("/two-bus.xiidm"), ExampleNetworks.resource("/two-bus-extensions.xml"));
+        network.getGenerator("GEN").addExtension(TurbineGovernorModel.class, new Tgov1Model(true, 0.05, 0.5, 0.0, 1.2, 3.0, 10.0, 0.0));
 
         assertThatThrownBy(() -> EmtpNetlistWriter.write(network, tempDir, SETTINGS))
                 .isInstanceOf(PowsyblException.class)
                 .hasMessageContaining("generator 'GEN'")
-                .hasMessageContaining("Pss1AModel is not written yet")
-                .hasMessageNotContaining("SimplifiedAvrModel");
+                .hasMessageContaining("Tgov1Model is not written yet")
+                .hasMessageNotContaining("SimplifiedAvrModel")
+                .hasMessageNotContaining("Pss1AModel");
+    }
+
+    /**
+     * The bench's own stabilizer with its regulator - PSS1A: Ks 12, Tw 9 s, T1/T2 0.12/0.06 s, T3/T4 0.25/0.03 s, within 0.15 pu - as
+     * ATP's TACS has it: its rotor's speed observed per unit, its one mass's, before vd and vq; its deviation, washout, lead-lags and
+     * limit; its output a fourth input to the regulator's error.
+     */
+    @Test
+    void writesTheStabilizerAsAtpsTacsHasIt(@TempDir Path tempDir) throws IOException {
+        Network network = ExampleNetworks.withLoadFlow(EmtExtensionsXmlReader.readNetwork(ExampleNetworks.resource("/two-bus.xiidm"),
+                ExampleNetworks.resource("/two-bus-extensions.xml")));
+        List<String> lines = Files.readAllLines(EmtpNetlistWriter.write(network, tempDir, SETTINGS), StandardCharsets.ISO_8859_1);
+
+        assertThat(lines).contains("_SM;GENa;8;6;B1a,GEN_Vf,GEN_Omega_1,GEN_vd,GEN_vq,,", "0 1 0 0 0", "MSu=1 0 1,",
+                "_c_fu;GEN_DW;2;2;GEN_DW,GEN_Omega_1,", "u[1]-1");
+        int washout = lines.indexOf("_c_fs;GEN_XW;2;2;GEN_XW,GEN_DW,");
+        assertThat(lines.subList(washout + 1, washout + 5)).containsExactly("0,1,2,2,12.00000000000000,S1,", "0.000000000000000 9.000000000000000",
+                ";", "1 9.000000000000000");
+        int first = lines.indexOf("_c_fs;GEN_Y1;2;2;GEN_Y1,GEN_XW,");
+        assertThat(lines.subList(first + 2, first + 5)).containsExactly("1.000000000000000 0.1200000000000000", ";", "1 0.06000000000000000");
+        int second = lines.indexOf("_c_fs;GEN_VSP;2;2;GEN_VSP,GEN_Y1,");
+        assertThat(lines.subList(second + 2, second + 5)).containsExactly("1.000000000000000 0.2500000000000000", ";", "1 0.03000000000000000");
+        int limit = lines.indexOf("_c_lim;GEN_VSL;2;2;GEN_VS,GEN_VSP,");
+        assertThat(lines.get(limit + 1)).isEqualTo("0.1500000000000000,-0.1500000000000000,1,S1,");
+        int error = lines.indexOf("_c_fu;GEN_VERR;4;4;GEN_VERR,GEN_vd,GEN_vq,GEN_VS,");
+        assertThat(lines.get(error + 2)).endsWith("+u[3]-SQRT(u[1]*u[1]+u[2]*u[2])");
     }
 
     /**
@@ -297,6 +327,25 @@ class EmtpSynchronousMachineTest {
      * <p>Run 2026-11-13: 43 crests, the worst 2.1e-5 off, every instant within 0.4 us of the first's; the regulator's share, 0.851 pu at
      * the last crest where the field held leaves 0.705.
      */
+    /**
+     * The same resistive fault, through 1600 ohm a phase (1 pu), the bench's stabilizer with the regulator: the fault loads the unloaded
+     * machine, which slows down, the stabilizer adding its speed's deviation, washed out and led, to the regulator's error - against
+     * the reference with the same stabilizer ({@link ParkShortCircuitReference.Stabilizer}). Kept in {@code
+     * target/emtp/machine-stabilized-fault}.
+     *
+     * <p>Run 2026-11-14: 43 crests, the worst 1.2e-5 off, every instant within 0.1 us of the first's; the stabilizer's share, 0.903 pu
+     * at the 41st crest where the regulator alone gives 1.002.
+     */
+    @Test
+    @Tag("emtp")
+    void theStabilizedMachineFollowsParksEquationsThroughAResistiveFault() {
+        Network network = unloadedMachineWithFieldHeld();
+        Generator generator = network.getGenerator("GEN");
+        generator.addExtension(ExcitationSystemModel.class, new SimplifiedAvrModel(true, 20.0, 0.05, 400.0, -6.0, 6.0));
+        generator.addExtension(PssModel.class, new Pss1AModel(true, 12.0, 9.0, 0.12, 0.06, 0.25, 0.03, 0.15));
+        assertShortFollowsParksEquations(network, 1600.0, false, 1.0, 0.45, "machine-stabilized-fault");
+    }
+
     @Test
     @Tag("emtp")
     void theRegulatedMachineHoldsItsVoltageThroughAResistiveFault() {
@@ -331,8 +380,11 @@ class EmtpSynchronousMachineTest {
         double[] i = {(p * v[0] + q * v[1]) / v2, (p * v[1] - q * v[0]) / v2};
         ParkShortCircuitReference.Regulator regulator = generator.getExtension(ExcitationSystemModel.class) instanceof SimplifiedAvrModel avr && avr.isEnabled()
                 ? new ParkShortCircuitReference.Regulator(avr.getGain(), avr.getTimeConstant(), avr.getMinOutput(), avr.getMaxOutput()) : null;
+        ParkShortCircuitReference.Stabilizer stabilizer = generator.getExtension(PssModel.class) instanceof Pss1AModel pss && pss.isEnabled()
+                ? new ParkShortCircuitReference.Stabilizer(pss.getGain(), pss.getWashoutTimeConstant(), pss.getLeadTimeConstant(), pss.getLagTimeConstant(),
+                        pss.getLeadTimeConstant2(), pss.getLagTimeConstant2(), pss.getOutputLimit()) : null;
         ParkShortCircuitReference reference = new ParkShortCircuitReference(machine, (line.getR() + faultOhms) / baseOhms, line.getX() / baseOhms, FREQUENCY,
-                v, i, speedHeld, regulator);
+                v, i, speedHeld, regulator, stabilizer);
 
         String b1a = EmtpNetlistWriter.voltageScope("B1", 'A');
         double[] before = SwitchingWindows.leadingUpTo(faultStart, 0.02, TIME_STEP);
@@ -435,7 +487,7 @@ class EmtpSynchronousMachineTest {
     private static Network unloadedMachineWithFieldHeld() {
         Network network = EmtExtensionsXmlReader.readNetwork(ExampleNetworks.resource("/two-bus.xiidm"), ExampleNetworks.resource("/two-bus-extensions.xml"));
         network.getLoad("LOAD").remove();
-        holdField(network.getGenerator("GEN").setTargetP(0.0).setTargetQ(0.0));
+        holdField(network.getGenerator("GEN").setTargetP(0.0).setLocalTargetQ(0.0));
         return ExampleNetworks.withLoadFlow(network);
     }
 
