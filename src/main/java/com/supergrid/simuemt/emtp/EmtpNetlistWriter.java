@@ -69,7 +69,8 @@ import java.util.stream.Stream;
  *     its bus on the load flow ({@link InfiniteBusEmf}), behind the network's short-circuit resistance - its milliohm at least - and
  *     inductance, {@code 16L/Dt} across it;</li>
  *     <li>a synchronous machine, EMTP's own ({@code _SM}), the circuit its data describe under the exact definitions, its field
- *     and its mechanical power held, its field voltage by a constant ({@code _c_cst}) or its simplified voltage regulator ({@link EmtpSynchronousMachines});</li>
+ *     and its mechanical power held, its field voltage by a constant ({@code _c_cst}) or its simplified voltage regulator and stabilizer, its mechanical power by its
+ *     TGOV1 governor ({@link EmtpSynchronousMachines});</li>
  *     <li>every bus phase: its 1 Gohm earth reference, whose voltage scope ({@code ?v}, scope {@code vb:REF_<node>}) is the node's
  *     voltage.</li>
  * </ul>
@@ -139,7 +140,7 @@ public final class EmtpNetlistWriter {
                 Bus bus = generator.getTerminal().getBusBreakerView().getBus();
                 devices.addBlock("_SM", EmtpSynchronousMachines.lines(generator, id(generator), phaseNodes(bus.getId()),
                         VectorGroupOffsets.of(network).degrees(bus), settings));
-                for (EmtpSynchronousMachines.Device control : EmtpSynchronousMachines.fieldVoltage(generator, id(generator))) {
+                for (EmtpSynchronousMachines.Device control : EmtpSynchronousMachines.controls(generator, id(generator))) {
                     devices.addBlock(control.part(), control.lines());
                 }
             } else {

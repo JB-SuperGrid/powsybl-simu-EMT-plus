@@ -42,6 +42,7 @@ final class ParkShortCircuitReference {
     private final double fieldVoltagePerEfd;
     private final Regulator regulator;
     private final Stabilizer stabilizer;
+    private final Governor governor;
     private final double voltageReference;
     private final boolean speedHeld;
     private final double inertia;
@@ -67,19 +68,26 @@ final class ParkShortCircuitReference {
     }
 
     /**
+     * Upstream's TGOV1, driving the mechanical power: its valve {@code 1 / (1 + sT1)} on {@code Pm0 - dw / R}, its state held within
+     * {@code [valveMin, valveMax]}, its turbine {@code (1 + sT2) / (1 + sT3)}, {@code Pm = turbine - Dt dw}, every state at {@code Pm0}.
+     */
+    record Governor(double droop, double t1, double valveMin, double valveMax, double t2, double t3, double damping) {
+    }
+
+    /**
      * The machine {@code machine}, its line {@code re + j xe} per unit, at {@code frequencyHz}, before the short at terminal voltage
      * {@code v} and current {@code i} - generator convention -, each a complex number in any common reference; its speed held or
      * free.
      */
     ParkShortCircuitReference(SubtransientMachineModel machine, double re, double xe, double frequencyHz, double[] v, double[] i,
                               boolean speedHeld) {
-        this(machine, re, xe, frequencyHz, v, i, speedHeld, null, null);
+        this(machine, re, xe, frequencyHz, v, i, speedHeld, null, null, null);
     }
 
     /** The same, its field voltage driven by {@code regulator} - held if {@code null} -, {@code stabilizer} adding to its error - none if
-     * {@code null}. */
+     * {@code null} -, its mechanical power driven by {@code governor} - held if {@code null}. */
     ParkShortCircuitReference(SubtransientMachineModel machine, double re, double xe, double frequencyHz, double[] v, double[] i,
-                              boolean speedHeld, Regulator regulator, Stabilizer stabilizer) {
+                              boolean speedHeld, Regulator regulator, Stabilizer stabilizer, Governor governor) {
         this.omega = 2.0 * Math.PI * frequencyHz;
         this.re = re;
         this.xe = xe;
@@ -114,12 +122,13 @@ final class ParkShortCircuitReference {
         this.fieldVoltagePerEfd = d.fieldResistance() / omega / xad;
         this.regulator = regulator;
         this.stabilizer = regulator == null ? null : stabilizer;
+        this.governor = governor;
         double efd = xad * fieldCurrent;
         this.voltageReference = regulator == null ? Double.NaN : Math.hypot(vdq[0], vdq[1]) + efd / regulator.gain();
         this.mechanicalPower = psid * iq - psiq * id;
         // The stator's flux linkages with the line's leakage added, the currents unchanged through the short.
         this.state = new double[] {psid - xe * id, -xad * id + (xad + d.fieldReactance()) * fieldCurrent, -xad * id + xad * fieldCurrent,
-            psiq - xe * iq, -xaq * iq, -xaq * iq, 1.0, 0.0, efd, 0.0, 0.0, 0.0};
+            psiq - xe * iq, -xaq * iq, -xaq * iq, 1.0, 0.0, efd, 0.0, 0.0, 0.0, mechanicalPower, mechanicalPower};
     }
 
     /** The terminal voltage before the short in the rotor's frame, {@code {vd, vq}}. */
@@ -159,6 +168,16 @@ final class ParkShortCircuitReference {
      * none without one. */
     private double[] derivative(double[] x) {
         double[] rates = rates(x);
+        if (governor != null) {
+            // The valve, then the turbine's lag: x[12], x[13].
+            double deviation = x[6] - 1.0;
+            double valveRate = (mechanicalPower - deviation / governor.droop() - x[12]) / governor.t1();
+            if (x[12] >= governor.valveMax() && valveRate > 0.0 || x[12] <= governor.valveMin() && valveRate < 0.0) {
+                valveRate = 0.0;
+            }
+            rates[12] = valveRate;
+            rates[13] = (x[12] - x[13]) / governor.t3();
+        }
         if (regulator != null) {
             double[] terminal = terminal(x, rates);
             double stabilizing = 0.0;
@@ -189,7 +208,9 @@ final class ParkShortCircuitReference {
         double[] di = multiply(dInverse, x[0], x[1], x[2]);
         double[] qi = multiply(qInverse, x[3], x[4], x[5]);
         double w = x[6];
-        double acceleration = speedHeld ? 0.0 : (mechanicalPower / w - (x[0] * qi[0] - x[3] * di[0]) - damping * (w - 1.0)) / (2.0 * inertia);
+        double turbinePower = governor == null ? mechanicalPower
+                : x[13] + governor.t2() / governor.t3() * (x[12] - x[13]) - governor.damping() * (w - 1.0);
+        double acceleration = speedHeld ? 0.0 : (turbinePower / w - (x[0] * qi[0] - x[3] * di[0]) - damping * (w - 1.0)) / (2.0 * inertia);
         return new double[] {
             omega * ((ra + re) * di[0] + w * x[3]),
             omega * fieldVoltagePerEfd * x[8] - d.fieldResistance() * di[1],
@@ -199,7 +220,7 @@ final class ParkShortCircuitReference {
             -q.damperResistance() * qi[2],
             acceleration,
             omega * (w - 1.0),
-            0.0, 0.0, 0.0, 0.0};
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
     }
 
     /** The line's drop, {@code Re i + (Xe/w0) di/dt + jwXe i}. */
