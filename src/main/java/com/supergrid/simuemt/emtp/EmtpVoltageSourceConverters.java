@@ -26,6 +26,7 @@ import com.powsybl.simuemt.extensions.hvdc.DcBreakerModel;
 import com.powsybl.simuemt.extensions.hvdc.DcChopperModel;
 import com.powsybl.simuemt.extensions.hvdc.DcEarthingModel;
 import com.powsybl.simuemt.extensions.hvdc.DcLineModel;
+import com.powsybl.simuemt.extensions.hvdc.DcMidpointEarthing;
 import com.powsybl.simuemt.extensions.hvdc.DcVoltageDroopLaw;
 import com.powsybl.simuemt.extensions.hvdc.HybridDcBreakerModel;
 import com.powsybl.simuemt.extensions.hvdc.LumpedDcLineModel;
@@ -103,7 +104,7 @@ import static com.supergrid.simuemt.emtp.EmtpSynchronousMachines.function;
  *
  * <p>A {@link GridFormingControl}: {@link EmtpGridFormingControls}'s angle and EMF, the EMFs and the DC current as here.
  *
- * <p>Refused, until written: a PLL but the SRF and DDSRF ones, a protection, a DC midpoint earthing, a chopper but the averaged one, a
+ * <p>Refused, until written: a PLL but the SRF and DDSRF ones, a protection, a chopper but the averaged one, a
  * chopper at an MMC's DC terminal; what {@link EmtpGridFormingControls} refuses.
  *
  * @author Jean-Baptiste Heyberger : jean-baptiste.heyberger@supergrid-institute.com
@@ -144,8 +145,8 @@ final class EmtpVoltageSourceConverters {
         if (converter.getExtension(VscProtectionModel.class) != null) {
             reasons.add("its protection is not written yet");
         }
-        if (converter.getExtension(DcEarthingModel.class) != null) {
-            reasons.add("its DC earthing is not written yet");
+        if (converter.getExtension(DcEarthingModel.class) != null && !(converter.getExtension(DcEarthingModel.class) instanceof DcMidpointEarthing)) {
+            reasons.add("its DC earthing but the midpoint one is not written yet");
         }
         DcChopperModel chopper = converter.getExtension(DcChopperModel.class);
         if (chopper != null && !(chopper instanceof AveragedDcChopperModel)) {
@@ -594,7 +595,18 @@ final class EmtpVoltageSourceConverters {
         devices.add(element("_cI", id + "_DC", List.of(poleTie, returnTie, dcCurrent, id + "_DCV", id + "_DCI", id + "_DCPW"), "-1,1E15,0,0,0,0,0,0,0,"));
         devices.add(element("_RLC", id + "_TP", List.of(poleTie, pole), number(NumericalAids.CURRENT_SOURCE_TIE_RESISTANCE_OHM) + ",0,0,0,0,"));
         devices.add(element("_RLC", id + "_TR", List.of(returnTie, ret), number(NumericalAids.CURRENT_SOURCE_TIE_RESISTANCE_OHM) + ",0,0,0,0,"));
-        devices.add(element("_RLC", id + "_CDC", List.of(pole, ret), "0,0," + number(initial.dcCapacitanceF(model)) + ",0,0,"));
+        if (converter.getExtension(DcEarthingModel.class) instanceof DcMidpointEarthing earthing) {
+            // A symmetric monopole's converter earthing its DC side itself: its capacitor in two halves of twice its capacitance, their
+            // midpoint earthed through its resistance - a solid earthing through a ground connection's 0.01 ohm, as ATP's.
+            String midpoint = id + "_MID";
+            String twice = number(2.0 * initial.dcCapacitanceF(model));
+            devices.add(element("_RLC", id + "_CDC1", List.of(pole, midpoint), "0,0," + twice + ",0,0,"));
+            devices.add(element("_RLC", id + "_CDC2", List.of(midpoint, ret), "0,0," + twice + ",0,0,"));
+            devices.add(element("_RLC", id + "_MIDG", List.of(midpoint), number(earthing.getResistance() > 0.0 ? earthing.getResistance() : GROUND_CONNECTION_OHM)
+                    + ",0,0,0,0,"));
+        } else {
+            devices.add(element("_RLC", id + "_CDC", List.of(pole, ret), "0,0," + number(initial.dcCapacitanceF(model)) + ",0,0,"));
+        }
         String vPole = id + "_VDP";
         String vReturn = id + "_VDR";
         devices.add(element("_cI", id + "_PRDP", List.of(measured, "", zero, vPole, id + "_PRDPI", id + "_PRDPP"), "-1,1E15,0,0,0,0,>v,0,0,"));
