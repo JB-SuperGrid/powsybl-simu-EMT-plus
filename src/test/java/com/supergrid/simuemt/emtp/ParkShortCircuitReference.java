@@ -45,6 +45,7 @@ final class ParkShortCircuitReference {
     private final Dc1A dc1a;
     private final Ac1A ac1a;
     private final Ac6A ac6a;
+    private final Ac8B ac8b;
     private final Stabilizer stabilizer;
     private final Governor governor;
     private final double voltageReference;
@@ -108,6 +109,18 @@ final class ParkShortCircuitReference {
     }
 
     /**
+     * Upstream's AC8B, as ATP's TACS writes it, at rest on upstream's {@code Ac8BInitialState}: {@code e = Vref + Vs - VC}; the PID
+     * {@code KP e + KI/s e + (KD/TD)(e - e/(1 + sTD))} within {@code [vrMin, vrMax]}, its integrator cut by ATP's limiter steps while past a
+     * limit and pushed further; {@code EFE = KA / (1 + sTA)}, its state within the same limits (a static gain if {@code TA = 0}); {@code TE
+     * dVE/dt = EFE - VFE}, held while {@code VFE} is at {@code vfeMax} and rising or {@code VE} at {@code veMin} and falling; AC1A's
+     * rectifier.
+     */
+    record Ac8B(double tr, double kp, double ki, double kd, double td, double ka, double ta, double vrMax, double vrMin, double te, double ke,
+                double vfeMax, double veMin, double kc, double kdemag, double aex, double bex, double reference, double voltage, double integral,
+                double exciterField, double exciterVoltage) {
+    }
+
+    /**
      * Upstream's PSS1A, its output added to the regulator's error: the speed deviation {@code w - 1} through the washout {@code Ks sTw
      * / (1 + sTw)} and the lead-lags {@code (1 + sT1) / (1 + sT2)}, {@code (1 + sT3) / (1 + sT4)}, all at rest at 0, held within
      * {@code [-limit, limit]} - a clamp on the output, as ATP's after the second lead-lag and EMTP's static limiter.
@@ -136,13 +149,13 @@ final class ParkShortCircuitReference {
      * {@code null} -, its mechanical power driven by {@code governor} - held if {@code null}. */
     ParkShortCircuitReference(SubtransientMachineModel machine, double re, double xe, double frequencyHz, double[] v, double[] i,
                               boolean speedHeld, Regulator regulator, Stabilizer stabilizer, Governor governor) {
-        this(machine, re, xe, frequencyHz, v, i, speedHeld, regulator, null, null, null, null, stabilizer, governor);
+        this(machine, re, xe, frequencyHz, v, i, speedHeld, regulator, null, null, null, null, null, stabilizer, governor);
     }
 
     /** The same, its field voltage driven by an ST1A {@code st1a} if not {@code null}, in place of the simplified regulator. */
     ParkShortCircuitReference(SubtransientMachineModel machine, double re, double xe, double frequencyHz, double[] v, double[] i,
-                              boolean speedHeld, Regulator regulator, St1A st1a, Dc1A dc1a, Ac1A ac1a, Ac6A ac6a, Stabilizer stabilizer,
-                              Governor governor) {
+                              boolean speedHeld, Regulator regulator, St1A st1a, Dc1A dc1a, Ac1A ac1a, Ac6A ac6a, Ac8B ac8b,
+                              Stabilizer stabilizer, Governor governor) {
         this.omega = 2.0 * Math.PI * frequencyHz;
         this.re = re;
         this.xe = xe;
@@ -180,13 +193,15 @@ final class ParkShortCircuitReference {
         this.dc1a = dc1a;
         this.ac1a = ac1a;
         this.ac6a = ac6a;
-        this.stabilizer = regulator == null && st1a == null && dc1a == null && ac1a == null && ac6a == null ? null : stabilizer;
+        this.ac8b = ac8b;
+        this.stabilizer = regulator == null && st1a == null && dc1a == null && ac1a == null && ac6a == null && ac8b == null ? null : stabilizer;
         this.governor = governor;
         double efd = xad * fieldCurrent;
         double vt0 = Math.hypot(vdq[0], vdq[1]);
         double vr0 = dc1a != null ? (dc1a.ke() + dc1a.aex() * Math.exp(dc1a.bex() * efd)) * efd
                 : ac1a != null ? ac1a.ve0() * (ac1a.ke() + ac1a.aex() * Math.exp(ac1a.bex() * ac1a.ve0())) + ac1a.kd() * efd : 0.0;
-        this.voltageReference = ac6a != null ? ac6a.reference() : ac1a != null ? vt0 + vr0 / ac1a.ka() : dc1a != null ? vt0 + vr0 / dc1a.ka() : st1a != null ? vt0 + efd / st1a.ka()
+        this.voltageReference = ac8b != null ? ac8b.reference() : ac6a != null ? ac6a.reference() : ac1a != null ? vt0 + vr0 / ac1a.ka()
+                : dc1a != null ? vt0 + vr0 / dc1a.ka() : st1a != null ? vt0 + efd / st1a.ka()
                 : regulator == null ? Double.NaN : vt0 + efd / regulator.gain();
         this.mechanicalPower = psid * iq - psiq * id;
         // The stator's flux linkages with the line's leakage added, the currents unchanged through the short.
@@ -196,6 +211,13 @@ final class ParkShortCircuitReference {
         if (dc1a != null) {
             // The regulator x[8] at Vr0, the field voltage x[18] at Efd0.
             state[8] = vr0;
+        }
+        if (ac8b != null) {
+            // The derivative's lag x[15] at the error, the integral x[16], the regulator x[8] at EFE0, the exciter x[18].
+            state[15] = ac8b.reference() - ac8b.voltage();
+            state[16] = ac8b.integral();
+            state[8] = ac8b.exciterField();
+            state[18] = ac8b.exciterVoltage();
         }
         if (ac6a != null) {
             // The transducer x[14], KA (1 + sTK)/(1 + sTA)'s lag x[15] at the error, the limited lead-lag's state x[16], the limiter's
@@ -264,7 +286,7 @@ final class ParkShortCircuitReference {
             rates[12] = valveRate;
             rates[13] = (x[12] - x[13]) / governor.t3();
         }
-        if (regulator != null || st1a != null || dc1a != null || ac1a != null || ac6a != null) {
+        if (regulator != null || st1a != null || dc1a != null || ac1a != null || ac6a != null || ac8b != null) {
             double[] terminal = terminal(x, rates);
             double stabilizing = 0.0;
             if (stabilizer != null) {
@@ -288,6 +310,10 @@ final class ParkShortCircuitReference {
             }
             if (ac6a != null) {
                 ac6aRates(x, rates, Math.hypot(terminal[0], terminal[1]), stabilizing);
+                return rates;
+            }
+            if (ac8b != null) {
+                ac8bRates(x, rates, Math.hypot(terminal[0], terminal[1]), stabilizing);
                 return rates;
             }
             if (dc1a != null) {
@@ -400,6 +426,39 @@ final class ParkShortCircuitReference {
         rates[18] = rate * (1.0 - limiterStep(-ve) * (1.0 - limiterStep(rate))) / ac6a.te();
     }
 
+    /** AC8B's states' rates: its transducer x[14], its derivative's lag x[15], its integral x[16], its regulator x[8] if lagged, its
+     * exciter x[18]. */
+    private void ac8bRates(double[] x, double[] rates, double vt, double stabilizing) {
+        double fieldCurrent = d.magnetizingReactance() * multiply(dInverse, x[0], x[1], x[2])[1];
+        rates[14] = ac8b.tr() > 0.0 ? (vt - x[14]) / ac8b.tr() : 0.0;
+        double measured = ac8b.tr() > 0.0 ? x[14] : vt;
+        double error = ac8b.reference() + stabilizing - measured;
+        double sum = ac8b.kp() * error;
+        if (ac8b.kd() > 0.0) {
+            rates[15] = (error - x[15]) / ac8b.td();
+            sum += ac8b.kd() / ac8b.td() * (error - x[15]);
+        }
+        if (ac8b.ki() > 0.0) {
+            sum += x[16];
+            double pushesUp = limiterStep(error);
+            rates[16] = ac8b.ki() * error * (1.0 - limiterStep(sum - ac8b.vrMax()) * pushesUp - limiterStep(ac8b.vrMin() - sum) * (1.0 - pushesUp));
+        }
+        double pid = Math.max(ac8b.vrMin(), Math.min(ac8b.vrMax(), sum));
+        double efe;
+        if (ac8b.ta() > 0.0) {
+            double rate = (ac8b.ka() * pid - x[8]) / ac8b.ta();
+            rates[8] = x[8] >= ac8b.vrMax() && rate > 0.0 || x[8] <= ac8b.vrMin() && rate < 0.0 ? 0.0 : rate;
+            efe = x[8];
+        } else {
+            efe = Math.max(ac8b.vrMin(), Math.min(ac8b.vrMax(), ac8b.ka() * pid));
+        }
+        double ve = x[18];
+        double vfe = ac8b.ke() * ve + ac8b.aex() * Math.exp(ac8b.bex() * ve) * ve + ac8b.kdemag() * fieldCurrent;
+        double rate = efe - vfe;
+        double rising = limiterStep(rate);
+        rates[18] = rate * (1.0 - limiterStep(vfe - ac8b.vfeMax()) * rising - limiterStep(ac8b.veMin() - ve) * (1.0 - rising)) / ac8b.te();
+    }
+
     /** ATP's limiter step {@code 0.5 (1 + x / sqrt(x^2 + 1e-8))}. */
     private static double limiterStep(double x) {
         return 0.5 * (1.0 + x / Math.sqrt(x * x + 1.0e-8));
@@ -433,6 +492,9 @@ final class ParkShortCircuitReference {
         }
         if (ac6a != null) {
             return rectified(x[18], ac6a.kc(), x);
+        }
+        if (ac8b != null) {
+            return rectified(x[18], ac8b.kc(), x);
         }
         if (dc1a != null) {
             return x[18];
