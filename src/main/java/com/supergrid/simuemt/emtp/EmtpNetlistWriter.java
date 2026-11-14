@@ -177,6 +177,17 @@ public final class EmtpNetlistWriter {
                 writeInfiniteBus(devices, generator, settings);
             }
         }
+        // The DC side and its voltage source converters.
+        for (EmtpSynchronousMachines.Device device : EmtpVoltageSourceConverters.dcSide(network, settings)) {
+            devices.addBlock(device.part(), device.lines());
+        }
+        for (com.powsybl.iidm.network.VoltageSourceConverter converter : network.getVoltageSourceConverters()) {
+            Bus bus = converter.getTerminal1().getBusBreakerView().getBus();
+            for (EmtpSynchronousMachines.Device device : EmtpVoltageSourceConverters.converter(converter, phaseNodes(bus.getId()),
+                    VectorGroupOffsets.of(network).degrees(bus), settings)) {
+                devices.addBlock(device.part(), device.lines());
+            }
+        }
         int faultBranch = 0;
         for (EmtEvent event : events) {
             for (BusFault.Branch branch : ((BusFault) event).branches()) {
@@ -740,9 +751,17 @@ public final class EmtpNetlistWriter {
                 reasons.add("transformer '" + transformer.getId() + "': " + String.join(", ", windingReasons));
             }
         }
+        // Each voltage source converter, and the DC side.
+        network.getVoltageSourceConverterStream().forEach(converter -> {
+            List<String> converterReasons = EmtpVoltageSourceConverters.unsupportedReasons(converter);
+            if (!converterReasons.isEmpty()) {
+                reasons.add("voltage source converter '" + converter.getId() + "': " + String.join(", ", converterReasons));
+            }
+        });
+        reasons.addAll(EmtpVoltageSourceConverters.unsupportedDcReasons(network));
         Stream.of(
                         network.getSwitchStream(), network.getHvdcLineStream(), network.getStaticVarCompensatorStream(),
-                        network.getBatteryStream(), network.getVoltageSourceConverterStream())
+                        network.getBatteryStream())
                 .flatMap(s -> s.map(Identifiable::getId))
                 .forEach(id -> reasons.add("'" + id + "' is of a kind not written yet"));
         return reasons;

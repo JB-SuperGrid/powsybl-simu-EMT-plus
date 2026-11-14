@@ -23,7 +23,8 @@ import java.util.Optional;
 /**
  * The steady-state solution an EMTP time-domain run starts from ({@code <name>ss.xml}): at the network's frequency, each node's
  * voltage as a phasor - its crest in volts and its angle in degrees, {@code v(t) = m cos(wt + p)}, as the run's first samples show
- * it.
+ * it. A network with a DC side has its DC solution besides, at a frequency of nearly zero ({@code 2e-6} Hz): the network's frequency
+ * is the highest one.
  *
  * @author Jean-Baptiste Heyberger : jean-baptiste.heyberger@supergrid-institute.com
  */
@@ -57,10 +58,16 @@ public final class EmtpSteadyState {
             throw new PowsyblException("SimuEmt Plus: could not read " + file, e);
         }
         NodeList frequencies = document.getElementsByTagName("Frequency");
-        if (frequencies.getLength() != 1) {
-            throw new PowsyblException("SimuEmt Plus: " + file + " holds " + frequencies.getLength() + " frequencies, not one");
+        if (frequencies.getLength() == 0) {
+            throw new PowsyblException("SimuEmt Plus: " + file + " holds no frequency");
         }
         Element frequency = (Element) frequencies.item(0);
+        for (int k = 1; k < frequencies.getLength(); k++) {
+            Element other = (Element) frequencies.item(k);
+            if (Double.parseDouble(other.getAttribute("f")) > Double.parseDouble(frequency.getAttribute("f"))) {
+                frequency = other;
+            }
+        }
         Map<String, Phasor> voltages = new LinkedHashMap<>();
         NodeList nodes = frequency.getElementsByTagName("S");
         for (int n = 0; n < nodes.getLength(); n++) {
