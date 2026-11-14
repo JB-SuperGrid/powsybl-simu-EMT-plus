@@ -36,6 +36,7 @@ import com.powsybl.simuemt.extensions.hvdc.control.DdsrfPll;
 import com.powsybl.simuemt.extensions.hvdc.control.DualSequenceCurrentControl;
 import com.powsybl.simuemt.extensions.hvdc.control.FaultRideThrough;
 import com.powsybl.simuemt.extensions.hvdc.control.GridFollowingControl;
+import com.powsybl.simuemt.extensions.hvdc.control.GridFormingControl;
 import com.powsybl.simuemt.extensions.hvdc.control.NegativeSequenceInjection;
 import com.powsybl.simuemt.extensions.hvdc.control.OuterLoops;
 import com.powsybl.simuemt.extensions.hvdc.control.SrfPll;
@@ -100,8 +101,10 @@ import static com.supergrid.simuemt.emtp.EmtpSynchronousMachines.function;
  * <p>A converter in {@code DC_DROOP}: its active power's reference less its {@link DcVoltageDroopLaw}'s reduction as its DC voltage
  * moves, within its {@code [minP, maxP]}.
  *
- * <p>Refused, until written: an MMC, a DC reactor, a grid-forming control, a PLL but the SRF and DDSRF ones, a protection, a DC
- * midpoint earthing, a chopper but the averaged one.
+ * <p>A {@link GridFormingControl}: {@link EmtpGridFormingControls}'s angle and EMF, the EMFs and the DC current as here.
+ *
+ * <p>Refused, until written: a PLL but the SRF and DDSRF ones, a protection, a DC midpoint earthing, a chopper but the averaged one, a
+ * chopper at an MMC's DC terminal; what {@link EmtpGridFormingControls} refuses.
  *
  * @author Jean-Baptiste Heyberger : jean-baptiste.heyberger@supergrid-institute.com
  */
@@ -132,12 +135,10 @@ final class EmtpVoltageSourceConverters {
             return reasons;
         }
         AveragedConverterModel model = (AveragedConverterModel) converter.getExtension(VoltageSourceConverterModel.class);
-        if (!(converter.getExtension(VscControlModel.class) == null || converter.getExtension(VscControlModel.class) instanceof GridFollowingControl)) {
-            reasons.add("its grid-forming control is not written yet");
-            return reasons;
-        }
-        GridFollowingControl control = GridFollowingControl.of(converter);
-        if (!(control.getSynchronization() instanceof SrfPll || control.getSynchronization() instanceof DdsrfPll)) {
+        if (converter.getExtension(VscControlModel.class) instanceof GridFormingControl gridForming) {
+            reasons.addAll(EmtpGridFormingControls.unsupportedReasons(gridForming));
+        } else if (!(GridFollowingControl.of(converter).getSynchronization() instanceof SrfPll
+                || GridFollowingControl.of(converter).getSynchronization() instanceof DdsrfPll)) {
             reasons.add("its PLL but the SRF and DDSRF ones are not written yet");
         }
         if (converter.getExtension(VscProtectionModel.class) != null) {
@@ -303,9 +304,6 @@ final class EmtpVoltageSourceConverters {
                                                           EmtpSimulationSettings settings) {
         AveragedConverterModel model = (AveragedConverterModel) converter.getExtension(VoltageSourceConverterModel.class);
         AveragedVscInitialState initial = AveragedVscInitialState.of(converter, model);
-        GridFollowingControl control = GridFollowingControl.of(converter);
-        OuterLoops loops = control.getOuterLoops();
-        FaultRideThrough frt = control.getFaultRideThrough();
         double omega = 2.0 * Math.PI * settings.nominalFrequencyHz();
         double vbpk = initial.peakPhaseVoltageBase();
         double ibpk = initial.peakPhaseCurrentBase();
@@ -313,12 +311,7 @@ final class EmtpVoltageSourceConverters {
         double r = model.getPhaseReactorResistance();
         double angle0 = Math.toRadians(initial.terminalAngle() + offsetDegrees);
         double dcBaseVolts = initial.dcNominalVoltage() * 1.0e3;
-        double tau = control.getMeasurement().timeConstant();
         String id = sanitize(converter.getId());
-        String pole = dcNode(converter.getDcTerminal1().getDcNode());
-        String ret = dcNode(converter.getDcTerminal2().getDcNode());
-        String star = id + "_N";
-        String zero = id + "_ZERO";
         List<EmtpSynchronousMachines.Device> devices = new ArrayList<>();
 
         double emfMagnitude = Math.hypot(initial.directEmf(), initial.quadratureEmf()) * vbpk;
@@ -326,9 +319,22 @@ final class EmtpVoltageSourceConverters {
         String[] v = new String[3];
         String[] i = new String[3];
         powerStage(devices, converter, model, initial, phaseNodes, v, i, emfMagnitude, emfAngle, omega, settings);
-        String dcCurrent = id + "_IDC";
         String vPole = id + "_VDP";
         String vReturn = id + "_VDR";
+        String cos2 = id + "_C2";
+        String sin2 = id + "_S2";
+
+        // A grid-forming control: its internal EMF's angle and magnitude, the current through its virtual admittance followed.
+        if (converter.getExtension(VscControlModel.class) instanceof GridFormingControl gridForming) {
+            EmtpGridFormingControls.write(devices, converter, model, gridForming, initial, v, i, angle0, omega);
+            emfsAndDcCurrent(devices, converter, initial, false, new Sequences(id + "_ID", id + "_IQ", null, null, null, null), cos2, sin2,
+                    emfMagnitude, emfAngle, omega, settings);
+            return devices;
+        }
+        GridFollowingControl control = GridFollowingControl.of(converter);
+        OuterLoops loops = control.getOuterLoops();
+        FaultRideThrough frt = control.getFaultRideThrough();
+        double tau = control.getMeasurement().timeConstant();
 
         // The control: Park transform on the PLL's angle.
         String theta = id + "_TH";
@@ -348,8 +354,6 @@ final class EmtpVoltageSourceConverters {
         // taken off - or the whole measurement, read in the positive frame, as the positive sequence.
         Sequences voltage = new Sequences(vd, vq, null, null, null, null);
         Sequences current = new Sequences(idPu, iqPu, null, null, null, null);
-        String cos2 = id + "_C2";
-        String sin2 = id + "_S2";
         if (control.getSequenceSeparation() instanceof Ddsrf ddsrf) {
             devices.add(function(cos2, cos2, List.of(theta), Math.cos(2.0 * angle0), "COS(2*u[1])"));
             devices.add(function(sin2, sin2, List.of(theta), Math.sin(2.0 * angle0), "SIN(2*u[1])"));
@@ -476,6 +480,28 @@ final class EmtpVoltageSourceConverters {
         if (dualSequence) {
             negativeSequenceLoop(devices, id, control, x, voltage, current, negativeReference);
         }
+        emfsAndDcCurrent(devices, converter, initial, dualSequence, current, cos2, sin2, emfMagnitude, emfAngle, omega, settings);
+        return devices;
+    }
+
+    /**
+     * The EMFs, rebuilt from {@code <id>_ED}, {@code <id>_EQ} - and the negative sequence's, {@code dualSequence} - on {@code <id>_TH}, and
+     * the DC current carrying their power, less a chopper's: what a grid-following and a grid-forming control share.
+     */
+    static void emfsAndDcCurrent(List<EmtpSynchronousMachines.Device> devices, VoltageSourceConverter converter, AveragedVscInitialState initial,
+                                 boolean dualSequence, Sequences current, String cos2, String sin2, double emfMagnitude, double emfAngle, double omega,
+                                 EmtpSimulationSettings settings) {
+        String id = sanitize(converter.getId());
+        String theta = id + "_TH";
+        String ed = id + "_ED";
+        String eq = id + "_EQ";
+        String edNegative = id + "_EDN";
+        String eqNegative = id + "_EQN";
+        String vPole = id + "_VDP";
+        String vReturn = id + "_VDR";
+        String dcCurrent = id + "_IDC";
+        double vbpk = initial.peakPhaseVoltageBase();
+        double dcBaseVolts = initial.dcNominalVoltage() * 1.0e3;
         // The EMFs a step ahead of the angle the PLL tracks: EMTP's network takes a control signal a step after the control computes it,
         // as ATP's does - its EMFs rebuilt a step ahead too.
         String ahead = "+" + number(omega * settings.timeStepSeconds());
@@ -507,7 +533,6 @@ final class EmtpVoltageSourceConverters {
         String floor = number(DC_VOLTAGE_FLOOR_PU * dcBaseVolts);
         devices.add(function(id + "_IDCF", dcCurrent, dcInputs, initial.dcCurrent() * 1.0e3, "u[1]*" + number(initial.baseApparentPower() * 1.0e6)
                 + "/(0.5*((u[2]-u[3])+" + floor + "+ABS((u[2]-u[3])-" + floor + ")))" + chopper));
-        return devices;
     }
 
     /** {@code converter}'s power stage: AC side, phase by phase, its EMF, its stand-in, its reactor and its bus's probe - {@code v} and {@code
@@ -658,7 +683,7 @@ final class EmtpVoltageSourceConverters {
     }
 
     /** {@code x} within {@code [low, high]}: {@code min(max(x, low), high)}. */
-    private static String clampBetween(String x, String low, String high) {
+    static String clampBetween(String x, String low, String high) {
         String floored = "0.5*((" + x + ")+(" + low + ")+ABS((" + x + ")-(" + low + ")))";
         return "0.5*((" + floored + ")+(" + high + ")-ABS((" + floored + ")-(" + high + ")))";
     }
@@ -693,7 +718,7 @@ final class EmtpVoltageSourceConverters {
 
     /** A measured quantity's dq components on each sequence: the negative sequence's {@code null} when the control does not separate
      * them, the positive sequence's then the whole measurement in the positive frame. */
-    private record Sequences(String positiveD, String positiveQ, String negativeD, String negativeQ, String negativeFilteredD, String negativeFilteredQ) {
+    record Sequences(String positiveD, String positiveQ, String negativeD, String negativeQ, String negativeFilteredD, String negativeFilteredQ) {
     }
 
     /**
@@ -764,7 +789,7 @@ final class EmtpVoltageSourceConverters {
 
     /** The Park transform of the three phases {@code signals} on {@code theta}: {@code (2/3) sum_k f(theta - k 2pi/3) x_k / base}, negated
      * for the q axis. */
-    private static EmtpSynchronousMachines.Device park(String device, String output, String[] signals, String theta, String function, double base,
+    static EmtpSynchronousMachines.Device park(String device, String output, String[] signals, String theta, String function, double base,
                                                        double history, boolean negated) {
         String third = number(2.0 * Math.PI / 3.0);
         String sum = "u[1]*" + function + "(u[4])+u[2]*" + function + "(u[4]-" + third + ")+u[3]*" + function + "(u[4]+" + third + ")";
@@ -773,7 +798,7 @@ final class EmtpVoltageSourceConverters {
     }
 
     /** {@code expression} through the measurement's lag {@code 1 / (1 + s tau)}, at rest on {@code initial}; itself without one. */
-    private static String measurement(List<EmtpSynchronousMachines.Device> devices, String name, List<String> inputs, String expression, double tau, double initial) {
+    static String measurement(List<EmtpSynchronousMachines.Device> devices, String name, List<String> inputs, String expression, double tau, double initial) {
         if (tau <= 0.0) {
             devices.add(scoped(function(name, name, inputs, initial, expression)));
             return name;
@@ -792,23 +817,23 @@ final class EmtpVoltageSourceConverters {
     }
 
     /** An integrator {@code gain / s} from {@code input} to {@code output}, at {@code initial}. */
-    private static EmtpSynchronousMachines.Device integrator(String device, String output, String input, double gain, double initial) {
+    static EmtpSynchronousMachines.Device integrator(String device, String output, String input, double gain, double initial) {
         return new EmtpSynchronousMachines.Device("_c_fs", List.of("_c_fs;" + device + ";2;2;" + output + "," + input + ",", number(initial) + ",1,1,2," + number(gain)
                 + ",S1,", "1", ";", "0 1"));
     }
 
     /** ATP's plain step: 1 for a positive {@code x}, 0 otherwise. */
-    private static String step(String x) {
+    static String step(String x) {
         return "0.5*(1+SIGN(" + x + "))";
     }
 
     /** A conditional integration's gate: 0 while {@code output} is at its limit and {@code error} pushes it past, 1 otherwise. */
-    private static String windupGate(String output, String limit, String error) {
+    static String windupGate(String output, String limit, String error) {
         return "(1-" + step(output + "-" + limit) + "*" + step(error) + "-" + step("-" + limit + "-" + output) + "*(1-" + step(error) + "))";
     }
 
     /** {@code x} within {@code [-limit, limit]}: {@code max(min(x, limit), -limit)}. */
-    private static String clampExpression(String x, String limit) {
+    static String clampExpression(String x, String limit) {
         String capped = "0.5*((" + x + ")+(" + limit + ")-ABS((" + x + ")-(" + limit + ")))";
         return "0.5*((" + capped + ")-(" + limit + ")+ABS((" + capped + ")+(" + limit + ")))";
     }
@@ -824,7 +849,7 @@ final class EmtpVoltageSourceConverters {
         return new EmtpSynchronousMachines.Device(part, List.of(part + ";" + name + ";" + nodes.size() + ";" + nodes.size() + ";" + String.join(",", nodes) + ",", data));
     }
 
-    private static String sanitize(String id) {
+    static String sanitize(String id) {
         return id.replaceAll("[^A-Za-z0-9_]", "_");
     }
 }

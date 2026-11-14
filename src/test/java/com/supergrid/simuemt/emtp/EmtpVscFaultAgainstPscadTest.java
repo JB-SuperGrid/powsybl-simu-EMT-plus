@@ -62,6 +62,8 @@ class EmtpVscFaultAgainstPscadTest {
     /** PSCAD runs from rest: its converters let go at 2 s, the fault 2 s on from EMTP's. */
     private static final double PSCAD_SHIFT = 2.0;
     private static final double DURATION = 0.1;
+    /** A grid-forming bench's PSCAD shift: from rest, its virtual machine settles in 4.5 s. */
+    private static final double GRID_FORMING_SHIFT = 4.5;
     private static final double OHMS = 5.0;
     private static final List<Channel> MONOPOLE = converters("VSC1", "VSC2");
     /** Per channel, pu: before the fault and in the last 100 ms, then through the fault and the recovery. */
@@ -122,6 +124,21 @@ class EmtpVscFaultAgainstPscadTest {
                 DcSwitchOperation.opening("DCB", start + 3.0e-3)), channels, "vsc-dc-breaker-mmc", 5.0e-3, SETTLED_TOLERANCE, 0.025, false);
     }
 
+    /**
+     * Step 4's second: {@code vsc-monopole-infinite-buses-3}, VSC2 grid-forming - a virtual synchronous machine (H 5 s, D 20), its swing
+     * damped, its power reference less its DC voltage's droop, a steady-state current limit holding its angle to a PLL's - through the
+     * three-phase fault at B2, its bus, by 5 ms windows. PSCAD's fault 4.5 s on from EMTP's: from rest, the virtual machine's slow swing
+     * is not settled by 2.3 s (VSC2 4e-3 pu off); still recovering at the end in both, held through to it as through the fault.
+     *
+     * <p>Run 2026-11-14, 38 s the two: settled before the fault within 2.6e-4 pu of PSCAD's; through it and the recovery within 1.24e-2
+     * (VSC2's P), 1.04e-2 (VSC2's Q), the DC voltages 1.3e-3.
+     */
+    @Test
+    void aFaultAtAGridFormingConvertersBusRunsInEmtpAsInPscadProfessional() throws IOException {
+        compare("vsc-monopole-infinite-buses-3", start -> List.of(fault("ABC", start)), MONOPOLE, "vsc-grid-forming-fault", 5.0e-3, SETTLED_TOLERANCE,
+                TRANSIENT_TOLERANCE, false, GRID_FORMING_SHIFT);
+    }
+
     private static List<Channel> converters(String... ids) {
         List<Channel> channels = new ArrayList<>();
         for (String id : ids) {
@@ -134,9 +151,14 @@ class EmtpVscFaultAgainstPscadTest {
 
     private static void compare(String bench, DoubleFunction<List<? extends EmtEvent>> events, List<Channel> channels, String name, double window,
                                 double settledTolerance, double transientTolerance, boolean settlesAfter) throws IOException {
+        compare(bench, events, channels, name, window, settledTolerance, transientTolerance, settlesAfter, PSCAD_SHIFT);
+    }
+
+    private static void compare(String bench, DoubleFunction<List<? extends EmtEvent>> events, List<Channel> channels, String name, double window,
+                                double settledTolerance, double transientTolerance, boolean settlesAfter, double pscadShift) throws IOException {
         EmtpOutput emtp = EmtpRunner.run(EmtpNetlistWriter.write(EmtpVoltageSourceConverterTest.bench(bench), Path.of("target", "emtp", name),
                 new EmtpSimulationSettings(TIME_STEP, EMTP_FAULT + 0.45, FREQUENCY), events.apply(EMTP_FAULT)), EmtpSettings.defaults()).output();
-        double pscadFault = EMTP_FAULT + PSCAD_SHIFT;
+        double pscadFault = EMTP_FAULT + pscadShift;
         PscadOutput pscad = PscadProSimulation.run(EmtpVoltageSourceConverterTest.bench(bench), Path.of("target", "pscad", name),
                 new PscadSimulationSettings(TIME_STEP, pscadFault + 0.45, FREQUENCY, PscadEdition.PROFESSIONAL), events.apply(pscadFault),
                 PscadProSettings.defaults()).output();
@@ -152,7 +174,7 @@ class EmtpVscFaultAgainstPscadTest {
                 for (int k = 0; k < channels.size(); k++) {
                     Channel channel = channels.get(k);
                     double e = emtp.mean(channel.emtp(), t, t + window) / channel.base();
-                    double p = pscad.mean(channel.pscad(), t + PSCAD_SHIFT, t + window + PSCAD_SHIFT) / channel.base();
+                    double p = pscad.mean(channel.pscad(), t + pscadShift, t + window + pscadShift) / channel.base();
                     line.append(String.format(Locale.ROOT, ",%.5f,%.5f", e, p));
                     double[] worst = settled ? worstSettled : worstTransient;
                     worst[k] = Math.max(worst[k], Math.abs(e - p));

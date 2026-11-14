@@ -92,8 +92,10 @@ class EmtpExampleCoverageTest {
             "vsc-three-terminal-vdc-droop",
             "vsc-monopole",
             "vsc-monopole-2",
+            "vsc-monopole-3",
             "vsc-monopole-infinite-buses",
             "vsc-monopole-infinite-buses-2",
+            "vsc-monopole-infinite-buses-3",
             "vsc-monopole-infinite-buses-ground-resistance",
             "vsc-monopole-infinite-buses-metallic-return",
             "two-bus");
