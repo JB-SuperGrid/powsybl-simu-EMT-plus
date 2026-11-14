@@ -48,6 +48,7 @@ final class ParkShortCircuitReference {
     private final Ac8B ac8b;
     private final St4B st4b;
     private final St5B st5b;
+    private final St6B st6b;
     private final Stabilizer stabilizer;
     private final Governor governor;
     private final double voltageReference;
@@ -145,6 +146,16 @@ final class ParkShortCircuitReference {
     }
 
     /**
+     * Upstream's ST6B without an overexcitation limiter, as ATP's TACS writes it, at rest on upstream's {@code St6BInitialState}: the
+     * limited PI {@code (KPA + KIA/s)(Vref - VC + Vs)} within {@code [vaMin, vaMax]}; {@code VR = clamp(KFF VA + KM (VA - KG Efd / (1 +
+     * sTG)), vrMin, vrMax)}; {@code min(VR, max(vrMin, KLR (KCL ILR - Ifd)))}; {@code VB = min(KP Vt FEX, vbMax)}; {@code Efd = VR VB} -
+     * on the terminal voltage it moves, solved by fixed point as ST1A's.
+     */
+    record St6B(double tr, double kpa, double kia, double vaMax, double vaMin, double kff, double km, double kg, double tg, double vrMax, double vrMin,
+                double kp, double kc, double vbMax, double ilr, double kcl, double klr, double reference, double integral) {
+    }
+
+    /**
      * Upstream's PSS1A, its output added to the regulator's error: the speed deviation {@code w - 1} through the washout {@code Ks sTw
      * / (1 + sTw)} and the lead-lags {@code (1 + sT1) / (1 + sT2)}, {@code (1 + sT3) / (1 + sT4)}, all at rest at 0, held within
      * {@code [-limit, limit]} - a clamp on the output, as ATP's after the second lead-lag and EMTP's static limiter.
@@ -173,13 +184,13 @@ final class ParkShortCircuitReference {
      * {@code null} -, its mechanical power driven by {@code governor} - held if {@code null}. */
     ParkShortCircuitReference(SubtransientMachineModel machine, double re, double xe, double frequencyHz, double[] v, double[] i,
                               boolean speedHeld, Regulator regulator, Stabilizer stabilizer, Governor governor) {
-        this(machine, re, xe, frequencyHz, v, i, speedHeld, regulator, null, null, null, null, null, null, null, stabilizer, governor);
+        this(machine, re, xe, frequencyHz, v, i, speedHeld, regulator, null, null, null, null, null, null, null, null, stabilizer, governor);
     }
 
     /** The same, its field voltage driven by an ST1A {@code st1a} if not {@code null}, in place of the simplified regulator. */
     ParkShortCircuitReference(SubtransientMachineModel machine, double re, double xe, double frequencyHz, double[] v, double[] i,
                               boolean speedHeld, Regulator regulator, St1A st1a, Dc1A dc1a, Ac1A ac1a, Ac6A ac6a, Ac8B ac8b,
-                              St4B st4b, St5B st5b, Stabilizer stabilizer, Governor governor) {
+                              St4B st4b, St5B st5b, St6B st6b, Stabilizer stabilizer, Governor governor) {
         this.omega = 2.0 * Math.PI * frequencyHz;
         this.re = re;
         this.xe = xe;
@@ -220,14 +231,15 @@ final class ParkShortCircuitReference {
         this.ac8b = ac8b;
         this.st4b = st4b;
         this.st5b = st5b;
+        this.st6b = st6b;
         this.stabilizer = regulator == null && st1a == null && dc1a == null && ac1a == null && ac6a == null && ac8b == null && st4b == null
-                && st5b == null ? null : stabilizer;
+                && st5b == null && st6b == null ? null : stabilizer;
         this.governor = governor;
         double efd = xad * fieldCurrent;
         double vt0 = Math.hypot(vdq[0], vdq[1]);
         double vr0 = dc1a != null ? (dc1a.ke() + dc1a.aex() * Math.exp(dc1a.bex() * efd)) * efd
                 : ac1a != null ? ac1a.ve0() * (ac1a.ke() + ac1a.aex() * Math.exp(ac1a.bex() * ac1a.ve0())) + ac1a.kd() * efd : 0.0;
-        this.voltageReference = st5b != null ? st5b.reference() : st4b != null ? st4b.reference() : ac8b != null ? ac8b.reference()
+        this.voltageReference = st6b != null ? st6b.reference() : st5b != null ? st5b.reference() : st4b != null ? st4b.reference() : ac8b != null ? ac8b.reference()
                 : ac6a != null ? ac6a.reference() : ac1a != null ? vt0 + vr0 / ac1a.ka()
                 : dc1a != null ? vt0 + vr0 / dc1a.ka() : st1a != null ? vt0 + efd / st1a.ka()
                 : regulator == null ? Double.NaN : vt0 + efd / regulator.gain();
@@ -239,6 +251,11 @@ final class ParkShortCircuitReference {
         if (dc1a != null) {
             // The regulator x[8] at Vr0, the field voltage x[18] at Efd0.
             state[8] = vr0;
+        }
+        if (st6b != null) {
+            // The PI's integral x[15], the field voltage's feedback lag x[16] at Efd0.
+            state[15] = st6b.integral();
+            state[16] = efd;
         }
         if (st5b != null) {
             // The second lead-lag's lag x[15] and the limited lead-lag's state x[16] on VR0, the field voltage's lag x[18] at Efd0.
@@ -327,7 +344,7 @@ final class ParkShortCircuitReference {
             rates[13] = (x[12] - x[13]) / governor.t3();
         }
         if (regulator != null || st1a != null || dc1a != null || ac1a != null || ac6a != null || ac8b != null || st4b != null
-                || st5b != null) {
+                || st5b != null || st6b != null) {
             double[] terminal = terminal(x, rates);
             double stabilizing = 0.0;
             if (stabilizer != null) {
@@ -359,6 +376,16 @@ final class ParkShortCircuitReference {
             }
             if (st4b != null) {
                 st4bRates(x, rates, terminal, stabilizing);
+                return rates;
+            }
+            if (st6b != null) {
+                double vt = Math.hypot(terminal[0], terminal[1]);
+                rates[14] = st6b.tr() > 0.0 ? (vt - x[14]) / st6b.tr() : 0.0;
+                double input = st6b.reference() - (st6b.tr() > 0.0 ? x[14] : vt) + stabilizing;
+                double sum = st6b.kpa() * input + x[15];
+                double pushesUp = limiterStep(input);
+                rates[15] = st6b.kia() * input * (1.0 - limiterStep(sum - st6b.vaMax()) * pushesUp - limiterStep(st6b.vaMin() - sum) * (1.0 - pushesUp));
+                rates[16] = (fieldVoltage - x[16]) / st6b.tg();
                 return rates;
             }
             if (st5b != null) {
@@ -576,6 +603,17 @@ final class ParkShortCircuitReference {
         return vm * vb;
     }
 
+    /** ST6B's field voltage on the unfiltered terminal voltage {@code vt}. */
+    private double st6bFieldVoltage(double[] x, double vt) {
+        double fieldCurrent = d.magnetizingReactance() * multiply(dInverse, x[0], x[1], x[2])[1];
+        double input = st6b.reference() - (st6b.tr() > 0.0 ? x[14] : vt);
+        double va = Math.max(st6b.vaMin(), Math.min(st6b.vaMax(), st6b.kpa() * input + x[15]));
+        double vr = Math.max(st6b.vrMin(), Math.min(st6b.vrMax(), st6b.kff() * va + st6b.km() * (va - st6b.kg() * x[16])));
+        double limited = Math.min(vr, Math.max(st6b.vrMin(), st6b.klr() * (st6b.kcl() * st6b.ilr() - fieldCurrent)));
+        double vb = Math.min(rectified(st6b.kp() * vt, st6b.kc(), x), st6b.vbMax());
+        return limited * vb;
+    }
+
     /** ATP's limiter step {@code 0.5 (1 + x / sqrt(x^2 + 1e-8))}. */
     private static double limiterStep(double x) {
         return 0.5 * (1.0 + x / Math.sqrt(x * x + 1.0e-8));
@@ -612,6 +650,16 @@ final class ParkShortCircuitReference {
         }
         if (ac8b != null) {
             return rectified(x[18], ac8b.kc(), x);
+        }
+        if (st6b != null) {
+            double vt = Math.hypot(preFaultTerminal[0], preFaultTerminal[1]);
+            double fieldVoltage = st6bFieldVoltage(x, vt);
+            for (int pass = 0; pass < 4; pass++) {
+                double[] terminal = terminal(x, rates(x, fieldVoltage));
+                vt = Math.hypot(terminal[0], terminal[1]);
+                fieldVoltage = st6bFieldVoltage(x, vt);
+            }
+            return fieldVoltage;
         }
         if (st5b != null) {
             double vt = Math.hypot(preFaultTerminal[0], preFaultTerminal[1]);
