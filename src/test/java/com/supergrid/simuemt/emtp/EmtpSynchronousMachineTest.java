@@ -14,6 +14,7 @@ import com.powsybl.simuemt.extensions.event.BusFault;
 import com.powsybl.simuemt.extensions.event.EmtEvent;
 import com.powsybl.simuemt.extensions.excitation.ExcitationSystemModel;
 import com.powsybl.simuemt.extensions.excitation.SimplifiedAvrModel;
+import com.powsybl.simuemt.extensions.governor.GoverProportionalModel;
 import com.powsybl.simuemt.extensions.governor.Tgov1Model;
 import com.powsybl.simuemt.extensions.governor.TurbineGovernorModel;
 import com.powsybl.simuemt.extensions.machine.SubtransientMachineModel;
@@ -95,16 +96,58 @@ class EmtpSynchronousMachineTest {
     }
 
     @Test
-    void refusesTheMachineWhileItsGovernorIsEnabled(@TempDir Path tempDir) {
+    void refusesTheMachineWhileAGovernorItDoesNotWriteIsEnabled(@TempDir Path tempDir) {
         Network network = EmtExtensionsXmlReader.readNetwork(ExampleNetworks.resource("/two-bus.xiidm"), ExampleNetworks.resource("/two-bus-extensions.xml"));
-        network.getGenerator("GEN").addExtension(TurbineGovernorModel.class, new Tgov1Model(true, 0.05, 0.5, 0.0, 1.2, 3.0, 10.0, 0.0));
+        network.getGenerator("GEN").addExtension(TurbineGovernorModel.class, new GoverProportionalModel(true, 20.0, 120.0, 0.0, 100.0));
 
         assertThatThrownBy(() -> EmtpNetlistWriter.write(network, tempDir, SETTINGS))
                 .isInstanceOf(PowsyblException.class)
                 .hasMessageContaining("generator 'GEN'")
-                .hasMessageContaining("Tgov1Model is not written yet")
+                .hasMessageContaining("GoverProportionalModel is not written yet")
                 .hasMessageNotContaining("SimplifiedAvrModel")
                 .hasMessageNotContaining("Pss1AModel");
+    }
+
+    /**
+     * A TGOV1 governor - droop 0.05, T1 0.2 s, valve within 0 and 1.2, T2/T3 0.3/1.0 s, Dt 0.5 - on the loaded machine, its field held:
+     * its mass's power control signal before the field voltage's, the speed observed for its deviation; its demand {@code Pm0 -
+     * dw / R}, its valve, its turbine, {@code Pm = turbine - Dt dw}, each at the load flow's mechanical power.
+     */
+    @Test
+    void writesTheGovernorAsAtpsTacsHasIt(@TempDir Path tempDir) throws IOException {
+        Network network = loadedMachineWithFieldHeld();
+        network.getGenerator("GEN").addExtension(TurbineGovernorModel.class, new Tgov1Model(true, 0.05, 0.2, 0.0, 1.2, 0.3, 1.0, 0.5));
+        List<String> lines = Files.readAllLines(EmtpNetlistWriter.write(network, tempDir, SETTINGS), StandardCharsets.ISO_8859_1);
+
+        assertThat(lines).contains("_SM;GENa;7;5;B1a,GEN_Pm_1,GEN_Vf,GEN_Omega_1,,", "CTRL=0 0 0 1 0,", "0 1 0 0 4", "_c_fu;GEN_DW;2;2;GEN_DW,GEN_Omega_1,");
+        int demand = lines.indexOf("_c_fu;GEN_GOV;2;2;GEN_GOV,GEN_DW,");
+        double pm0 = Double.parseDouble(lines.get(demand + 1).split(",")[0]);
+        // The air-gap power: the load flow's 100.25 MW (B1 to the line's far end) and the stator's losses, on 100 MVA.
+        assertThat(pm0).isBetween(1.0, 1.01);
+        assertThat(lines.get(demand + 2)).endsWith("-u[1]/0.05000000000000000");
+        int valve = lines.indexOf("_c_fslim;GEN_VALVE;4;4;GEN_VALVE,GEN_GOV,0,0,");
+        assertThat(lines.get(valve + 1)).endsWith(",1.200000000000000,0.000000000000000,1,1,2,1,S1,");
+        assertThat(lines.subList(valve + 2, valve + 5)).containsExactly("1", ";", "1 0.2000000000000000");
+        int turbine = lines.indexOf("_c_fs;GEN_TURB;2;2;GEN_TURB,GEN_VALVE,");
+        assertThat(lines.subList(turbine + 2, turbine + 5)).containsExactly("1.000000000000000 0.3000000000000000", ";", "1 1.000000000000000");
+        int power = lines.indexOf("_c_fu;GEN_PM;3;3;GEN_Pm_1,GEN_TURB,GEN_DW,");
+        assertThat(lines.get(power + 2)).isEqualTo("u[1]-0.5000000000000000*u[2]");
+    }
+
+    /**
+     * The loaded machine shorted solidly at the line's far end, rotor free, field held, its TGOV1 governor in service: the machine
+     * sheds its load and speeds up, the governor closing its valve - against the reference with the same governor ({@link
+     * ParkShortCircuitReference.Governor}). Kept in {@code target/emtp/machine-governed-short}.
+     *
+     * <p>Run 2026-11-14: 45 crests, the worst 1.0e-5 off, every instant within 0.6 us of the first's; the governor's share, the 45th crest
+     * 254 us later than with the mechanical power held.
+     */
+    @Test
+    @Tag("emtp")
+    void theGovernedMachineFollowsParksEquationsThroughTheShort() {
+        Network network = loadedMachineWithFieldHeld();
+        network.getGenerator("GEN").addExtension(TurbineGovernorModel.class, new Tgov1Model(true, 0.05, 0.2, 0.0, 1.2, 0.3, 1.0, 0.5));
+        assertShortFollowsParksEquations(network, 0.0, false, 1.0, 0.45, "machine-governed-short");
     }
 
     /**
@@ -121,7 +164,7 @@ class EmtpSynchronousMachineTest {
         assertThat(lines).contains("_SM;GENa;8;6;B1a,GEN_Vf,GEN_Omega_1,GEN_vd,GEN_vq,,", "0 1 0 0 0", "MSu=1 0 1,",
                 "_c_fu;GEN_DW;2;2;GEN_DW,GEN_Omega_1,", "u[1]-1");
         int washout = lines.indexOf("_c_fs;GEN_XW;2;2;GEN_XW,GEN_DW,");
-        assertThat(lines.subList(washout + 1, washout + 5)).containsExactly("0,1,2,2,12.00000000000000,S1,", "0.000000000000000 9.000000000000000",
+        assertThat(lines.subList(washout + 1, washout + 5)).containsExactly("0.000000000000000,1,2,2,12.00000000000000,S1,", "0.000000000000000 9.000000000000000",
                 ";", "1 9.000000000000000");
         int first = lines.indexOf("_c_fs;GEN_Y1;2;2;GEN_Y1,GEN_XW,");
         assertThat(lines.subList(first + 2, first + 5)).containsExactly("1.000000000000000 0.1200000000000000", ";", "1 0.06000000000000000");
@@ -383,8 +426,11 @@ class EmtpSynchronousMachineTest {
         ParkShortCircuitReference.Stabilizer stabilizer = generator.getExtension(PssModel.class) instanceof Pss1AModel pss && pss.isEnabled()
                 ? new ParkShortCircuitReference.Stabilizer(pss.getGain(), pss.getWashoutTimeConstant(), pss.getLeadTimeConstant(), pss.getLagTimeConstant(),
                         pss.getLeadTimeConstant2(), pss.getLagTimeConstant2(), pss.getOutputLimit()) : null;
+        ParkShortCircuitReference.Governor governor = generator.getExtension(TurbineGovernorModel.class) instanceof Tgov1Model tgov1 && tgov1.isEnabled()
+                ? new ParkShortCircuitReference.Governor(tgov1.getDroop(), tgov1.getGovernorTimeConstant(), tgov1.getValveMin(), tgov1.getValveMax(),
+                        tgov1.getTurbineLeadTimeConstant(), tgov1.getTurbineLagTimeConstant(), tgov1.getTurbineDamping()) : null;
         ParkShortCircuitReference reference = new ParkShortCircuitReference(machine, (line.getR() + faultOhms) / baseOhms, line.getX() / baseOhms, FREQUENCY,
-                v, i, speedHeld, regulator, stabilizer);
+                v, i, speedHeld, regulator, stabilizer, governor);
 
         String b1a = EmtpNetlistWriter.voltageScope("B1", 'A');
         double[] before = SwitchingWindows.leadingUpTo(faultStart, 0.02, TIME_STEP);
