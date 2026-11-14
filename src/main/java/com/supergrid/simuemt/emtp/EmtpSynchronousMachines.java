@@ -10,9 +10,11 @@ import com.powsybl.iidm.network.extensions.GeneratorFortescue;
 import com.powsybl.simuemt.extensions.GeneratorModel;
 import com.powsybl.simuemt.extensions.circuit.MachineInitialState;
 import com.powsybl.simuemt.extensions.circuit.MachineSequenceImpedances;
+import com.powsybl.simuemt.extensions.excitation.Ac1AModel;
 import com.powsybl.simuemt.extensions.excitation.Dc1AModel;
 import com.powsybl.simuemt.extensions.excitation.ExcitationSystemModel;
 import com.powsybl.simuemt.extensions.excitation.ExponentialSaturation;
+import com.powsybl.simuemt.extensions.excitation.RectifierRegulation;
 import com.powsybl.simuemt.extensions.excitation.SimplifiedAvrModel;
 import com.powsybl.simuemt.extensions.excitation.St1AModel;
 import com.powsybl.simuemt.extensions.excitation.limiter.DiscontinuousExcitationControlModel;
@@ -86,6 +88,14 @@ import static com.supergrid.simuemt.emtp.EmtpNetlistWriter.number;
  * (Ke + Se(Efd0)) Efd0}; its exciter {@code Te dEfd/dt = Vr - (Ke + Se(Efd)) Efd} - an integrator ({@code _c_fs}, {@code 1 / (Te s)})
  * on a function reading the field voltage it drives -, {@code Se(E) = Aex exp(Bex E)} fitted through its two saturation points
  * ({@link ExponentialSaturation}); and its rate feedback {@code Kf s / (1 + sTf)} off the field voltage, left out when {@code Kf = 0}.
+ *
+ * <p>An enabled {@link Ac1AModel} drives it as ATP's TACS has it, the field current observed: its transducer; the error {@code Vref +
+ * Vs - VC - VF}, {@code Vref = Vt0 + Vr0 / Ka}; its lead-lag, left out when {@code Tb = 0}; {@code VA = Ka / (1 + sTa)} within its
+ * dynamic limits, then held within {@code [VRMIN, VRMAX]} - static -; its exciter {@code Te dVe/dt = VB - Ve (Ke + Se(Ve)) - Kd Ifd},
+ * an integrator, at rest on the {@code Ve0} that delivers {@code Efd0} into {@code Ifd0 = Efd0} ({@link
+ * RectifierRegulation#exciterVoltageFor}); the field voltage {@code max(Ve, 1e-3) FEX(IN)}, {@code IN = min(Kc Ifd / Ve, 1)}, {@link
+ * RectifierRegulation}'s three arcs blended at its two knots by ATP's smooth steps; and its rate feedback {@code Kf s / (1 + sTf)}
+ * off {@code Ve}, from its rest.
  *
  * <p>An enabled {@link Pss1AModel} with any of them adds its output to that error, as ATP's TACS has it: the machine observes its rotor's speed
  * per unit ({@code Omega_1}, its one mass's, on the header before {@code vd} and {@code vq}); a function its deviation {@code w - 1};
@@ -165,6 +175,7 @@ final class EmtpSynchronousMachines {
         }
         for (Object extension : generator.getExtensions()) {
             if (isEnabled(extension) && !(extension instanceof SimplifiedAvrModel) && !(extension instanceof St1AModel) && !(extension instanceof Dc1AModel)
+                    && !(extension instanceof Ac1AModel)
                     && !(extension instanceof Pss1AModel)
                     && !(extension instanceof Tgov1Model)) {
                 reasons.add("its " + extension.getClass().getSimpleName() + " is not written yet");
@@ -331,6 +342,10 @@ final class EmtpSynchronousMachines {
             devices.addAll(dc1a(dc1a, name, initial, pss != null));
             return devices;
         }
+        if (excitation instanceof Ac1AModel ac1a) {
+            devices.addAll(ac1a(ac1a, name, initial, pss != null));
+            return devices;
+        }
         SimplifiedAvrModel avr = (SimplifiedAvrModel) excitation;
         double ka = avr.getGain();
         String error = signal(name, "VERR");
@@ -461,15 +476,140 @@ final class EmtpSynchronousMachines {
         return devices;
     }
 
-    /** A function ({@code _c_fu}) of {@code inputs}, {@code u[1]} on, its output {@code output} at {@code history} at the start. */
-    private static Device function(String device, String output, List<String> inputs, double history, String expression) {
-        return new Device("_c_fu", List.of("_c_fu;" + device + ";" + (inputs.size() + 1) + ";" + (inputs.size() + 1) + ";" + output + ","
-                + String.join(",", inputs) + ",", number(history) + ",S1,", expression));
+    /** The floor under an AC exciter's voltage, which divides into {@code IN}: ATP's. */
+    private static final double EXCITER_VOLTAGE_FLOOR = 1.0e-3;
+    /** The sharpness of the smooth steps blending the rectifier's arcs: ATP's. */
+    private static final double FEX_SWITCH_EPS = 1.0e-6;
+
+    /** AC1A's devices, from the observed {@code vd}, {@code vq} and field current to the field voltage's control signal; the
+     * stabilizer's output {@code VS} added to its error if {@code stabilized}. */
+    private static List<Device> ac1a(Ac1AModel ac1a, String name, MachineInitialState initial, boolean stabilized) {
+        double efd0 = initial.efd();
+        double vt0 = initial.terminalVoltage();
+        double ka = ac1a.getRegulatorGain();
+        double ke = ac1a.getExciterConstant();
+        double kc = ac1a.getRectifierLoadingFactor();
+        ExponentialSaturation saturation = ExponentialSaturation.fit(ac1a.getSaturationVoltage1(), ac1a.getSaturationFactor1(),
+                ac1a.getSaturationVoltage2(), ac1a.getSaturationFactor2());
+        double ve0 = RectifierRegulation.exciterVoltageFor(efd0, kc, efd0);
+        double vr0 = ve0 * (ke + saturation.aex() * Math.exp(saturation.bex() * ve0)) + ac1a.getDemagnetizingFactor() * efd0;
+        String vt = signal(name, "VT");
+        String fieldCurrent = signal(name, FIELD_CURRENT);
+        String ve = signal(name, "VE");
+        List<Device> devices = new ArrayList<>();
+        devices.add(function(name + "_VT", vt, List.of(signal(name, "vd"), signal(name, "vq")), vt0, "SQRT(u[1]*u[1]+u[2]*u[2])"));
+        String measured = vt;
+        if (ac1a.getTransducerTimeConstant() > 0.0) {
+            measured = signal(name, "VC");
+            devices.add(firstOrder(name + "_VC", measured, vt, vt0, 1.0, 1.0, 0.0, ac1a.getTransducerTimeConstant()));
+        }
+        List<String> errorInputs = new ArrayList<>(List.of(measured));
+        StringBuilder error = new StringBuilder(number(vt0 + vr0 / ka) + "-u[1]");
+        if (stabilized) {
+            errorInputs.add(signal(name, "VS"));
+            error.append("+u[").append(errorInputs.size()).append("]");
+        }
+        if (ac1a.getRateFeedbackGain() != 0.0 && ac1a.getRateFeedbackTimeConstant() > 0.0) {
+            // Off Ve's departure from its rest, so that the washout starts at rest.
+            String departure = signal(name, "DVE");
+            String feedback = signal(name, "VRF");
+            devices.add(function(name + "_DVE", departure, List.of(ve), 0.0, "u[1]-" + number(ve0)));
+            devices.add(firstOrder(name + "_VRF", feedback, departure, 0.0, 1.0, 0.0, ac1a.getRateFeedbackGain(), ac1a.getRateFeedbackTimeConstant()));
+            errorInputs.add(feedback);
+            error.append("-u[").append(errorInputs.size()).append("]");
+        }
+        String errorSignal = signal(name, "VERR");
+        devices.add(function(name + "_VERR", errorSignal, errorInputs, vr0 / ka, error.toString()));
+        String shaped = errorSignal;
+        if (ac1a.getLagTimeConstant() > 0.0) {
+            shaped = signal(name, "LL1");
+            devices.add(firstOrder(name + "_LL1", shaped, errorSignal, vr0 / ka, 1.0, 1.0, ac1a.getLeadTimeConstant(), ac1a.getLagTimeConstant()));
+        }
+        String regulator = signal(name, "VA");
+        devices.add(new Device("_c_fslim", List.of("_c_fslim;" + name + "_VA;4;4;" + regulator + "," + shaped + ",0,0,",
+                number(vr0) + "," + number(ac1a.getRegulatorOutputMax()) + "," + number(ac1a.getRegulatorOutputMin()) + ",1,1,2," + number(ka) + ",S1,",
+                "1", ";", "1 " + number(ac1a.getRegulatorTimeConstant()))));
+        String drive = signal(name, "VB");
+        devices.add(new Device("_c_lim", List.of("_c_lim;" + name + "_VB;2;2;" + drive + "," + regulator + ",",
+                number(ac1a.getFieldVoltageMax()) + "," + number(ac1a.getFieldVoltageMin()) + ",1,S1,")));
+        // The exciter: 1 / (Te s) on VB - Ve (Ke + Aex exp(Bex Ve)) - Kd Ifd, at rest on 0 with Ve at Ve0.
+        String buildup = signal(name, "VEX");
+        devices.add(function(name + "_VEX", buildup, List.of(drive, ve, fieldCurrent), 0.0,
+                "u[1]-u[2]*((" + number(ke) + ")+(" + number(saturation.aex()) + ")*EXP((" + number(saturation.bex()) + ")*u[2]))-("
+                        + number(ac1a.getDemagnetizingFactor()) + ")*u[3]"));
+        devices.add(new Device("_c_fs", List.of("_c_fs;" + name + "_VE;2;2;" + ve + "," + buildup + ",", number(ve0) + ",1,1,2,1,S1,",
+                "1", ";", "0 " + number(ac1a.getExciterTimeConstant()))));
+        // The field voltage: max(Ve, floor) FEX(IN), IN = min(Kc Ifd / max(Ve, floor), 1).
+        String floored = "0.5*(u[1]+" + number(EXCITER_VOLTAGE_FLOOR) + "+ABS(u[1]-" + number(EXCITER_VOLTAGE_FLOOR) + "))";
+        if (kc == 0.0) {
+            devices.add(function(name + "_EF", fieldVoltageSignal(name), List.of(ve), efd0, floored));
+            return devices;
+        }
+        double in0 = kc * efd0 / ve0;
+        String loadingRaw = signal(name, "INR");
+        String loading = signal(name, "IN");
+        devices.add(function(name + "_INR", loadingRaw, List.of(ve, fieldCurrent), in0, "(" + number(kc) + ")*u[2]/(" + floored + ")"));
+        devices.add(function(name + "_IN", loading, List.of(loadingRaw), in0, "0.5*(u[1]+1-ABS(u[1]-1))"));
+        String step1 = signal(name, "S1");
+        String step2 = signal(name, "S2");
+        devices.add(function(name + "_S1", step1, List.of(loading), 0.0, smoothStep(RectifierRegulation.FIRST_KNOT)));
+        devices.add(function(name + "_S2", step2, List.of(loading), 0.0, smoothStep(RectifierRegulation.SECOND_KNOT)));
+        String arc = signal(name, "M2");
+        String underRoot = "(" + number(RectifierRegulation.MODE2_RADIUS_SQUARED) + "-u[1]*u[1])";
+        devices.add(function(name + "_M2", arc, List.of(loading), 0.0, "SQRT(0.5*(" + underRoot + "+ABS" + underRoot + "))"));
+        String factor = signal(name, "FEX");
+        devices.add(function(name + "_FEX", factor, List.of(loading, step1, step2, arc), RectifierRegulation.fex(in0),
+                "(1-u[2])*(1-" + number(RectifierRegulation.MODE1_SLOPE) + "*u[1])+u[2]*(1-u[3])*u[4]+u[3]*"
+                        + number(RectifierRegulation.MODE3_SLOPE) + "*(1-u[1])"));
+        devices.add(function(name + "_EF", fieldVoltageSignal(name), List.of(ve, factor), efd0, floored + "*u[2]"));
+        return devices;
     }
 
-    /** Whether the machine's excitation system reads its field current: an ST1A's ceiling or field-current limiter. */
+    /** ATP's smooth unit step at {@code threshold} on {@code u[1]}: {@code 0.5 (1 + d / sqrt(d^2 + eps))}. */
+    private static String smoothStep(double threshold) {
+        String d = "(u[1]-" + number(threshold) + ")";
+        return "0.5*(1+" + d + "/SQRT(" + d + "*" + d + "+" + number(FEX_SWITCH_EPS) + "))";
+    }
+
+    /** A function ({@code _c_fu}) of {@code inputs}, {@code u[1]} on, its output {@code output} at {@code history} at the start. */
+    private static Device function(String device, String output, List<String> inputs, double history, String expression) {
+        List<String> lines = new ArrayList<>(List.of("_c_fu;" + device + ";" + (inputs.size() + 1) + ";" + (inputs.size() + 1) + ";" + output + ","
+                + String.join(",", inputs) + ",", number(history) + ",S1,"));
+        lines.addAll(wrapped(expression));
+        return new Device("_c_fu", lines);
+    }
+
+    /** The longest expression line written: EMTP cuts a netlist line short past some 100 characters, and reads an expression on as
+     * many lines as it takes, as EMTPWorks writes one wrapped at 90. */
+    private static final int EXPRESSION_LINE = 80;
+
+    /** {@code expression} on lines of at most {@link #EXPRESSION_LINE} characters, each ending on an operator - never inside a
+     * number, its exponent's sign included. */
+    static List<String> wrapped(String expression) {
+        List<String> lines = new ArrayList<>();
+        String rest = expression;
+        while (rest.length() > EXPRESSION_LINE) {
+            int cut = -1;
+            for (int k = EXPRESSION_LINE; k > 0 && cut < 0; k--) {
+                char c = rest.charAt(k);
+                if ((c == '+' || c == '-' || c == '*' || c == '/') && Character.toUpperCase(rest.charAt(k - 1)) != 'E') {
+                    cut = k + 1;
+                }
+            }
+            if (cut <= 0) {
+                break;
+            }
+            lines.add(rest.substring(0, cut));
+            rest = rest.substring(cut);
+        }
+        lines.add(rest);
+        return lines;
+    }
+
+    /** Whether the machine's excitation system reads its field current: an ST1A's ceiling or field-current limiter, an AC1A. */
     private static boolean readsFieldCurrent(Generator generator) {
-        return regulator(generator) instanceof St1AModel st1a && (st1a.getRectifierLoadingFactor() != 0.0 || st1a.getFieldCurrentLimiterGain() != 0.0);
+        return regulator(generator) instanceof St1AModel st1a && (st1a.getRectifierLoadingFactor() != 0.0 || st1a.getFieldCurrentLimiterGain() != 0.0)
+                || regulator(generator) instanceof Ac1AModel;
     }
 
     /** A first-order transfer function {@code gain (n0 + n1 s) / (1 + d1 s)} from {@code input} to {@code output}, at rest at {@code
@@ -489,10 +629,11 @@ final class EmtpSynchronousMachines {
         return regulator(generator) != null && generator.getExtension(PssModel.class) instanceof Pss1AModel pss && pss.isEnabled() ? pss : null;
     }
 
-    /** The machine's enabled excitation system this writes - a simplified regulator, an ST1A or a DC1A -, or {@code null}. */
+    /** The machine's enabled excitation system this writes - a simplified regulator, an ST1A, a DC1A or an AC1A -, or {@code null}. */
     private static ExcitationSystemModel regulator(Generator generator) {
         ExcitationSystemModel excitation = generator.getExtension(ExcitationSystemModel.class);
-        return (excitation instanceof SimplifiedAvrModel || excitation instanceof St1AModel || excitation instanceof Dc1AModel) && excitation.isEnabled()
+        return (excitation instanceof SimplifiedAvrModel || excitation instanceof St1AModel || excitation instanceof Dc1AModel
+                || excitation instanceof Ac1AModel) && excitation.isEnabled()
                 ? excitation : null;
     }
 
