@@ -14,7 +14,9 @@ import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.ThreeWindingsTransformer;
 import com.powsybl.iidm.network.TwoWindingsTransformer;
 import com.powsybl.iidm.network.extensions.ThreeWindingsTransformerFortescue;
+import com.powsybl.iidm.network.extensions.ThreeWindingsTransformerPhaseAngleClock;
 import com.powsybl.iidm.network.extensions.TwoWindingsTransformerFortescue;
+import com.powsybl.iidm.network.extensions.TwoWindingsTransformerPhaseAngleClock;
 import com.powsybl.iidm.network.extensions.WindingConnectionType;
 import com.powsybl.simuemt.extensions.GeneratorModel;
 import com.powsybl.simuemt.extensions.LoadModel;
@@ -79,10 +81,10 @@ import java.util.stream.Stream;
  * ({@link BusFault#onResistanceOhm}) to earth or to the other phase - as ATP writes it. Cleared at its current's first zero after the
  * order, the switch's current margin 0, or at the order, a margin no current reaches - ATP's own.
  *
- * <p>EMTP starts the run from its own steady-state solution, every source active from {@code -1} s. Anything else the network holds -
- * another kind of generator or load, a line's shunt conductance,
- * a switch - or the run goes through is refused, said
- * so, until written.
+ * <p>EMTP starts the run from its own steady-state solution, every source active from {@code -1} s. An element disconnected at every end
+ * is out of service and not written. Anything else the network holds - another kind of generator or load, a line's shunt conductance,
+ * an element disconnected at some ends only, a line model, zero-sequence data or an arrester on a line or a transformer, a ground, a
+ * switch - or the run goes through is refused, said so, until written.
  *
  * @author Jean-Baptiste Heyberger : jean-baptiste.heyberger@supergrid-institute.com
  */
@@ -123,19 +125,28 @@ public final class EmtpNetlistWriter {
             throw new PowsyblException("SimuEmt Plus: EMTP cannot write network '" + network.getId() + "' yet: " + String.join("; ", refused));
         }
         Devices devices = new Devices();
+        // An element disconnected at every end is out of service: not written (one disconnected at some ends only is refused).
         for (Line line : network.getLines()) {
-            writeLine(devices, line, settings);
+            if (inService(line)) {
+                writeLine(devices, line, settings);
+            }
         }
         for (TwoWindingsTransformer transformer : network.getTwoWindingsTransformers()) {
-            writeTransformer(devices, transformer, settings);
+            if (inService(transformer)) {
+                writeTransformer(devices, transformer, settings);
+            }
         }
         for (ThreeWindingsTransformer transformer : network.getThreeWindingsTransformers()) {
-            writeThreeWindingsTransformer(devices, transformer, settings);
+            if (inService(transformer)) {
+                writeThreeWindingsTransformer(devices, transformer, settings);
+            }
         }
         for (Load load : network.getLoads()) {
-            writeLoad(devices, load, settings);
+            if (inService(load)) {
+                writeLoad(devices, load, settings);
+            }
         }
-        for (Generator generator : network.getGenerators()) {
+        for (Generator generator : network.getGeneratorStream().filter(EmtpNetlistWriter::inService).toList()) {
             if (EmtpSynchronousMachines.isMachine(generator)) {
                 Bus bus = generator.getTerminal().getBusBreakerView().getBus();
                 devices.addBlock("_SM", EmtpSynchronousMachines.lines(generator, id(generator), phaseNodes(bus.getId()),
@@ -670,6 +681,22 @@ public final class EmtpNetlistWriter {
                 reasons.add("line '" + line.getId() + "' has a shunt conductance");
             }
         }
+        // An end disconnected while another is connected - an open-ended line, a transformer open at a winding - is not written yet.
+        network.getConnectableStream().map(c -> (com.powsybl.iidm.network.Connectable<?>) c).filter(c -> c.getTerminals().size() > 1).forEach(c -> {
+            long connected = c.getTerminals().stream().filter(t -> ((com.powsybl.iidm.network.Terminal) t).getBusBreakerView().getBus() != null).count();
+            if (connected > 0 && connected < c.getTerminals().size()) {
+                reasons.add("'" + c.getId() + "' is disconnected at some of its ends, which is not written yet");
+            }
+        });
+        // What a line or a transformer carries beyond its circuit and its winding connections - a line model, zero-sequence data, an
+        // arrester - is not written yet: refused rather than left out.
+        Stream.of(network.getLineStream(), network.getTwoWindingsTransformerStream(), network.getThreeWindingsTransformerStream())
+                .flatMap(s -> s.map(c -> (Identifiable<?>) c))
+                .forEach(c -> c.getExtensions().stream()
+                        .filter(e -> !(e instanceof TwoWindingsTransformerFortescue || e instanceof ThreeWindingsTransformerFortescue
+                                || e instanceof TwoWindingsTransformerPhaseAngleClock || e instanceof ThreeWindingsTransformerPhaseAngleClock))
+                        .forEach(e -> reasons.add("'" + c.getId() + "' has a " + e.getClass().getSimpleName().replace("Impl", "")
+                                + ", which is not written yet")));
         for (Load load : network.getLoads()) {
             if (load.getExtension(LoadModel.class) != null) {
                 reasons.add("load '" + load.getId() + "' has a load model, " + load.getExtension(LoadModel.class).getClass().getSimpleName());
@@ -699,12 +726,17 @@ public final class EmtpNetlistWriter {
                 reasons.add("transformer '" + transformer.getId() + "': " + String.join(", ", windingReasons));
             }
         }
-        Stream.of(network.getShuntCompensatorStream(),
+        Stream.of(network.getGroundStream(), network.getShuntCompensatorStream(),
                         network.getSwitchStream(), network.getHvdcLineStream(), network.getStaticVarCompensatorStream(),
                         network.getBatteryStream(), network.getVoltageSourceConverterStream())
                 .flatMap(s -> s.map(Identifiable::getId))
                 .forEach(id -> reasons.add("'" + id + "' is of a kind not written yet"));
         return reasons;
+    }
+
+    /** Whether {@code connectable} is connected at some end - disconnected at every one, it is out of service. */
+    private static boolean inService(com.powsybl.iidm.network.Connectable<?> connectable) {
+        return connectable.getTerminals().stream().anyMatch(t -> ((com.powsybl.iidm.network.Terminal) t).getBusBreakerView().getBus() != null);
     }
 
     /** Bus {@code busId}'s node of {@code phase}: {@code B1a}. */
