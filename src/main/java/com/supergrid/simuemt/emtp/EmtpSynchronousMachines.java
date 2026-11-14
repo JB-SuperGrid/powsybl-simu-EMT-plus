@@ -1020,7 +1020,7 @@ final class EmtpSynchronousMachines {
     }
 
     /** A function ({@code _c_fu}) of {@code inputs}, {@code u[1]} on, its output {@code output} at {@code history} at the start. */
-    private static Device function(String device, String output, List<String> inputs, double history, String expression) {
+    static Device function(String device, String output, List<String> inputs, double history, String expression) {
         List<String> lines = new ArrayList<>(List.of("_c_fu;" + device + ";" + (inputs.size() + 1) + ";" + (inputs.size() + 1) + ";" + output + ","
                 + String.join(",", inputs) + ",", number(history) + ",S1,"));
         lines.addAll(wrapped(expression));
@@ -1064,7 +1064,7 @@ final class EmtpSynchronousMachines {
 
     /** A first-order transfer function {@code gain (n0 + n1 s) / (1 + d1 s)} from {@code input} to {@code output}, at rest at {@code
      * rest}. */
-    private static Device firstOrder(String device, String output, String input, double rest, double gain, double n0, double n1, double d1) {
+    static Device firstOrder(String device, String output, String input, double rest, double gain, double n0, double n1, double d1) {
         return new Device("_c_fs", List.of("_c_fs;" + device + ";2;2;" + output + "," + input + ",", number(rest) + ",1,2,2," + number(gain) + ",S1,",
                 number(n0) + " " + number(n1), ";", "1 " + number(d1)));
     }
