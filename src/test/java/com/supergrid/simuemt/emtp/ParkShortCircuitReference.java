@@ -42,6 +42,7 @@ final class ParkShortCircuitReference {
     private final double fieldVoltagePerEfd;
     private final Regulator regulator;
     private final St1A st1a;
+    private final Dc1A dc1a;
     private final Stabilizer stabilizer;
     private final Governor governor;
     private final double voltageReference;
@@ -74,6 +75,14 @@ final class ParkShortCircuitReference {
     }
 
     /**
+     * Upstream's DC1A, as ATP's TACS writes it: {@code Vr = Ka / (1 + sTa) (Vref + Vs - Vt - VF)}, its state within {@code [vrMin,
+     * vrMax]}; {@code Te dEfd/dt = Vr - (Ke + Aex exp(Bex Efd)) Efd}; {@code VF = Kf s / (1 + sTf) Efd}, left out when {@code Kf = 0};
+     * {@code Vref = Vt0 + Vr0 / Ka}.
+     */
+    record Dc1A(double ka, double ta, double vrMin, double vrMax, double ke, double te, double kf, double tf, double aex, double bex) {
+    }
+
+    /**
      * Upstream's PSS1A, its output added to the regulator's error: the speed deviation {@code w - 1} through the washout {@code Ks sTw
      * / (1 + sTw)} and the lead-lags {@code (1 + sT1) / (1 + sT2)}, {@code (1 + sT3) / (1 + sT4)}, all at rest at 0, held within
      * {@code [-limit, limit]} - a clamp on the output, as ATP's after the second lead-lag and EMTP's static limiter.
@@ -102,12 +111,12 @@ final class ParkShortCircuitReference {
      * {@code null} -, its mechanical power driven by {@code governor} - held if {@code null}. */
     ParkShortCircuitReference(SubtransientMachineModel machine, double re, double xe, double frequencyHz, double[] v, double[] i,
                               boolean speedHeld, Regulator regulator, Stabilizer stabilizer, Governor governor) {
-        this(machine, re, xe, frequencyHz, v, i, speedHeld, regulator, null, stabilizer, governor);
+        this(machine, re, xe, frequencyHz, v, i, speedHeld, regulator, null, null, stabilizer, governor);
     }
 
     /** The same, its field voltage driven by an ST1A {@code st1a} if not {@code null}, in place of the simplified regulator. */
     ParkShortCircuitReference(SubtransientMachineModel machine, double re, double xe, double frequencyHz, double[] v, double[] i,
-                              boolean speedHeld, Regulator regulator, St1A st1a, Stabilizer stabilizer, Governor governor) {
+                              boolean speedHeld, Regulator regulator, St1A st1a, Dc1A dc1a, Stabilizer stabilizer, Governor governor) {
         this.omega = 2.0 * Math.PI * frequencyHz;
         this.re = re;
         this.xe = xe;
@@ -142,16 +151,23 @@ final class ParkShortCircuitReference {
         this.fieldVoltagePerEfd = d.fieldResistance() / omega / xad;
         this.regulator = regulator;
         this.st1a = st1a;
-        this.stabilizer = regulator == null && st1a == null ? null : stabilizer;
+        this.dc1a = dc1a;
+        this.stabilizer = regulator == null && st1a == null && dc1a == null ? null : stabilizer;
         this.governor = governor;
         double efd = xad * fieldCurrent;
         double vt0 = Math.hypot(vdq[0], vdq[1]);
-        this.voltageReference = st1a != null ? vt0 + efd / st1a.ka() : regulator == null ? Double.NaN : vt0 + efd / regulator.gain();
+        double vr0 = dc1a == null ? 0.0 : (dc1a.ke() + dc1a.aex() * Math.exp(dc1a.bex() * efd)) * efd;
+        this.voltageReference = dc1a != null ? vt0 + vr0 / dc1a.ka() : st1a != null ? vt0 + efd / st1a.ka()
+                : regulator == null ? Double.NaN : vt0 + efd / regulator.gain();
         this.mechanicalPower = psid * iq - psiq * id;
         // The stator's flux linkages with the line's leakage added, the currents unchanged through the short.
         this.state = new double[] {psid - xe * id, -xad * id + (xad + d.fieldReactance()) * fieldCurrent, -xad * id + xad * fieldCurrent,
             psiq - xe * iq, -xaq * iq, -xaq * iq, 1.0, 0.0, efd, 0.0, 0.0, 0.0, mechanicalPower, mechanicalPower,
-            vt0, efd / (st1a == null ? 1.0 : st1a.ka()), efd / (st1a == null ? 1.0 : st1a.ka()), efd};
+            vt0, efd / (st1a == null ? 1.0 : st1a.ka()), efd / (st1a == null ? 1.0 : st1a.ka()), efd, efd};
+        if (dc1a != null) {
+            // The regulator x[8] at Vr0, the field voltage x[18] at Efd0.
+            state[8] = vr0;
+        }
     }
 
     /** The terminal voltage before the short in the rotor's frame, {@code {vd, vq}}. */
@@ -202,7 +218,7 @@ final class ParkShortCircuitReference {
             rates[12] = valveRate;
             rates[13] = (x[12] - x[13]) / governor.t3();
         }
-        if (regulator != null || st1a != null) {
+        if (regulator != null || st1a != null || dc1a != null) {
             double[] terminal = terminal(x, rates);
             double stabilizing = 0.0;
             if (stabilizer != null) {
@@ -218,6 +234,20 @@ final class ParkShortCircuitReference {
             }
             if (st1a != null) {
                 st1aRates(x, rates, Math.hypot(terminal[0], terminal[1]), fieldVoltage, stabilizing);
+                return rates;
+            }
+            if (dc1a != null) {
+                boolean feedback = dc1a.kf() != 0.0 && dc1a.tf() > 0.0;
+                double rateFeedback = feedback ? dc1a.kf() / dc1a.tf() * (x[18] - x[17]) : 0.0;
+                if (feedback) {
+                    rates[17] = (x[18] - x[17]) / dc1a.tf();
+                }
+                double vrRate = (dc1a.ka() * (voltageReference + stabilizing - Math.hypot(terminal[0], terminal[1]) - rateFeedback) - x[8]) / dc1a.ta();
+                if (x[8] >= dc1a.vrMax() && vrRate > 0.0 || x[8] <= dc1a.vrMin() && vrRate < 0.0) {
+                    vrRate = 0.0;
+                }
+                rates[8] = vrRate;
+                rates[18] = (x[8] - (dc1a.ke() + dc1a.aex() * Math.exp(dc1a.bex() * x[18])) * x[18]) / dc1a.te();
                 return rates;
             }
             double efdRate = (regulator.gain() * (voltageReference + stabilizing - Math.hypot(terminal[0], terminal[1])) - x[8]) / regulator.timeConstant();
@@ -256,6 +286,9 @@ final class ParkShortCircuitReference {
 
     /** The field voltage {@code Efd}: the regulator's state, or an ST1A's field voltage on the terminal voltage it moves. */
     private double fieldVoltage(double[] x) {
+        if (dc1a != null) {
+            return x[18];
+        }
         if (st1a == null) {
             return x[8];
         }
@@ -290,7 +323,7 @@ final class ParkShortCircuitReference {
             -q.damperResistance() * qi[2],
             acceleration,
             omega * (w - 1.0),
-            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
     }
 
     /** The line's drop, {@code Re i + (Xe/w0) di/dt + jwXe i}. */
