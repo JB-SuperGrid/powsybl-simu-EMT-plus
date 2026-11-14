@@ -17,7 +17,9 @@ import com.powsybl.simuemt.extensions.event.BreakerAction;
 import com.powsybl.simuemt.extensions.event.DcFault;
 import com.powsybl.simuemt.extensions.event.DcSwitchOperation;
 import com.powsybl.simuemt.extensions.event.EmtEvent;
+import com.powsybl.simuemt.extensions.hvdc.AveragedConverterModel;
 import com.powsybl.simuemt.extensions.hvdc.AveragedDcChopperModel;
+import com.powsybl.simuemt.extensions.hvdc.AveragedMmcModel;
 import com.powsybl.simuemt.extensions.hvdc.AveragedVscInitialState;
 import com.powsybl.simuemt.extensions.hvdc.AveragedVscModel;
 import com.powsybl.simuemt.extensions.hvdc.DcBreakerModel;
@@ -68,7 +70,9 @@ import static com.supergrid.simuemt.emtp.EmtpSynchronousMachines.function;
  * inductance; the current from the bus into the converter read on the source's observe pin. On the DC side, the current that carries
  * the EMFs' power - {@code (ed id + eq iq) S / max(Vdc, 0.1 Vdc,nom)}, less an {@link AveragedDcChopperModel}'s {@code d Vdc / R} -
  * into DC terminal 1 and out of terminal 2, a controlled current source ({@code _cI}) between nodes of its own tied to the DC nodes by
- * {@link NumericalAids#CURRENT_SOURCE_TIE_RESISTANCE_OHM}; and the DC capacitor across the two DC nodes.
+ * {@link NumericalAids#CURRENT_SOURCE_TIE_RESISTANCE_OHM}; and the DC capacitor across the two DC nodes. An {@link AveragedMmcModel}
+ * running, CIGRE B4.57's type 4: its EMFs behind half an arm, its equivalent capacitor and DC current on a node of its own behind two
+ * thirds of an arm and its DC reactor, its DC voltage measured at its DC terminal.
  *
  * <p><b>Its control</b>, per unit of its rating, the bus voltages read by probes - zero-current controlled current sources whose voltage is
  * observed: an SRF PLL on {@code vq}, the Park transform on its angle {@code theta = theta0 + ws t + int(KP vq + KI int vq)}; the
@@ -122,13 +126,12 @@ final class EmtpVoltageSourceConverters {
     /** Why {@code converter} cannot be written yet - empty if it can. */
     static List<String> unsupportedReasons(VoltageSourceConverter converter) {
         List<String> reasons = new ArrayList<>();
-        if (!(converter.getExtension(VoltageSourceConverterModel.class) instanceof AveragedVscModel model)) {
-            reasons.add("its model is not an averaged two-level VSC");
+        if (!(converter.getExtension(VoltageSourceConverterModel.class) instanceof AveragedVscModel
+                || converter.getExtension(VoltageSourceConverterModel.class) instanceof AveragedMmcModel)) {
+            reasons.add("its model is neither an averaged two-level VSC nor an averaged MMC");
             return reasons;
         }
-        if (model.hasDcReactor()) {
-            reasons.add("its DC reactor is not written yet");
-        }
+        AveragedConverterModel model = (AveragedConverterModel) converter.getExtension(VoltageSourceConverterModel.class);
         if (!(converter.getExtension(VscControlModel.class) == null || converter.getExtension(VscControlModel.class) instanceof GridFollowingControl)) {
             reasons.add("its grid-forming control is not written yet");
             return reasons;
@@ -146,6 +149,9 @@ final class EmtpVoltageSourceConverters {
         DcChopperModel chopper = converter.getExtension(DcChopperModel.class);
         if (chopper != null && !(chopper instanceof AveragedDcChopperModel)) {
             reasons.add("its chopper but the averaged one is not written yet");
+        }
+        if (chopper != null && model.measuresDcVoltageAtTerminal()) {
+            reasons.add("its chopper at its DC terminal, beyond its arms, is not written yet");
         }
         return reasons;
     }
@@ -295,7 +301,7 @@ final class EmtpVoltageSourceConverters {
      * angle displaced by {@code offsetDegrees}, its bus's vector group's. */
     static List<EmtpSynchronousMachines.Device> converter(VoltageSourceConverter converter, String[] phaseNodes, double offsetDegrees,
                                                           EmtpSimulationSettings settings) {
-        AveragedVscModel model = (AveragedVscModel) converter.getExtension(VoltageSourceConverterModel.class);
+        AveragedConverterModel model = (AveragedConverterModel) converter.getExtension(VoltageSourceConverterModel.class);
         AveragedVscInitialState initial = AveragedVscInitialState.of(converter, model);
         GridFollowingControl control = GridFollowingControl.of(converter);
         OuterLoops loops = control.getOuterLoops();
@@ -507,7 +513,7 @@ final class EmtpVoltageSourceConverters {
     /** {@code converter}'s power stage: AC side, phase by phase, its EMF, its stand-in, its reactor and its bus's probe - {@code v} and {@code
      * i} filled with the probes' and the EMFs' current signals -; DC side, its current source, its capacitor, its probes, its pole's
      * stand-in. */
-    private static void powerStage(List<EmtpSynchronousMachines.Device> devices, VoltageSourceConverter converter, AveragedVscModel model,
+    private static void powerStage(List<EmtpSynchronousMachines.Device> devices, VoltageSourceConverter converter, AveragedConverterModel model,
                                    AveragedVscInitialState initial, String[] phaseNodes, String[] v, String[] i, double emfMagnitude, double emfAngle,
                                    double omega, EmtpSimulationSettings settings) {
         String id = sanitize(converter.getId());
@@ -541,7 +547,21 @@ final class EmtpVoltageSourceConverters {
         devices.add(element("_RLC", id + "_NREF", List.of(star), number(NumericalAids.BUS_EARTH_REFERENCE_OHM) + ",0,0,0,0,"));
         devices.add(new EmtpSynchronousMachines.Device("_c_cst", List.of("_c_cst;" + id + "_ZERO;1;1;" + zero + ",", "0,S1,")));
 
-        // The DC side: the current source between its ties, the capacitor, the DC voltages' probes, the pole's stand-in.
+        // The DC side: the current source between its ties, the capacitor, the DC voltages' probes, the pole's stand-in - on the equivalent
+        // capacitor's node, behind the DC series resistance and inductance (an MMC's two thirds of an arm, a DC reactor) if any; the DC
+        // voltage measured there, or at the DC terminal, an MMC's.
+        String terminal = pole;
+        double seriesOhm = 0.0;
+        if (model.hasDcReactor()) {
+            double baseKv = converter.getTerminal1().getVoltageLevel().getNominalV();
+            double seriesH = model.dcSeriesInductanceH(baseKv, omega);
+            seriesOhm = model.dcSeriesResistanceOhm(baseKv);
+            pole = id + "_CP";
+            devices.add(element("_RLC", id + "_DCL", List.of(pole, terminal), number(seriesOhm) + "," + number(seriesH) + ",0,0,0,"));
+            devices.add(element("_RLC", id + "_DCLD", List.of(pole, terminal),
+                    number(NumericalAids.seriesInductanceDampingOhm(seriesH, settings.timeStepSeconds())) + ",0,0,0,0,"));
+        }
+        String measured = model.measuresDcVoltageAtTerminal() ? terminal : pole;
         String poleTie = id + "_DCP";
         String returnTie = id + "_DCR";
         String dcCurrent = id + "_IDC";
@@ -552,11 +572,13 @@ final class EmtpVoltageSourceConverters {
         devices.add(element("_RLC", id + "_CDC", List.of(pole, ret), "0,0," + number(initial.dcCapacitanceF(model)) + ",0,0,"));
         String vPole = id + "_VDP";
         String vReturn = id + "_VDR";
-        devices.add(element("_cI", id + "_PRDP", List.of(pole, "", zero, vPole, id + "_PRDPI", id + "_PRDPP"), "-1,1E15,0,0,0,0,>v,0,0,"));
+        devices.add(element("_cI", id + "_PRDP", List.of(measured, "", zero, vPole, id + "_PRDPI", id + "_PRDPP"), "-1,1E15,0,0,0,0,>v,0,0,"));
         devices.add(element("_cI", id + "_PRDR", List.of(ret, "", zero, vReturn, id + "_PRDRI", id + "_PRDRP"), "-1,1E15,0,0,0,0,>v,0,0,"));
         String standInNode = id + "_DCS";
-        // Across the converter's terminals, its DC voltage from the load flow: a negative pole's converter has its neutral on terminal 1.
-        double dcVolts = (converter.getDcTerminal1().getDcNode().getV() - converter.getDcTerminal2().getDcNode().getV()) * 1.0e3;
+        // Across the converter's terminals, its DC voltage from the load flow - a negative pole's converter has its neutral on terminal 1 -,
+        // and the drop of its DC current across the series resistance.
+        double dcVolts = (converter.getDcTerminal1().getDcNode().getV() - converter.getDcTerminal2().getDcNode().getV()) * 1.0e3
+                + initial.dcCurrent() * 1.0e3 * seriesOhm;
         devices.add(element("_Vp", id + "_DCSTD", List.of(standInNode, ret), number(dcVolts) + ",-1,1E15,"));
         devices.add(element("_Sw0", id + "_DCSW", List.of(standInNode, pole), "-1," + number(settings.timeStepSeconds()) + ",1E9,0,0,,1,.1,.001,5,"));
     }

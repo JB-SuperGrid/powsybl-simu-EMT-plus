@@ -104,6 +104,24 @@ class EmtpVscFaultAgainstPscadTest {
                 DcSwitchOperation.opening("DCB", start + 3.0e-3)), channels, "vsc-dc-breaker", 5.0e-3, SETTLED_TOLERANCE, TRANSIENT_TOLERANCE, false);
     }
 
+    /**
+     * Step 4's first: the same, {@code vsc-three-terminal-dc-breaker-mmc}, its stations averaged MMCs - each equivalent capacitor behind two
+     * thirds of an arm, its DC voltage measured at its DC terminal. VSC3, alone on the faulted line, its DC voltage down to its 0.1 pu
+     * floor, its terminal DC3P ringing between 0.03 and 0.16 pu window to window behind its arms: held within 2.5e-2 pu there.
+     *
+     * <p>Run 2026-11-14, 44 s the two: every station within 8.1e-3 pu of PSCAD's (VSC2's P), VSC3's power within 7.9e-4; the DC nodes
+     * within 6.7e-3 but DC3P, 2.1e-2, and VSC3's measured DC voltage, 1.9e-2 - the ringing's phase; settled within 1e-4.
+     */
+    @Test
+    void aDcFaultClearedByTheHybridBreakerBetweenMmcsRunsInEmtpAsInPscadProfessional() throws IOException {
+        List<Channel> channels = new ArrayList<>(converters("VSC1", "VSC2", "VSC3"));
+        for (String node : List.of("DC1P", "DC2P", "DC2L", "DC3P")) {
+            channels.add(new Channel(node, EmtpVoltageSourceConverters.dcVoltageScope(node), "V_" + node, 500.0e3));
+        }
+        compare("vsc-three-terminal-dc-breaker-mmc", start -> List.of(new DcFault("FDC", "DC2L", 10.0, start, start + 10.0),
+                DcSwitchOperation.opening("DCB", start + 3.0e-3)), channels, "vsc-dc-breaker-mmc", 5.0e-3, SETTLED_TOLERANCE, 0.025, false);
+    }
+
     private static List<Channel> converters(String... ids) {
         List<Channel> channels = new ArrayList<>();
         for (String id : ids) {
