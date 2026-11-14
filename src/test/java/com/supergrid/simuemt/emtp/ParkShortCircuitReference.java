@@ -41,6 +41,7 @@ final class ParkShortCircuitReference {
      * Xad} through the field's resistance. */
     private final double fieldVoltagePerEfd;
     private final Regulator regulator;
+    private final St1A st1a;
     private final Stabilizer stabilizer;
     private final Governor governor;
     private final double voltageReference;
@@ -57,6 +58,19 @@ final class ParkShortCircuitReference {
      * -, {@code Vt} the terminal voltage's magnitude, {@code Vref = Vt0 + Efd0 / Ka}, at equilibrium before the short.
      */
     record Regulator(double gain, double timeConstant, double min, double max) {
+    }
+
+    /**
+     * Upstream's ST1A, as ATP's TACS writes it: {@code VC = Vt / (1 + sTr)}; {@code VI = clamp(Vref + Vs - VC - VF, VIMIN, VIMAX)};
+     * the lead-lags {@code (1 + sTc) / (1 + sTb)}, {@code (1 + sTc1) / (1 + sTb1)}, a stage of {@code Tb = 0} left out; {@code VA =
+     * Ka / (1 + sTa)}, its state within {@code [VAMIN, VAMAX]}; {@code FC = VA - Klr max(Ifd - Ilr, 0)}; {@code EF = clamp(FC, Vt
+     * VRMIN, Vt VRMAX - Kc Ifd)} on the unfiltered terminal voltage, {@code Ifd} the field current per unit of the air-gap line's -
+     * {@code Xad} times the reciprocal per-unit one -; {@code VF = Kf s / (1 + sTf) EF}, left out when {@code Kf = 0}. Its transducer
+     * and its regulator lags are taken as given ({@code Tr}, {@code Ta} positive). {@code EF} reads the terminal voltage that the
+     * field voltage moves through the line's {@code Xe di/dt}: solved by three fixed-point passes from the transducer's.
+     */
+    record St1A(double tr, double viMax, double viMin, double tc, double tb, double tc1, double tb1, double ka, double ta, double vaMax,
+                double vaMin, double vrMax, double vrMin, double kc, double kf, double tf, double klr, double ilr) {
     }
 
     /**
@@ -88,6 +102,12 @@ final class ParkShortCircuitReference {
      * {@code null} -, its mechanical power driven by {@code governor} - held if {@code null}. */
     ParkShortCircuitReference(SubtransientMachineModel machine, double re, double xe, double frequencyHz, double[] v, double[] i,
                               boolean speedHeld, Regulator regulator, Stabilizer stabilizer, Governor governor) {
+        this(machine, re, xe, frequencyHz, v, i, speedHeld, regulator, null, stabilizer, governor);
+    }
+
+    /** The same, its field voltage driven by an ST1A {@code st1a} if not {@code null}, in place of the simplified regulator. */
+    ParkShortCircuitReference(SubtransientMachineModel machine, double re, double xe, double frequencyHz, double[] v, double[] i,
+                              boolean speedHeld, Regulator regulator, St1A st1a, Stabilizer stabilizer, Governor governor) {
         this.omega = 2.0 * Math.PI * frequencyHz;
         this.re = re;
         this.xe = xe;
@@ -121,14 +141,17 @@ final class ParkShortCircuitReference {
         double fieldCurrent = (psid + (xl + xad) * id) / xad;
         this.fieldVoltagePerEfd = d.fieldResistance() / omega / xad;
         this.regulator = regulator;
-        this.stabilizer = regulator == null ? null : stabilizer;
+        this.st1a = st1a;
+        this.stabilizer = regulator == null && st1a == null ? null : stabilizer;
         this.governor = governor;
         double efd = xad * fieldCurrent;
-        this.voltageReference = regulator == null ? Double.NaN : Math.hypot(vdq[0], vdq[1]) + efd / regulator.gain();
+        double vt0 = Math.hypot(vdq[0], vdq[1]);
+        this.voltageReference = st1a != null ? vt0 + efd / st1a.ka() : regulator == null ? Double.NaN : vt0 + efd / regulator.gain();
         this.mechanicalPower = psid * iq - psiq * id;
         // The stator's flux linkages with the line's leakage added, the currents unchanged through the short.
         this.state = new double[] {psid - xe * id, -xad * id + (xad + d.fieldReactance()) * fieldCurrent, -xad * id + xad * fieldCurrent,
-            psiq - xe * iq, -xaq * iq, -xaq * iq, 1.0, 0.0, efd, 0.0, 0.0, 0.0, mechanicalPower, mechanicalPower};
+            psiq - xe * iq, -xaq * iq, -xaq * iq, 1.0, 0.0, efd, 0.0, 0.0, 0.0, mechanicalPower, mechanicalPower,
+            vt0, efd / (st1a == null ? 1.0 : st1a.ka()), efd / (st1a == null ? 1.0 : st1a.ka()), efd};
     }
 
     /** The terminal voltage before the short in the rotor's frame, {@code {vd, vq}}. */
@@ -148,7 +171,7 @@ final class ParkShortCircuitReference {
             for (int k = 0; k < perSample; k++) {
                 advance(step);
             }
-            double[] terminal = terminal(state, rates(state));
+            double[] terminal = terminal(state, rates(state, fieldVoltage(state)));
             voltages[n] = new double[] {terminal[0], terminal[1], state[7]};
         }
         return voltages;
@@ -167,7 +190,8 @@ final class ParkShortCircuitReference {
     /** The states' rates, per second: the windings', the rotor's; and the field voltage's, the regulator's lag held at its limits,
      * none without one. */
     private double[] derivative(double[] x) {
-        double[] rates = rates(x);
+        double fieldVoltage = fieldVoltage(x);
+        double[] rates = rates(x, fieldVoltage);
         if (governor != null) {
             // The valve, then the turbine's lag: x[12], x[13].
             double deviation = x[6] - 1.0;
@@ -178,7 +202,7 @@ final class ParkShortCircuitReference {
             rates[12] = valveRate;
             rates[13] = (x[12] - x[13]) / governor.t3();
         }
-        if (regulator != null) {
+        if (regulator != null || st1a != null) {
             double[] terminal = terminal(x, rates);
             double stabilizing = 0.0;
             if (stabilizer != null) {
@@ -192,6 +216,10 @@ final class ParkShortCircuitReference {
                 rates[11] = (first - x[11]) / stabilizer.t4();
                 stabilizing = Math.max(-stabilizer.limit(), Math.min(stabilizer.limit(), second));
             }
+            if (st1a != null) {
+                st1aRates(x, rates, Math.hypot(terminal[0], terminal[1]), fieldVoltage, stabilizing);
+                return rates;
+            }
             double efdRate = (regulator.gain() * (voltageReference + stabilizing - Math.hypot(terminal[0], terminal[1])) - x[8]) / regulator.timeConstant();
             if (x[8] >= regulator.max() && efdRate > 0.0 || x[8] <= regulator.min() && efdRate < 0.0) {
                 efdRate = 0.0;
@@ -201,10 +229,52 @@ final class ParkShortCircuitReference {
         return rates;
     }
 
+    /** ST1A's states' rates: its transducer x[14], its lead-lags' lags x[15] and x[16], its rate feedback's lag x[17], its regulator
+     * x[8] held at its limits. */
+    private void st1aRates(double[] x, double[] rates, double vt, double fieldVoltage, double stabilizing) {
+        rates[14] = (vt - x[14]) / st1a.tr();
+        double feedback = st1a.kf() != 0.0 && st1a.tf() > 0.0 ? st1a.kf() / st1a.tf() * (fieldVoltage - x[17]) : 0.0;
+        if (st1a.kf() != 0.0 && st1a.tf() > 0.0) {
+            rates[17] = (fieldVoltage - x[17]) / st1a.tf();
+        }
+        double input = Math.max(st1a.viMin(), Math.min(st1a.viMax(), voltageReference + stabilizing - x[14] - feedback));
+        double shaped = input;
+        if (st1a.tb() > 0.0) {
+            rates[15] = (shaped - x[15]) / st1a.tb();
+            shaped = x[15] + st1a.tc() / st1a.tb() * (shaped - x[15]);
+        }
+        if (st1a.tb1() > 0.0) {
+            rates[16] = (shaped - x[16]) / st1a.tb1();
+            shaped = x[16] + st1a.tc1() / st1a.tb1() * (shaped - x[16]);
+        }
+        double vaRate = (st1a.ka() * shaped - x[8]) / st1a.ta();
+        if (x[8] >= st1a.vaMax() && vaRate > 0.0 || x[8] <= st1a.vaMin() && vaRate < 0.0) {
+            vaRate = 0.0;
+        }
+        rates[8] = vaRate;
+    }
+
+    /** The field voltage {@code Efd}: the regulator's state, or an ST1A's field voltage on the terminal voltage it moves. */
+    private double fieldVoltage(double[] x) {
+        if (st1a == null) {
+            return x[8];
+        }
+        double fieldCurrent = d.magnetizingReactance() * multiply(dInverse, x[0], x[1], x[2])[1];
+        double limited = x[8] - 0.5 * st1a.klr() * (fieldCurrent - st1a.ilr() + Math.abs(fieldCurrent - st1a.ilr()));
+        double vt = x[14];
+        double fieldVoltage = x[8];
+        for (int pass = 0; pass < 3; pass++) {
+            fieldVoltage = Math.min(Math.max(limited, vt * st1a.vrMin()), vt * st1a.vrMax() - st1a.kc() * fieldCurrent);
+            double[] terminal = terminal(x, rates(x, fieldVoltage));
+            vt = Math.hypot(terminal[0], terminal[1]);
+        }
+        return Math.min(Math.max(limited, vt * st1a.vrMin()), vt * st1a.vrMax() - st1a.kc() * fieldCurrent);
+    }
+
     /** The windings' and the rotor's rates, per second: the stator shorted behind {@code Ra + Re} at the rotor's speed, the field
      * driven at {@code Efd Rf / Xad}, the dampers free; the swing equation, unless the speed is held. The line's leakage drops out of
      * the torque, {@code (psid + Xe id) iq - (psiq + Xe iq) id}. */
-    private double[] rates(double[] x) {
+    private double[] rates(double[] x, double fieldVoltage) {
         double[] di = multiply(dInverse, x[0], x[1], x[2]);
         double[] qi = multiply(qInverse, x[3], x[4], x[5]);
         double w = x[6];
@@ -213,14 +283,14 @@ final class ParkShortCircuitReference {
         double acceleration = speedHeld ? 0.0 : (turbinePower / w - (x[0] * qi[0] - x[3] * di[0]) - damping * (w - 1.0)) / (2.0 * inertia);
         return new double[] {
             omega * ((ra + re) * di[0] + w * x[3]),
-            omega * fieldVoltagePerEfd * x[8] - d.fieldResistance() * di[1],
+            omega * fieldVoltagePerEfd * fieldVoltage - d.fieldResistance() * di[1],
             -d.damperResistance() * di[2],
             omega * ((ra + re) * qi[0] - w * x[0]),
             -q.fieldResistance() * qi[1],
             -q.damperResistance() * qi[2],
             acceleration,
             omega * (w - 1.0),
-            0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
     }
 
     /** The line's drop, {@code Re i + (Xe/w0) di/dt + jwXe i}. */
