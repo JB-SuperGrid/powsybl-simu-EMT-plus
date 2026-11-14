@@ -22,6 +22,8 @@ import com.powsybl.simuemt.extensions.excitation.ExponentialSaturation;
 import com.powsybl.simuemt.extensions.excitation.RectifierRegulation;
 import com.powsybl.simuemt.extensions.excitation.SimplifiedAvrModel;
 import com.powsybl.simuemt.extensions.excitation.St1AModel;
+import com.powsybl.simuemt.extensions.excitation.St4BInitialState;
+import com.powsybl.simuemt.extensions.excitation.St4BModel;
 import com.powsybl.simuemt.extensions.excitation.limiter.DiscontinuousExcitationControlModel;
 import com.powsybl.simuemt.extensions.excitation.limiter.OverexcitationLimiterModel;
 import com.powsybl.simuemt.extensions.excitation.limiter.PowerFactorVarControllerModel;
@@ -115,6 +117,14 @@ import static com.supergrid.simuemt.emtp.EmtpNetlistWriter.number;
  * same limits, a static gain when {@code TA = 0}; the exciter {@code TE dVE/dt = EFE - VFE}, held while {@code VFE} is at {@code VFEMAX}
  * and rising or {@code VE} at {@code VEMIN} and falling; and AC1A's rectifier.
  *
+ * <p>An enabled {@link St4BModel} drives it as ATP's TACS has it, at rest on upstream's {@link St4BInitialState}, the stator currents
+ * {@code id} and {@code iq} observed as well, its terminal powers {@code P = vd id + vq iq}, {@code Q = vd iq - vq id} per unit -
+ * EMTP's axes give ATP's signs, Q the load flow's to 1e-4 (2026-11-14): the outer PI {@code (KPR + KIR/s)(Vref + Vs - VC)} within
+ * {@code [VRMIN, VRMAX]} (Dynawo's {@code LimitedPI}); its lag {@code 1 / (1 + sTA)}; the potential-current source {@code VE = |KP VT
+ * + j (KI + KP XL) IT|}, one term per power; {@code VB = min(VE FEX, VBMAX)} through AC1A's rectifier; the inner PI on {@code VA - KG
+ * Efd}, solved for {@code VM} as ATP's - {@code clamp((KPM VA + I) / (1 + KPM KG VB))} -, its integral on {@code VA - KG VM VB}; and
+ * {@code Efd = VM VB}.
+ *
  * <p>An enabled {@link Pss1AModel} with any of them adds its output to that error, as ATP's TACS has it: the machine observes its rotor's speed
  * per unit ({@code Omega_1}, its one mass's, on the header before {@code vd} and {@code vq}); a function its deviation {@code w - 1};
  * three transfer functions ({@code _c_fs}) the washout {@code Ks sTw / (1 + sTw)} and the two lead-lags {@code (1 + sT1) / (1 + sT2)},
@@ -146,6 +156,8 @@ final class EmtpSynchronousMachines {
     private static final int OBSERVABLES = 31;
     /** The positions of {@code vd} and {@code vq} among them; 2 asks for the signal to be observed. */
     private static final int OBSERVE_VD = 10;
+    private static final int OBSERVE_ID = 11;
+    private static final int OBSERVE_IQ = 17;
     private static final int OBSERVE_IF = 13;
     private static final int OBSERVE_VQ = 16;
     private static final String OBSERVED = "2";
@@ -194,6 +206,7 @@ final class EmtpSynchronousMachines {
         for (Object extension : generator.getExtensions()) {
             if (isEnabled(extension) && !(extension instanceof SimplifiedAvrModel) && !(extension instanceof St1AModel) && !(extension instanceof Dc1AModel)
                     && !(extension instanceof Ac1AModel) && !(extension instanceof Ac6AModel) && !(extension instanceof Ac8BModel)
+                    && !(extension instanceof St4BModel)
                     && !(extension instanceof Pss1AModel)
                     && !(extension instanceof Tgov1Model)) {
                 reasons.add("its " + extension.getClass().getSimpleName() + " is not written yet");
@@ -247,11 +260,18 @@ final class EmtpSynchronousMachines {
         }
         // In the order of the observe requests: vd, the field current, vq.
         if (regulated) {
+            boolean powers = regulator(generator) instanceof St4BModel;
             observed.add(signal(name, "vd"));
+            if (powers) {
+                observed.add(signal(name, "id"));
+            }
             if (readsFieldCurrent(generator)) {
                 observed.add(signal(name, FIELD_CURRENT));
             }
             observed.add(signal(name, "vq"));
+            if (powers) {
+                observed.add(signal(name, "iq"));
+            }
         }
         List<String> lines = new ArrayList<>();
         for (int p = 0; p < 3; p++) {
@@ -301,6 +321,10 @@ final class EmtpSynchronousMachines {
             observe.set(OBSERVE_VD, OBSERVED);
             if (readsFieldCurrent(generator)) {
                 observe.set(OBSERVE_IF, OBSERVED);
+            }
+            if (regulator(generator) instanceof St4BModel) {
+                observe.set(OBSERVE_ID, OBSERVED);
+                observe.set(OBSERVE_IQ, OBSERVED);
             }
             observe.set(OBSERVE_VQ, OBSERVED);
         }
@@ -370,6 +394,10 @@ final class EmtpSynchronousMachines {
         }
         if (excitation instanceof Ac8BModel ac8b) {
             devices.addAll(ac8b(ac8b, generator, name, initial, pss != null));
+            return devices;
+        }
+        if (excitation instanceof St4BModel st4b) {
+            devices.addAll(st4b(st4b, generator, name, initial, pss != null));
             return devices;
         }
         SimplifiedAvrModel avr = (SimplifiedAvrModel) excitation;
@@ -572,11 +600,16 @@ final class EmtpSynchronousMachines {
     /** An AC exciter's rectifier, from its exciter voltage {@code ve} at rest on {@code ve0}: the field voltage {@code max(Ve, floor)
      * FEX(IN)}, {@code IN = min(Kc Ifd / max(Ve, floor), 1)}, {@link RectifierRegulation}'s arcs blended by ATP's smooth steps. */
     private static List<Device> rectifier(String name, String ve, double kc, double efd0, double ve0) {
+        return rectifier(name, ve, kc, efd0, ve0, fieldVoltageSignal(name), efd0);
+    }
+
+    /** The same rectifier, its output {@code output} at rest on {@code output0}, the field current {@code ifd0} = {@code efd0}. */
+    private static List<Device> rectifier(String name, String ve, double kc, double efd0, double ve0, String output, double output0) {
         String fieldCurrent = signal(name, FIELD_CURRENT);
         List<Device> devices = new ArrayList<>();
         String floored = "0.5*(u[1]+" + number(EXCITER_VOLTAGE_FLOOR) + "+ABS(u[1]-" + number(EXCITER_VOLTAGE_FLOOR) + "))";
         if (kc == 0.0) {
-            devices.add(function(name + "_EF", fieldVoltageSignal(name), List.of(ve), efd0, floored));
+            devices.add(function(name + "_EF", output, List.of(ve), output0, floored));
             return devices;
         }
         double in0 = kc * efd0 / ve0;
@@ -595,7 +628,108 @@ final class EmtpSynchronousMachines {
         devices.add(function(name + "_FEX", factor, List.of(loading, step1, step2, arc), RectifierRegulation.fex(in0),
                 "(1-u[2])*(1-" + number(RectifierRegulation.MODE1_SLOPE) + "*u[1])+u[2]*(1-u[3])*u[4]+u[3]*"
                         + number(RectifierRegulation.MODE3_SLOPE) + "*(1-u[1])"));
-        devices.add(function(name + "_EF", fieldVoltageSignal(name), List.of(ve, factor), efd0, floored + "*u[2]"));
+        devices.add(function(name + "_EF", output, List.of(ve, factor), output0, floored + "*u[2]"));
+        return devices;
+    }
+
+    /** ST4B's devices, from the observed {@code vd}, {@code vq}, {@code id}, {@code iq} and field current to the field voltage's control
+     * signal; the stabilizer's output {@code VS} added to its error if {@code stabilized}. */
+    private static List<Device> st4b(St4BModel st4b, Generator generator, String name, MachineInitialState initial, boolean stabilized) {
+        double efd0 = initial.efd();
+        double vt0 = initial.terminalVoltage();
+        St4BInitialState state = St4BInitialState.of(generator, st4b, efd0);
+        String vd = signal(name, "vd");
+        String vq = signal(name, "vq");
+        String id = signal(name, "id");
+        String iq = signal(name, "iq");
+        String vt = signal(name, "VT");
+        List<Device> devices = new ArrayList<>();
+        devices.add(function(name + "_VT", vt, List.of(vd, vq), vt0, "SQRT(u[1]*u[1]+u[2]*u[2])"));
+        String active = signal(name, "PT");
+        String reactive = signal(name, "QT");
+        devices.add(function(name + "_PT", active, List.of(vd, vq, id, iq), state.activePower(), "u[1]*u[3]+u[2]*u[4]"));
+        devices.add(function(name + "_QT", reactive, List.of(vd, vq, id, iq), state.reactivePower(), "u[1]*u[4]-u[2]*u[3]"));
+        String measured = vt;
+        if (st4b.getTransducerTimeConstant() > 0.0) {
+            measured = signal(name, "VC");
+            devices.add(firstOrder(name + "_VC", measured, vt, vt0, 1.0, 1.0, 0.0, st4b.getTransducerTimeConstant()));
+        }
+        String errorSignal = signal(name, "VERR");
+        devices.add(function(name + "_VERR", errorSignal, stabilized ? List.of(measured, signal(name, "VS")) : List.of(measured),
+                state.reference() - state.voltage(), number(state.reference()) + "-u[1]" + (stabilized ? "+u[2]" : "")));
+        String outer = signal(name, "VRO");
+        devices.addAll(limitedPi(name + "_R", outer, errorSignal, st4b.getRegulatorProportionalGain(), st4b.getRegulatorIntegralGain(),
+                st4b.getRegulatorOutputMin(), st4b.getRegulatorOutputMax(), state.regulatorIntegral(), state.regulatorOutput()));
+        String va = outer;
+        if (st4b.getRegulatorTimeConstant() > 0.0) {
+            va = signal(name, "VA");
+            devices.add(firstOrder(name + "_VA", va, outer, state.regulatorOutput(), 1.0, 1.0, 0.0, st4b.getRegulatorTimeConstant()));
+        }
+        // VE = sqrt(max(KP^2 VT^2 + |KI + KP XL e^(j THETAP)|^2 (P^2 + Q^2)/VT^2 + rq Q + rp P, 0)).
+        String squared = signal(name, "E2");
+        devices.add(function(name + "_E2", squared, List.of(vt, active, reactive), state.exciterSourceVoltage() * state.exciterSourceVoltage(),
+                "(" + number(st4b.voltageFactor()) + ")*u[1]*u[1]+(" + number(st4b.currentFactor()) + ")*(u[2]*u[2]+u[3]*u[3])/(u[1]*u[1])+("
+                        + number(st4b.reactivePowerFactor()) + ")*u[3]+(" + number(st4b.activePowerFactor()) + ")*u[2]"));
+        String ve = signal(name, "VES");
+        devices.add(function(name + "_VES", ve, List.of(squared), state.exciterSourceVoltage(), "SQRT(0.5*(u[1]+ABS(u[1])))"));
+        String source = signal(name, "VBS");
+        double vb0 = Math.min(state.exciterVoltage(), st4b.getExciterVoltageMax());
+        devices.addAll(rectifier(name, ve, st4b.getRectifierLoadingFactor(), efd0, state.exciterSourceVoltage(), source, state.exciterVoltage()));
+        String vb = signal(name, "VB");
+        devices.add(function(name + "_VB", vb, List.of(source), vb0, "0.5*(u[1]+" + number(st4b.getExciterVoltageMax()) + "-ABS(u[1]-"
+                + number(st4b.getExciterVoltageMax()) + "))"));
+        // The inner PI on VA - KG Efd, Efd = VM VB, solved for VM: clamp((KPM VA + I) / (1 + KPM KG VB)).
+        double kpm = st4b.getInnerProportionalGain();
+        double kim = st4b.getInnerIntegralGain();
+        double kg = st4b.getFeedbackGain();
+        String sum = signal(name, "MS");
+        String integral = signal(name, "MI");
+        String inner = signal(name, "MO");
+        List<String> sumInputs = new ArrayList<>(List.of(va, vb));
+        String numerator = "(" + number(kpm) + ")*u[1]";
+        if (kim > 0.0) {
+            sumInputs.add(integral);
+            numerator += "+u[3]";
+        }
+        devices.add(function(name + "_MS", sum, sumInputs, state.innerOutput(), kg == 0.0 ? numerator : "(" + numerator + ")/(1+(" + number(kpm * kg) + ")*u[2])"));
+        devices.add(new Device("_c_lim", List.of("_c_lim;" + name + "_MO;2;2;" + inner + "," + sum + ",",
+                number(st4b.getInnerOutputMax()) + "," + number(st4b.getInnerOutputMin()) + ",1,S1,")));
+        if (kim > 0.0) {
+            String innerError = signal(name, "MU");
+            String gated = signal(name, "MY");
+            devices.add(function(name + "_MU", innerError, List.of(va, inner, vb), 0.0, "u[1]-(" + number(kg) + ")*u[2]*u[3]"));
+            String pushesUp = limiterStep("u[1]");
+            devices.add(function(name + "_MY", gated, List.of(innerError, sum), 0.0, "u[1]*(1-" + limiterStep("(u[2]-(" + number(st4b.getInnerOutputMax()) + "))")
+                    + "*" + pushesUp + "-" + limiterStep("((" + number(st4b.getInnerOutputMin()) + ")-u[2])") + "*(1-" + pushesUp + "))"));
+            devices.add(new Device("_c_fs", List.of("_c_fs;" + name + "_MI;2;2;" + integral + "," + gated + ",", number(state.innerIntegral()) + ",1,1,2,"
+                    + number(kim) + ",S1,", "1", ";", "0 1")));
+        }
+        devices.add(function(name + "_EF", fieldVoltageSignal(name), List.of(inner, vb), efd0, "u[1]*u[2]"));
+        return devices;
+    }
+
+    /**
+     * Dynawo's limited PI {@code KP u + KI/s u} from {@code input} to {@code output}, as ATP writes it: its output clamped to {@code [min,
+     * max]}, the integral at {@code integral0} with its input cut by ATP's limiter steps while the sum is past a limit and {@code u} pushes
+     * it further. Its sum at rest on {@code output0}.
+     */
+    private static List<Device> limitedPi(String device, String output, String input, double kp, double ki, double min, double max, double integral0,
+                                          double output0) {
+        List<Device> devices = new ArrayList<>();
+        String sum = output + "S";
+        if (ki > 0.0) {
+            String integral = output + "I";
+            String gated = output + "Y";
+            String pushesUp = limiterStep("u[1]");
+            devices.add(function(device + "Y", gated, List.of(input, sum), 0.0, "u[1]*(1-" + limiterStep("(u[2]-(" + number(max) + "))") + "*" + pushesUp + "-"
+                    + limiterStep("((" + number(min) + ")-u[2])") + "*(1-" + pushesUp + "))"));
+            devices.add(new Device("_c_fs", List.of("_c_fs;" + device + "I;2;2;" + integral + "," + gated + ",", number(integral0) + ",1,1,2," + number(ki) + ",S1,",
+                    "1", ";", "0 1")));
+            devices.add(function(device + "S", sum, List.of(input, integral), output0, "(" + number(kp) + ")*u[1]+u[2]"));
+        } else {
+            devices.add(function(device + "S", sum, List.of(input), output0, "(" + number(kp) + ")*u[1]"));
+        }
+        devices.add(new Device("_c_lim", List.of("_c_lim;" + device + "O;2;2;" + output + "," + sum + ",", number(max) + "," + number(min) + ",1,S1,")));
         return devices;
     }
 
@@ -810,7 +944,8 @@ final class EmtpSynchronousMachines {
     /** Whether the machine's excitation system reads its field current: an ST1A's ceiling or field-current limiter, an AC1A. */
     private static boolean readsFieldCurrent(Generator generator) {
         return regulator(generator) instanceof St1AModel st1a && (st1a.getRectifierLoadingFactor() != 0.0 || st1a.getFieldCurrentLimiterGain() != 0.0)
-                || regulator(generator) instanceof Ac1AModel || regulator(generator) instanceof Ac6AModel || regulator(generator) instanceof Ac8BModel;
+                || regulator(generator) instanceof Ac1AModel || regulator(generator) instanceof Ac6AModel || regulator(generator) instanceof Ac8BModel
+                || regulator(generator) instanceof St4BModel st4b && st4b.getRectifierLoadingFactor() != 0.0;
     }
 
     /** A first-order transfer function {@code gain (n0 + n1 s) / (1 + d1 s)} from {@code input} to {@code output}, at rest at {@code
@@ -834,7 +969,8 @@ final class EmtpSynchronousMachines {
     private static ExcitationSystemModel regulator(Generator generator) {
         ExcitationSystemModel excitation = generator.getExtension(ExcitationSystemModel.class);
         return (excitation instanceof SimplifiedAvrModel || excitation instanceof St1AModel || excitation instanceof Dc1AModel
-                || excitation instanceof Ac1AModel || excitation instanceof Ac6AModel || excitation instanceof Ac8BModel) && excitation.isEnabled()
+                || excitation instanceof Ac1AModel || excitation instanceof Ac6AModel || excitation instanceof Ac8BModel || excitation instanceof St4BModel)
+                && excitation.isEnabled()
                 ? excitation : null;
     }
 

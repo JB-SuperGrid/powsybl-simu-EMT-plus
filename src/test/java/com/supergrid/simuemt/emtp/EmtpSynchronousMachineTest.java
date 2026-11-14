@@ -24,6 +24,8 @@ import com.powsybl.simuemt.extensions.excitation.ExponentialSaturation;
 import com.powsybl.simuemt.extensions.excitation.RectifierRegulation;
 import com.powsybl.simuemt.extensions.excitation.SimplifiedAvrModel;
 import com.powsybl.simuemt.extensions.excitation.St1AModel;
+import com.powsybl.simuemt.extensions.excitation.St4BInitialState;
+import com.powsybl.simuemt.extensions.excitation.St4BModel;
 import com.powsybl.simuemt.extensions.governor.GoverProportionalModel;
 import com.powsybl.simuemt.extensions.governor.Tgov1Model;
 import com.powsybl.simuemt.extensions.governor.TurbineGovernorModel;
@@ -616,6 +618,38 @@ class EmtpSynchronousMachineTest {
         assertShortFollowsParksEquations(network, 560.0, false, 1.0, 0.45, "machine-ac8b-fault");
     }
 
+    /**
+     * Upstream's ST4B ({@code ExampleNetworks#st4BModel}: KPR = KIR = 10.75, VR within -0.87 and 1, TA 0.02 s, KPM 1, VM within -0.87 and
+     * 1, KP 9.3, XL 0.124, KC 0.113, VBMAX 11.63) on the loaded bench, rotor free, shorted solidly at the line's far end: its compound
+     * source - the terminal voltage's, falling, and the stator current's, rising - through the rectifier - against the reference driven by
+     * the same ST4B ({@link ParkShortCircuitReference.St4B}). Kept in {@code target/emtp/machine-st4b-short}.
+     *
+     * <p>Run 2026-11-14: 45 crests, the worst 8.7e-5 off, every instant within 1.9 us of the first's delay; its source's current share
+     * keeping a ceiling the voltage's alone would lose, 0.0637 pu at the 43rd crest where the field held leaves 0.0588.
+     */
+    @Test
+    @Tag("emtp")
+    void theSt4BMachineFollowsParksEquationsThroughTheShort() {
+        Network network = loadedMachineWithFieldHeld();
+        network.getGenerator("GEN").addExtension(ExcitationSystemModel.class, ExampleNetworks.st4BModel());
+        assertShortFollowsParksEquations(network, 0.0, false, 1.0, 0.45, "machine-st4b-short");
+    }
+
+    /**
+     * The same ST4B through the resistive fault, the unloaded machine faulted through 560 ohm a phase. Kept in {@code
+     * target/emtp/machine-st4b-fault}.
+     *
+     * <p>Run 2026-11-14: 43 crests, the worst 1.9e-5 off, every instant within 0.3 us of the first's; 0.974 pu at the 43rd crest where
+     * the field held leaves 0.708.
+     */
+    @Test
+    @Tag("emtp")
+    void theSt4BMachineFollowsParksEquationsThroughAResistiveFault() {
+        Network network = unloadedMachineWithFieldHeld();
+        network.getGenerator("GEN").addExtension(ExcitationSystemModel.class, ExampleNetworks.st4BModel());
+        assertShortFollowsParksEquations(network, 560.0, false, 1.0, 0.45, "machine-st4b-fault");
+    }
+
     @Test
     @Tag("emtp")
     void theRegulatedMachineHoldsItsVoltageThroughAResistiveFault() {
@@ -693,6 +727,15 @@ class EmtpSynchronousMachineTest {
                     m.getDemagnetizingFactor(), m.saturation().aex(), m.saturation().bex(), state.reference(), state.voltage(), state.regulatorIntegral(),
                     state.exciterField(), state.exciterVoltage());
         }
+        ParkShortCircuitReference.St4B st4b = null;
+        if (generator.getExtension(ExcitationSystemModel.class) instanceof St4BModel m && m.isEnabled()) {
+            St4BInitialState state = St4BInitialState.of(generator, m, MachineInitialState.subtransient(generator, machine, 0.0).efd());
+            st4b = new ParkShortCircuitReference.St4B(m.getTransducerTimeConstant(), m.getRegulatorProportionalGain(), m.getRegulatorIntegralGain(),
+                    m.getRegulatorOutputMax(), m.getRegulatorOutputMin(), m.getRegulatorTimeConstant(), m.getInnerProportionalGain(), m.getInnerIntegralGain(),
+                    m.getInnerOutputMax(), m.getInnerOutputMin(), m.getFeedbackGain(), m.voltageFactor(), m.currentFactor(), m.reactivePowerFactor(),
+                    m.activePowerFactor(), m.getRectifierLoadingFactor(), m.getExciterVoltageMax(), state.reference(), state.regulatorIntegral(),
+                    state.regulatorOutput(), state.innerIntegral());
+        }
         ParkShortCircuitReference.Stabilizer stabilizer = generator.getExtension(PssModel.class) instanceof Pss1AModel pss && pss.isEnabled()
                 ? new ParkShortCircuitReference.Stabilizer(pss.getGain(), pss.getWashoutTimeConstant(), pss.getLeadTimeConstant(), pss.getLagTimeConstant(),
                         pss.getLeadTimeConstant2(), pss.getLagTimeConstant2(), pss.getOutputLimit()) : null;
@@ -700,7 +743,7 @@ class EmtpSynchronousMachineTest {
                 ? new ParkShortCircuitReference.Governor(tgov1.getDroop(), tgov1.getGovernorTimeConstant(), tgov1.getValveMin(), tgov1.getValveMax(),
                         tgov1.getTurbineLeadTimeConstant(), tgov1.getTurbineLagTimeConstant(), tgov1.getTurbineDamping()) : null;
         ParkShortCircuitReference reference = new ParkShortCircuitReference(machine, (line.getR() + faultOhms) / baseOhms, line.getX() / baseOhms, FREQUENCY,
-                v, i, speedHeld, regulator, st1a, dc1a, ac1a, ac6a, ac8b, stabilizer, governor);
+                v, i, speedHeld, regulator, st1a, dc1a, ac1a, ac6a, ac8b, st4b, stabilizer, governor);
 
         String b1a = EmtpNetlistWriter.voltageScope("B1", 'A');
         double[] before = SwitchingWindows.leadingUpTo(faultStart, 0.02, TIME_STEP);
