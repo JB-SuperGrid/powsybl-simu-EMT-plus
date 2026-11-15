@@ -19,6 +19,7 @@ import com.powsybl.iidm.network.Switch;
 import com.powsybl.iidm.network.ThreeWindingsTransformer;
 import com.powsybl.iidm.network.TwoWindingsTransformer;
 import com.powsybl.iidm.network.VoltageLevel;
+import com.powsybl.iidm.network.extensions.LineFortescue;
 import com.powsybl.iidm.network.extensions.ThreeWindingsTransformerFortescue;
 import com.powsybl.iidm.network.extensions.ThreeWindingsTransformerPhaseAngleClock;
 import com.powsybl.iidm.network.extensions.TwoWindingsTransformerFortescue;
@@ -28,6 +29,7 @@ import com.powsybl.simuemt.extensions.GeneratorModel;
 import com.powsybl.simuemt.extensions.LoadModel;
 import com.powsybl.simuemt.extensions.circuit.ElectricalNodes;
 import com.powsybl.simuemt.extensions.circuit.LoadBranches;
+import com.powsybl.simuemt.extensions.circuit.ModalLineParameters;
 import com.powsybl.simuemt.extensions.circuit.NumericalAids;
 import com.powsybl.simuemt.extensions.circuit.PhaseShiftCoefficients;
 import com.powsybl.simuemt.extensions.circuit.TapCorrectedImpedance;
@@ -49,6 +51,7 @@ import com.powsybl.simuemt.extensions.infinitebus.InfiniteBusEmf;
 import com.powsybl.simuemt.extensions.infinitebus.InfiniteBusGeneratorModel;
 import com.powsybl.simuemt.extensions.infinitebus.InfiniteBusLoadModel;
 import com.powsybl.simuemt.extensions.infinitebus.InfiniteBusModel;
+import com.powsybl.simuemt.extensions.line.BergeronLineModel;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -328,6 +331,10 @@ public final class EmtpNetlistWriter {
     static final int MAX_LINE = 100;
 
     private static void writeLine(Devices lines, Line line, EmtpSimulationSettings settings) {
+        if (line.getExtension(BergeronLineModel.class) != null) {
+            writeBergeronLine(lines, line);
+            return;
+        }
         double inductance = line.getX() / omega(settings);
         for (String phase : PHASES) {
             String from = node(endId(line, line.getTerminal1(), 1), phase.charAt(0));
@@ -337,6 +344,42 @@ public final class EmtpNetlistWriter {
             charging(lines, id(line) + "_C1" + phase, from, line.getB1(), settings);
             charging(lines, id(line) + "_C2" + phase, to, line.getB2(), settings);
         }
+    }
+
+    /**
+     * A distributed-parameter line ({@link BergeronLineModel}) as EMTP's constant-parameter line, {@code _TLM}: its three modes in
+     * {@link ModalLineParameters#CLARKE}'s order - the ground mode, then the two aerial ones - each its total resistance, its surge
+     * impedance and its travel time on a length of 1 (EMTP's input type 3: length, R', Zc, tau), EMTP splitting each resistance R/4 -
+     * R/2 - R/4 around two lossless halves as ATP does; {@link ModalLineParameters#CLARKE} its transformation, given rather than EMTP's
+     * built-in. Without a ground mode of its own, its ground mode the aerial one: three independent phases. No charging of its own - a
+     * travelling wave's capacitance is {@code tau / Zc}.
+     */
+    private static void writeBergeronLine(Devices lines, Line line) {
+        BergeronLineModel model = line.getExtension(BergeronLineModel.class);
+        ModalLineParameters modal = ModalLineParameters.of(line);
+        if (modal == null) {
+            modal = new ModalLineParameters(model.getSurgeImpedance(), model.getTravelTime(), line.getR(), model.getSurgeImpedance(), model.getTravelTime(),
+                    line.getR());
+        }
+        List<String> nodes = new ArrayList<>();
+        com.powsybl.iidm.network.Terminal[] terminals = {line.getTerminal1(), line.getTerminal2()};
+        for (int side = 1; side <= 2; side++) {
+            for (String phase : PHASES) {
+                nodes.add(node(endId(line, terminals[side - 1], side), phase.charAt(0)));
+            }
+        }
+        List<String> data = new ArrayList<>();
+        data.add("_TLM;" + id(line) + ";6;6;" + String.join(",", nodes) + ",");
+        // Three phases, not distortionless, its transformation given, input type 3, units EMTP's first.
+        data.add("3,0,0,3,1,1,1,1,");
+        for (int mode = 0; mode < ModalLineParameters.MODE_COUNT; mode++) {
+            data.add("1 " + number(modal.resistance(mode)) + " " + number(modal.surgeImpedance(mode)) + " " + number(modal.travelTime(mode)));
+        }
+        for (double[] row : ModalLineParameters.CLARKE) {
+            data.add(number(row[0]) + " " + number(row[1]) + " " + number(row[2]));
+        }
+        data.addAll(List.of("0", "0", "0"));
+        lines.addBlock("_TLM", data);
     }
 
     private static void writeTransformer(Devices lines, TwoWindingsTransformer transformer, EmtpSimulationSettings settings) {
@@ -831,10 +874,16 @@ public final class EmtpNetlistWriter {
         Stream.of(network.getLineStream(), network.getTwoWindingsTransformerStream(), network.getThreeWindingsTransformerStream())
                 .flatMap(s -> s.map(c -> (Identifiable<?>) c))
                 .forEach(c -> c.getExtensions().stream()
-                        .filter(e -> !(e instanceof TwoWindingsTransformerFortescue || e instanceof ThreeWindingsTransformerFortescue
+                        .filter(e -> !(e instanceof BergeronLineModel || e instanceof LineFortescue && c.getExtensions().stream().anyMatch(BergeronLineModel.class::isInstance)
+                                || e instanceof TwoWindingsTransformerFortescue || e instanceof ThreeWindingsTransformerFortescue
                                 || e instanceof TwoWindingsTransformerPhaseAngleClock || e instanceof ThreeWindingsTransformerPhaseAngleClock))
                         .forEach(e -> reasons.add("'" + c.getId() + "' has a " + e.getClass().getSimpleName().replace("Impl", "")
                                 + ", which is not written yet")));
+        for (Line line : network.getLines()) {
+            if (line.getExtension(BergeronLineModel.class) != null) {
+                ModalLineParameters.unsupportedReasons(line).forEach(reason -> reasons.add("line '" + line.getId() + "': " + reason));
+            }
+        }
         for (Load load : network.getLoads()) {
             if (load.getExtension(LoadModel.class) instanceof InfiniteBusLoadModel) {
                 continue;
