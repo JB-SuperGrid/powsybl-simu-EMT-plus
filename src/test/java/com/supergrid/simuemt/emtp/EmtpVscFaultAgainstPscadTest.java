@@ -67,7 +67,7 @@ class EmtpVscFaultAgainstPscadTest {
     private static final double TIME_STEP = 20.0e-6;
     private static final double EMTP_FAULT = 0.3;
     /** PSCAD runs from rest: its converters let go at 2 s, the fault 2 s on from EMTP's. */
-    private static final double PSCAD_SHIFT = 2.0;
+    static final double PSCAD_SHIFT = 2.0;
     private static final double DURATION = 0.1;
     /** A grid-forming bench's PSCAD shift: from rest, its virtual machine settles in 4.5 s. */
     private static final double GRID_FORMING_SHIFT = 4.5;
@@ -244,7 +244,7 @@ class EmtpVscFaultAgainstPscadTest {
                 pscadShift, PscadSwitching.INTERPOLATED);
     }
 
-    private static void compare(Supplier<Network> bench, DoubleFunction<List<? extends EmtEvent>> events, List<Channel> channels, String name,
+    static void compare(Supplier<Network> bench, DoubleFunction<List<? extends EmtEvent>> events, List<Channel> channels, String name,
                                 double window, double settledTolerance, double transientTolerance, boolean settlesAfter, double pscadShift,
                                 PscadSwitching switching) throws IOException {
         EmtpOutput emtp = EmtpRunner.run(EmtpNetlistWriter.write(bench.get(), Path.of("target", "emtp", name),
@@ -285,7 +285,7 @@ class EmtpVscFaultAgainstPscadTest {
         softly.assertAll();
     }
 
-    private static BusFault fault(String phases, double start) {
+    static BusFault fault(String phases, double start) {
         return new BusFault("F", "B2", phases, true, OHMS, start, start + DURATION, FaultClearing.AT_CURRENT_ZERO);
     }
 }

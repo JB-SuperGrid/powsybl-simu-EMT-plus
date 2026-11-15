@@ -34,7 +34,7 @@ import static org.assertj.core.api.Assertions.within;
  * holds that the writer does not write yet, said by name - nothing left out silently. The examples it writes are pinned, so that what
  * the writer gains or loses shows; and - tagged {@code emtp} - each is run live, every bus on the load flow.
  *
- * <p>2026-11-14, upstream's {@code 6346a20c}: 32 of its 132 examples written - since the shunts, the grounds and the open ends. Its
+ * <p>2026-11-14, upstream's {@code 6346a20c}: 33 of its 132 examples written - since the shunts, the grounds, the open ends and the SVC. Its
  * refusals, the most frequent first: power electronics (VSCs, MMCs, their DC sides, SVCs, batteries), load models (infinite buses,
  * induction motors, constant power), wind turbines, switches, line models and zero-sequence data, arresters, excitation limiters,
  * governors but TGOV1, PSS2A.
@@ -65,6 +65,7 @@ class EmtpExampleCoverageTest {
             "createTwoBusNetworkWithSt6B",
             "createTwoBusNetworkWithSt6BFieldCurrentLimit",
             "createTwoBusNetworkWithTgov1",
+            "createTwoBusNetworkWithSvc1",
             "createFourBusNetworkWithThreeWindingsTransformerMagnetizingBranchAndTap",
             "createFourBusNetworkWithPhaseShiftingLegAndWindings",
             "createFourBusNetworkWithPurePhaseShiftingLeg",
