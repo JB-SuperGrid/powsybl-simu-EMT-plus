@@ -6,6 +6,7 @@ package com.supergrid.simuemt.emtp;
 
 import com.powsybl.simuemt.extensions.circuit.NumericalAids;
 import com.powsybl.simuemt.extensions.event.BusFault;
+import com.powsybl.simuemt.extensions.event.ConverterBlocking;
 import com.powsybl.simuemt.extensions.event.DcFault;
 import com.powsybl.simuemt.extensions.event.DcSwitchOperation;
 import com.powsybl.simuemt.extensions.event.EmtEvent;
@@ -137,6 +138,25 @@ class EmtpVscFaultAgainstPscadTest {
     void aFaultAtAGridFormingConvertersBusRunsInEmtpAsInPscadProfessional() throws IOException {
         compare("vsc-monopole-infinite-buses-3", start -> List.of(fault("ABC", start)), MONOPOLE, "vsc-grid-forming-fault", 5.0e-3, SETTLED_TOLERANCE,
                 TRANSIENT_TOLERANCE, false, GRID_FORMING_SHIFT);
+    }
+
+    /**
+     * Step 4's third: {@code vsc-three-terminal-all-droop}, its three stations on their DC voltage droops behind their converter
+     * transformers, VSC1 blocked: its EMFs cut at their currents' zeros, its valves left to a diode bridge idle above the AC side's crest;
+     * VSC2 and VSC3 taking its share along their curves. By 5 ms windows.
+     *
+     * <p>Run 2026-11-15, 47 s the two: within 5.5e-3 pu of PSCAD's through the blocking (VSC1's power), VSC2's and VSC3's within 1.9e-3,
+     * the DC voltages 4.2e-4; settled within 1.8e-4. VSC1 blocked draws what its bridge's snubbers and grading resistors do, 2e-4 pu and
+     * -2.8e-3 of reactive power, in both.
+     */
+    @Test
+    void aBlockedConverterRunsInEmtpAsInPscadProfessional() throws IOException {
+        List<Channel> channels = new ArrayList<>(converters("VSC1", "VSC2", "VSC3"));
+        for (String node : List.of("DC1P", "DC2P", "DC3P")) {
+            channels.add(new Channel(node, EmtpVoltageSourceConverters.dcVoltageScope(node), "V_" + node, 500.0e3));
+        }
+        compare("vsc-three-terminal-all-droop", start -> List.of(new ConverterBlocking("VSC1", start)), channels, "vsc-blocking", 5.0e-3,
+                SETTLED_TOLERANCE, TRANSIENT_TOLERANCE, false);
     }
 
     private static List<Channel> converters(String... ids) {
