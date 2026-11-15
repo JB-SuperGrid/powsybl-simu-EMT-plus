@@ -8,10 +8,15 @@ import com.powsybl.computation.local.LocalComputationManager;
 import com.powsybl.iidm.network.Bus;
 import com.powsybl.iidm.network.DcNode;
 import com.powsybl.iidm.network.Network;
+import com.powsybl.iidm.network.TwoSides;
 import com.powsybl.iidm.network.VoltageSourceConverter;
 import com.powsybl.simuemt.extensions.circuit.NumericalAids;
+import com.powsybl.simuemt.extensions.event.BranchOperation;
+import com.powsybl.simuemt.extensions.event.BreakerAction;
 import com.powsybl.simuemt.extensions.event.DcFault;
 import com.powsybl.simuemt.extensions.event.DcSwitchOperation;
+import com.powsybl.simuemt.extensions.event.EmtEvent;
+import com.powsybl.simuemt.extensions.event.FaultClearing;
 import com.powsybl.simuemt.extensions.hvdc.AveragedConverterModel;
 import com.powsybl.simuemt.extensions.hvdc.AveragedVscModel;
 import com.powsybl.simuemt.extensions.hvdc.OvercurrentProtection;
@@ -31,6 +36,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
@@ -59,7 +65,7 @@ class EmtpVoltageSourceConverterTest {
 
         assertThat(lines).contains("_RLC;DCL;2;2;DC1P,DC2P,", "5.000000000000000,0.3000000000000000,0,0,0,", "_RLC;DCG1;1;1;DC1G,",
                 "_cV;VSC1_CVa;6;6;VSC1_Ma,VSC1_N,VSC1_EMFa,VSC1_CVVa,VSC1_Ia,VSC1_CVPa,", "_Vsine;VSC1_STDa;2;2;VSC1_Ka,VSC1_Ma,",
-                "_cI;VSC1_PRa;6;6;B1a,,VSC1_ZERO,VSC1_Va,VSC1_PRIa,VSC1_PRPa,", "_cI;VSC1_DC;6;6;VSC1_DCP,VSC1_DCR,VSC1_IDC,VSC1_DCV,VSC1_DCI,VSC1_DCPW,",
+                "_cI;VSC1_PRa;6;6;B1a,,VSC1_ZERO,VSC1_Va,VSC1_PRIa,VSC1_PRPa,", "_cI;VSC1_DC;6;6;VSC1_DCP,VSC1_DCR,VSC1_IDCS,VSC1_DCV,VSC1_DCI,VSC1_DCPW,",
                 "_Sw0;VSC1_DCSW;2;2;VSC1_DCS,DC1P,", "_c_fu;VSC2_DCH;3;3;VSC2_DCH,VSC2_VDP,VSC2_VDR,");
         // The stand-in of VSC1's EMF, phase a: the load flow's, active in the steady state only.
         String standIn = lines.get(lines.indexOf("_Vsine;VSC1_STDa;2;2;VSC1_Ka,VSC1_Ma,") + 1);
@@ -169,7 +175,7 @@ class EmtpVoltageSourceConverterTest {
 
     /**
      * Upstream's {@code dc-fault-protected}: example 4 on its droops, each station with a 100 mH DC reactor and protected against its arms'
-     * overcurrent at 2 pu, no delay, through a solid fault on DC3P from 0.3 s to the end, no order to block, run 1.3 s - held to the checks
+     * overcurrent at 2 pu, no delay, through a solid fault on DC3P from 0.3 s to the end, no order to block, run 1.4 s - held to the checks
      * upstream holds ATP and Kestrel to, which the overlay holds PSCAD Professional to ({@code
      * PscadProConvertersTest#theStationsProtectionsBlockThemOnASolidDcFault}): the protections blocking VSC3, VSC2 and VSC1 in turn - ATP's
      * 0.85, 4.67 and 9.93 ms after the fault -; then every 0.2 s VSC3's AC side a bolted short behind its phase reactor, {@code Q / V^2} its
@@ -177,8 +183,8 @@ class EmtpVoltageSourceConverterTest {
      * [0.03, 0.15], VSC1's 0.01 above it, each drawing more than 0.4 pu. Kept in {@code target/emtp/dc-fault-protected}.
      *
      * <p>Run 2026-11-15: VSC3, VSC2 and VSC1 blocked 0.85, 4.67 and 9.93 ms after the fault - ATP's to the hundredth of a millisecond -;
-     * VSC3's {@code Q / V^2} 6.624 to 6.700 against 6.667, its DC voltage within 2e-4 pu of earth; VSC2's DC voltage 0.072 to 0.083 pu,
-     * VSC1's 0.106 to 0.123; their powers 0.53 to 1.01 pu, rising as their DC currents do.
+     * VSC3's {@code Q / V^2} 6.650 to 6.702 against 6.667, its DC voltage within 2.6e-3 pu of earth, its capacitor ringing behind its bridge
+     * inductance; VSC2's DC voltage 0.070 to 0.080 pu, VSC1's 0.103 to 0.119; their powers 0.50 to 0.95 pu, rising as their DC currents do.
      */
     @Test
     @Tag("emtp")
@@ -205,11 +211,97 @@ class EmtpVoltageSourceConverterTest {
         blockedInTurnAndFedThroughTheBridges(network, "mmc-protected", new double[] {6.93e-3, 3.09e-3, 0.25e-3}, 0.6);
     }
 
-    /** Example 4 through a solid fault on DC3P from 0.3 s to the end, run 1.3 s: its stations blocked in turn by their protections, each
+    /**
+     * Upstream's {@code dc-fault-stations-open}: the protected two-level stations with their DC reactors through the solid fault on DC3P
+     * at 0.3 s, their transformers' station ends opened at 0.36 s at their currents' zeros - held to ATP's checks ({@code
+     * AtpSolverIntegrationTest#theStationsAcBreakersCutTheBridgesOffASolidDcFault}, which {@code PscadProConvertersTest} holds PSCAD
+     * Professional to): every station blocked by its protection before its breaker opens, nothing drawn from the AC side once it has;
+     * VSC1's and VSC2's DC currents died out, their DC voltages at earth; VSC3's freewheeling through its bridge's diodes at 0.9193 of its
+     * 0.4-0.6 s mean 0.6 s on, within 0.0015. Run 1.2 s, kept in {@code target/emtp/dc-fault-stations-open}.
+     *
+     * <p>Run 2026-11-15: the stations blocked 0.85, 4.67 and 9.93 ms after the fault, nothing drawn once cut off (1e-7 pu); VSC3's DC
+     * current 20.51 pu, 0.9193 of it 0.6 s on - ATP's -, its capacitor ringing to 0.38 pu behind its bridge inductance (without it, left out
+     * at first, 0.8516 and no ringing).
+     */
+    @Test
+    @Tag("emtp")
+    void theStationsAcBreakersCutTheBridgesOffASolidDcFault() {
+        EmtpOutput output = stationsOpen(protectedWithDcReactors(), "dc-fault-stations-open");
+        SoftAssertions softly = new SoftAssertions();
+        cutOffTheirAcSides(softly, output);
+        double early = output.mean("control:VSC3_IDC", 0.4, 0.6);
+        double decay = output.mean("control:VSC3_IDC", 1.0, 1.2) / early;
+        System.out.printf(Locale.ROOT, "VSC3 DC current %.3f pu at 0.4-0.6 s, %.4f of it at 1.0-1.2 s (ATP 0.9193); its DC voltage's crest %.3f%n", early, decay,
+                output.peakAbsolute("control:VSC3_VDC", 1.0, 1.2));
+        softly.assertThat(early).as("VSC3 DC current at 0.4-0.6 s, pu").isGreaterThan(15.0);
+        softly.assertThat(decay).as("VSC3 DC current at 1.0-1.2 s against 0.4-0.6 s: ATP's").isCloseTo(0.9193, within(0.0015));
+        softly.assertThat(output.peakAbsolute("control:VSC3_VDC", 1.0, 1.2)).as("VSC3 DC voltage at the end, pu: its capacitor ringing").isGreaterThan(0.2);
+        softly.assertAll();
+    }
+
+    /**
+     * Upstream's {@code mmc-stations-open}: the same with the protected MMC stations, no DC reactor added - held to ATP's checks ({@code
+     * AtpSolverIntegrationTest#theStationsAcBreakersLetAnMmcsDcCurrentDieOut}): VSC3's DC current round its arms' DC equivalent ATP's
+     * 5.8125 pu at 0.4-0.5 s within 0.03, 0.387 of it the next 0.1 s within 0.01, under 0.2% of it at 1.1-1.2 s. Kept in {@code
+     * target/emtp/mmc-stations-open}.
+     *
+     * <p>Run 2026-11-15: VSC3's DC current 5.8185 pu, 0.3867 of it the next 0.1 s, 1.4e-3 of it at the end - ATP's 5.8125 and 0.387.
+     */
+    @Test
+    @Tag("emtp")
+    void theStationsAcBreakersLetAnMmcsDcCurrentDieOut() {
+        Network network = ExampleNetworks.readVscBench("vsc-three-terminal-all-droop-mmc", EmtExtensionsXmlReader::readNetwork);
+        network.getVoltageSourceConverters().forEach(c -> c.addExtension(VscProtectionModel.class, new OvercurrentProtection(2.0, 0.0)));
+        EmtNetworkPreprocessor.preprocess(network, LocalComputationManager.getDefault());
+        EmtpOutput output = stationsOpen(network, "mmc-stations-open");
+        SoftAssertions softly = new SoftAssertions();
+        cutOffTheirAcSides(softly, output);
+        double current = output.mean("control:VSC3_IDC", 0.4, 0.5);
+        double decay = output.mean("control:VSC3_IDC", 0.5, 0.6) / current;
+        double end = output.mean("control:VSC3_IDC", 1.1, 1.2) / current;
+        System.out.printf(Locale.ROOT, "VSC3 DC current %.4f pu at 0.4-0.5 s (ATP 5.8125), %.4f of it the next 0.1 s (ATP 0.387), %.2e at 1.1-1.2 s%n", current, decay,
+                end);
+        softly.assertThat(current).as("VSC3 DC current at 0.4-0.5 s, pu: ATP's").isCloseTo(5.8125, within(0.03));
+        softly.assertThat(decay).as("VSC3 DC current at 0.5-0.6 s against 0.4-0.5 s: ATP's").isCloseTo(0.387, within(0.01));
+        softly.assertThat(end).as("VSC3 DC current at 1.1-1.2 s against 0.4-0.5 s: died out").isLessThan(0.002);
+        softly.assertAll();
+    }
+
+    /** The solid fault on DC3P at 0.3 s, the transformers' station ends T1, T2, T3 opened at 0.36 s at their currents' zeros, run 1.2 s. */
+    private static EmtpOutput stationsOpen(Network network, String name) {
+        List<EmtEvent> events = new ArrayList<>(List.of(new DcFault("FDC", "DC3P", 0.0, 0.3, 10.0)));
+        for (String transformer : List.of("T1", "T2", "T3")) {
+            events.add(new BranchOperation(transformer, TwoSides.ONE, 0.36, BreakerAction.OPEN, FaultClearing.AT_CURRENT_ZERO));
+        }
+        return EmtpRunner.run(EmtpNetlistWriter.write(network, Path.of("target", "emtp", name), new EmtpSimulationSettings(20.0e-6, 1.2, FREQUENCY), events),
+                EmtpSettings.defaults()).output();
+    }
+
+    /** Every station blocked by its protection within 20 ms of the fault, before its breaker opens, nothing drawn from the AC side once it
+     * has; VSC1's and VSC2's DC currents died out and their DC voltages at earth over the last 0.2 s. */
+    private static void cutOffTheirAcSides(SoftAssertions softly, EmtpOutput output) {
+        double fault = NumericalAids.switchingInstant(0.3, 20.0e-6);
+        for (String id : List.of("VSC1", "VSC2", "VSC3")) {
+            double blocked = output.firstTimeBelow("control:" + id + "_RUN", 0.5, 0.2);
+            double p = output.peakAbsolute("control:" + id + "_P", 0.4, 1.2);
+            double q = output.peakAbsolute("control:" + id + "_Q", 0.4, 1.2);
+            System.out.printf(Locale.ROOT, "%s blocked %.2f ms after the fault; P %.1e, Q %.1e once cut off; DC current %.1e, voltage %.1e at the end%n", id,
+                    (blocked - fault) * 1.0e3, p, q, output.peakAbsolute("control:" + id + "_IDC", 1.0, 1.2), output.peakAbsolute("control:" + id + "_VDC", 1.0, 1.2));
+            softly.assertThat(blocked).as("%s blocked at, s: by its protection, before its breaker opens", id).isBetween(fault, fault + 0.02);
+            softly.assertThat(p).as("%s power once its breaker has opened, pu", id).isLessThan(1.0e-4);
+            softly.assertThat(q).as("%s reactive power once its breaker has opened, pu", id).isLessThan(1.0e-4);
+        }
+        for (String id : List.of("VSC1", "VSC2")) {
+            softly.assertThat(output.peakAbsolute("control:" + id + "_IDC", 1.0, 1.2)).as("%s DC current at the end, pu: died out", id).isLessThan(0.01);
+            softly.assertThat(output.peakAbsolute("control:" + id + "_VDC", 1.0, 1.2)).as("%s DC voltage at the end, pu: at earth", id).isLessThan(0.005);
+        }
+    }
+
+    /** Example 4 through a solid fault on DC3P from 0.3 s to the end, run 1.4 s: its stations blocked in turn by their protections, each
      * {@code atp} seconds after the fault within 0.5 ms; then upstream's checks every 0.2 s. */
     private static void blockedInTurnAndFedThroughTheBridges(Network network, String name, double[] atp, double shortCircuitTolerance) {
         double fault = 0.3;
-        double runEnd = 1.3;
+        double runEnd = 1.4;
         EmtpOutput output = EmtpRunner.run(EmtpNetlistWriter.write(network, Path.of("target", "emtp", name),
                 new EmtpSimulationSettings(20.0e-6, runEnd, FREQUENCY), List.of(new DcFault("FDC", "DC3P", 0.0, fault, 10.0))), EmtpSettings.defaults()).output();
         SoftAssertions softly = new SoftAssertions();

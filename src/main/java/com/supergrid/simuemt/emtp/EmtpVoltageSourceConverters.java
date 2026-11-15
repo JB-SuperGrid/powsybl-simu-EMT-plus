@@ -550,7 +550,7 @@ final class EmtpVoltageSourceConverters {
         String eqNegative = id + "_EQN";
         String vPole = id + "_VDP";
         String vReturn = id + "_VDR";
-        String dcCurrent = id + "_IDC";
+        String dcCurrent = id + "_IDCS";
         double vbpk = initial.peakPhaseVoltageBase();
         double dcBaseVolts = initial.dcNominalVoltage() * 1.0e3;
         boolean blockable = devices.stream().anyMatch(d -> d.lines().get(0).startsWith("_c_fu;" + id + "_RUN;"));
@@ -609,7 +609,8 @@ final class EmtpVoltageSourceConverters {
      * {@code converter} blocked at {@code blockingSeconds}, as upstream's backends block it: its EMFs cut from their reactors by a switch
      * opened at the order whatever its current - the valves' switches off, the reactors' current taken over by their diodes -; its valves
      * left to a diode bridge, each diode through {@link NumericalAids#FAULT_ON_RESISTANCE_OHM} from each phase's EMF side of the reactor
-     * towards the DC node the load flow has higher and from the other back, behind a switch closed at the order - ATP's gate -, its snubber
+     * towards the DC node the load flow has higher and from the other back - the pole's rail behind the bridge inductance, if any -, behind
+     * a switch closed at the order - ATP's gate -, its snubber
      * and grading resistor switched across it then; its EMFs on earth, centred on its DC midpoint; its currents read on a meter between its
      * bus and its reactors - a controlled source held at 0 V, its current observed -, the bridge's with them once blocked, as PSCAD's and
      * ATP's. The running flag {@code <id>_RUN}, 1 then 0 from the order: its EMFs' alternating part, its DC current and its controls'
@@ -628,6 +629,14 @@ final class EmtpVoltageSourceConverters {
         boolean poleHigher = converter.getDcTerminal1().getDcNode().getV() >= converter.getDcTerminal2().getDcNode().getV();
         if (model.blocksCapacitorDischarge()) {
             capacitorBehindDiode(devices, id, pole, ret);
+        }
+        // The bridge inductance, if any, from the pole to the bridge's rail, 16L/Dt across it, as ATP's.
+        if (model.hasBridgeInductance()) {
+            String rail = id + "_BR";
+            devices.add(element("_RLC", id + "_LB", List.of(pole, rail), "0," + number(model.getBridgeInductance()) + ",0,0,0,"));
+            devices.add(element("_RLC", id + "_LBD", List.of(pole, rail),
+                    number(NumericalAids.seriesInductanceDampingOhm(model.getBridgeInductance(), settings.timeStepSeconds())) + ",0,0,0,0,"));
+            pole = rail;
         }
         String high = poleHigher ? pole : ret;
         String low = poleHigher ? ret : pole;
@@ -736,6 +745,7 @@ final class EmtpVoltageSourceConverters {
         }
         if (converter.getExtension(VscProtectionModel.class) instanceof OvercurrentProtection protection) {
             protection(devices, id, protection, initial, settings);
+            dcCurrentRecorded(devices, id, initial);
             inputs.add(protectionLatch(devices, id + "_PT", id + "_PTI", protection));
             before = before + "*u[2]";
             if (deblocked) {
@@ -753,6 +763,12 @@ final class EmtpVoltageSourceConverters {
         // Recorded, as the other backends record it.
         devices.add(scoped(function(id + "_RUN", id + "_RUN", inputs, 1.0, running + "+0*u[1]")));
         devices.add(function(id + "_GATE", id + "_GATE", List.of(id + "_RUN"), 0.0, "1-u[1]"));
+    }
+
+    /** A protected converter's DC current, {@code control:<id>_IDC}, per unit of its base, unfiltered - as the other backends record it. */
+    private static void dcCurrentRecorded(List<EmtpSynchronousMachines.Device> devices, String id, AveragedVscInitialState initial) {
+        devices.add(scoped(function(id + "_IDC", id + "_IDC", List.of(id + "_IDCM"), initial.dcCurrent() * 1.0e3 / initial.dcCurrentBase(),
+                "u[1]/" + number(initial.dcCurrentBase()))));
     }
 
     /** An {@link OvercurrentProtection}'s detection {@code <id>_PTI}: the worst arm current, {@code |i_dc| / 3 + |i_k| / 2}, past its
@@ -890,7 +906,7 @@ final class EmtpVoltageSourceConverters {
         String measured = model.measuresDcVoltageAtTerminal() ? terminal : pole;
         String poleTie = id + "_DCP";
         String returnTie = id + "_DCR";
-        String dcCurrent = id + "_IDC";
+        String dcCurrent = id + "_IDCS";
         // EMTP's controlled current source drives its current out of its first pin into its second one through the network: from the pole.
         devices.add(element("_cI", id + "_DC", List.of(poleTie, returnTie, dcCurrent, id + "_DCV", id + "_DCI", id + "_DCPW"), "-1,1E15,0,0,0,0,0,0,0,"));
         devices.add(element("_RLC", id + "_TP", List.of(poleTie, pole), number(NumericalAids.CURRENT_SOURCE_TIE_RESISTANCE_OHM) + ",0,0,0,0,"));
