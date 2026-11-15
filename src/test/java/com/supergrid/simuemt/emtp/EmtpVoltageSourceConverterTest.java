@@ -109,6 +109,108 @@ class EmtpVoltageSourceConverterTest {
         assertThat(main).startsWith("-1," + EmtpNetlistWriter.number(NumericalAids.switchingInstant(0.103, 20.0e-6)) + ",1000000000.000000,");
     }
 
+    /** A hybrid DC breaker opened then reclosed: a main branch's switch per interval closed, the second closing at the reclosing's order and
+     * never opening, beside the first. */
+    @Test
+    void writesAHybridBreakerReclosed(@TempDir Path tempDir) throws IOException {
+        List<String> lines = Files.readAllLines(EmtpNetlistWriter.write(bench("vsc-three-terminal-dc-breaker"), tempDir,
+                new EmtpSimulationSettings(20.0e-6, 0.3, FREQUENCY), List.of(new DcFault("FDC", "DC2L", 10.0, 0.1, 0.15),
+                        DcSwitchOperation.opening("DCB", 0.103), new DcSwitchOperation("DCB", 0.2, BreakerAction.CLOSE))), StandardCharsets.ISO_8859_1);
+
+        assertThat(lines).contains("_Sw0;DCB;2;2;DCB_S,DC2L,", "_Sw0;DCB_2;2;2;DCB_S,DC2L,");
+        String second = lines.get(lines.indexOf("_Sw0;DCB_2;2;2;DCB_S,DC2L,") + 1);
+        assertThat(second).startsWith(EmtpNetlistWriter.number(NumericalAids.switchingInstant(0.2, 20.0e-6)) + ",1E15,");
+    }
+
+    /**
+     * Upstream's {@code AtpSolverIntegrationTest#aReclosedDcBreakerRechargesTheDeadLine}: example 4's MMC grid with its DC breaker, every
+     * station protected at 2 pu, the solid fault on DC3P from 0.3 to 0.5 s, DCB opened at 0.302 s and reclosed at 0.6 s onto the dead line,
+     * T3 opened at 0.36 s ({@code dc-fault-dc3p-solid-0.3-0.5-breaker-dcb-0.302-reclose-0.6-t3-open-0.36}) - held to ATP's checks: VSC3
+     * blocked by its protection; DC3P 0.15 to 0.3 pu before the reclosing, VSC3's cut current in its capacitor; its crest once reclosed
+     * 1.1 to 1.35 pu; within 2e-4 pu of DC2P from 0.8 s; VSC1 and VSC2 never blocked, their powers within 4e-3 pu of the load flow's
+     * without VSC3 at 1.5-2.0 s. Kept in {@code target/emtp/dc-breaker-reclose}.
+     *
+     * <p>Run 2026-11-15: DC3P 0.211 pu before the reclosing, its crest 1.242 pu (ATP 1.24), 1.6e-4 pu from DC2P at 0.8 s; VSC1 0.578 and
+     * VSC2 -0.573 pu at the end, on the load flow's without VSC3.
+     */
+    @Test
+    @Tag("emtp")
+    void aReclosedDcBreakerRechargesTheDeadLine() {
+        double runEnd = 2.0;
+        Network network = ExampleNetworks.readVscBench("vsc-three-terminal-dc-breaker-mmc", EmtExtensionsXmlReader::readNetwork);
+        network.getVoltageSourceConverters().forEach(c -> c.addExtension(VscProtectionModel.class, new OvercurrentProtection(2.0, 0.0)));
+        EmtNetworkPreprocessor.preprocess(network, LocalComputationManager.getDefault());
+        List<EmtEvent> events = EmtEventsXml.read(ExampleNetworks.resource("/events/dc-fault-dc3p-solid-0.3-0.5-breaker-dcb-0.302-reclose-0.6-t3-open-0.36.xml"));
+        EmtpOutput output = EmtpRunner.run(EmtpNetlistWriter.write(network, Path.of("target", "emtp", "dc-breaker-reclose"), new EmtpSimulationSettings(20.0e-6, runEnd,
+                FREQUENCY), events), EmtpSettings.defaults()).output();
+        Network withoutVsc3 = ExampleNetworks.readVscBench("vsc-three-terminal-dc-breaker-mmc", EmtExtensionsXmlReader::readNetwork);
+        withoutVsc3.getVoltageSourceConverter("VSC3").getTerminal1().disconnect();
+        ExampleNetworks.runLoadFlow(withoutVsc3);
+        String dc3p = EmtpVoltageSourceConverters.dcVoltageScope("DC3P");
+        String dc2p = EmtpVoltageSourceConverters.dcVoltageScope("DC2P");
+        double base = 5.0e5;
+        System.out.printf(Locale.ROOT, "DC3P %.3f pu before the reclosing, crest %.3f pu after, %.2e pu from DC2P at 0.8-0.82 s; VSC1 %.4f, VSC2 %.4f pu%n",
+                output.mean(dc3p, 0.55, 0.6) / base, output.peakAbsolute(dc3p, 0.6, runEnd) / base,
+                (output.mean(dc3p, 0.8, 0.82) - output.mean(dc2p, 0.8, 0.82)) / base, output.mean("control:VSC1_P", 1.5, runEnd),
+                output.mean("control:VSC2_P", 1.5, runEnd));
+        SoftAssertions softly = new SoftAssertions();
+        softly.assertThat(output.firstTimeBelow("control:VSC3_RUN", 0.5, 0.1)).as("VSC3 blocked at, s: by its protection").isBetween(0.3, 0.301);
+        softly.assertThat(output.mean(dc3p, 0.55, 0.6) / base).as("DC3P before the reclosing, pu").isBetween(0.15, 0.3);
+        softly.assertThat(output.peakAbsolute(dc3p, 0.6, runEnd) / base).as("DC3P's crest once reclosed, pu").isBetween(1.1, 1.35);
+        for (double start = 0.8; start < runEnd - 1.0e-9; start += 0.1) {
+            softly.assertThat(output.mean(dc3p, start, start + 0.02) / base).as("DC3P from %.1f s, pu: DC2P's", start)
+                    .isCloseTo(output.mean(dc2p, start, start + 0.02) / base, within(2.0e-4));
+        }
+        for (String id : List.of("VSC1", "VSC2")) {
+            VoltageSourceConverter left = withoutVsc3.getVoltageSourceConverter(id);
+            double rating = ((AveragedConverterModel) network.getVoltageSourceConverter(id).getExtension(VoltageSourceConverterModel.class)).getRatedApparentPower();
+            softly.assertThat(output.firstTimeBelow("control:" + id + "_RUN", 0.5, 0.1)).as("%s blocked, s: never", id).isNaN();
+            softly.assertThat(output.mean("control:" + id + "_P", 1.5, runEnd)).as("%s power at the end, pu: its droop's without VSC3", id)
+                    .isCloseTo(left.getTerminal1().getP() / rating, within(0.004));
+        }
+        softly.assertAll();
+    }
+
+    /**
+     * Upstream's {@code AtpSolverIntegrationTest#aMeshedGridsFaultedLineIsCutOffAtBothEndsNoStationBlocked}: example 4 meshed, its three
+     * MMC stations protected at 2 pu, a solid fault at DCL2's midpoint from 0.3 to 0.5 s, DCB and DCB3 opened at 0.302 s and reclosed at
+     * 0.6 s ({@code dc-fault-dc2m-solid-0.3-0.5-breakers-dcb-dcb3-0.302-reclose-0.6}) - held to ATP's checks: no station blocked; each
+     * power back within 2e-4 pu of its before the fault's at 1-2 s; each DC voltage within 0.02 pu of 1 through the isolation; VSC3's DC
+     * current's crest 6.5 to 8.5 pu; VSC3's power 0.3 to 0.37 pu and VSC2's -0.8 to -0.73 through the isolation. Kept in {@code
+     * target/emtp/meshed-reclose}.
+     *
+     * <p>Run 2026-11-15: no station blocked; VSC3's DC current's crest 7.58 pu (ATP 7.5); VSC3's power 0.329 pu through the isolation (ATP
+     * 0.33), VSC2's -0.764; every power back within 5e-6 pu, the DC voltages 0.995 to 1.000 through the isolation.
+     */
+    @Test
+    @Tag("emtp")
+    void aMeshedGridsFaultedLineIsCutOffAtBothEndsNoStationBlocked() {
+        double runEnd = 2.0;
+        Network network = ExampleNetworks.readVscBench("vsc-three-terminal-meshed-mmc", EmtExtensionsXmlReader::readNetwork);
+        network.getVoltageSourceConverters().forEach(c -> c.addExtension(VscProtectionModel.class, new OvercurrentProtection(2.0, 0.0)));
+        EmtNetworkPreprocessor.preprocess(network, LocalComputationManager.getDefault());
+        List<EmtEvent> events = EmtEventsXml.read(ExampleNetworks.resource("/events/dc-fault-dc2m-solid-0.3-0.5-breakers-dcb-dcb3-0.302-reclose-0.6.xml"));
+        EmtpOutput output = EmtpRunner.run(EmtpNetlistWriter.write(network, Path.of("target", "emtp", "meshed-reclose"), new EmtpSimulationSettings(20.0e-6, runEnd,
+                FREQUENCY), events), EmtpSettings.defaults()).output();
+        SoftAssertions softly = new SoftAssertions();
+        for (int index = 1; index <= 3; index++) {
+            String id = "VSC" + index;
+            double before = output.mean("control:" + id + "_P", 0.2, 0.3);
+            System.out.printf(Locale.ROOT, "%s power %.4f before, %.4f through the isolation, %.2e back; DC voltage %.4f through%n", id, before,
+                    output.mean("control:" + id + "_P", 0.4, 0.5), output.mean("control:" + id + "_P", 1.0, runEnd) - before,
+                    output.mean("control:" + id + "_VDC", 0.35, 0.6));
+            softly.assertThat(output.firstTimeBelow("control:" + id + "_RUN", 0.5, 0.1)).as("%s blocked, s: never", id).isNaN();
+            softly.assertThat(output.mean("control:" + id + "_P", 1.0, runEnd)).as("%s power at the end, pu: before the fault's", id)
+                    .isCloseTo(before, within(2.0e-4));
+            softly.assertThat(output.mean("control:" + id + "_VDC", 0.35, 0.6)).as("%s DC voltage through the isolation, pu", id).isCloseTo(1.0, within(0.02));
+        }
+        System.out.printf(Locale.ROOT, "VSC3 DC current's crest %.3f pu%n", output.peakAbsolute("control:VSC3_IDC", 0.3, 0.31));
+        softly.assertThat(output.peakAbsolute("control:VSC3_IDC", 0.3, 0.31)).as("VSC3's DC current's crest, pu").isBetween(6.5, 8.5);
+        softly.assertThat(output.mean("control:VSC3_P", 0.4, 0.5)).as("VSC3's power through the isolation, pu").isBetween(0.3, 0.37);
+        softly.assertThat(output.mean("control:VSC2_P", 0.4, 0.5)).as("VSC2's power through the isolation, pu").isBetween(-0.8, -0.73);
+        softly.assertAll();
+    }
+
     /**
      * Run live from EMTP's steady state over 0.5 s: every bus within 1e-4 pu and 0.01 degree of the load flow, every DC node within 1e-4
      * pu, VSC1's powers within 1e-3 pu; VSC2, on the DC voltage, carries the converters' reactor losses besides the load flow's, its power

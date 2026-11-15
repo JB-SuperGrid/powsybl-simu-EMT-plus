@@ -48,6 +48,7 @@ import com.powsybl.simuemt.extensions.hvdc.control.SrfPll;
 import com.powsybl.simuemt.extensions.hvdc.control.VscControlModel;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -199,10 +200,11 @@ final class EmtpVoltageSourceConverters {
         return reasons;
     }
 
-    /** Why the DC events cannot be written yet - empty if they can: a DC switch operated but a hybrid breaker's opening, once. */
+    /** Why the DC events cannot be written yet - empty if they can: a DC switch operated but a closed hybrid breaker opened, then reclosed and
+     * opened again in turn. */
     static List<String> unsupportedDcEventReasons(Network network, List<? extends EmtEvent> events) {
         List<String> reasons = new ArrayList<>();
-        Map<String, Integer> operations = new HashMap<>();
+        Map<String, BreakerAction> lastActions = new HashMap<>();
         for (EmtEvent event : events) {
             if (event instanceof DcFault fault) {
                 for (String node : Stream.of(fault.dcNodeId(), fault.otherDcNodeId()).filter(Objects::nonNull).toList()) {
@@ -215,8 +217,11 @@ final class EmtpVoltageSourceConverters {
                 if (dcSwitch == null) {
                     reasons.add("DC switch '" + operation.switchId() + "' is operated, which the network has not");
                 } else if (!(dcSwitch.getExtension(DcBreakerModel.class) instanceof HybridDcBreakerModel) || dcSwitch.isOpen()
-                        || operation.action() != BreakerAction.OPEN || operations.merge(dcSwitch.getId(), 1, Integer::sum) > 1) {
-                    reasons.add("DC switch '" + dcSwitch.getId() + "' is operated but as a closed hybrid breaker opened once, which is not written yet");
+                        || operation.action() == lastActions.getOrDefault(dcSwitch.getId(), BreakerAction.CLOSE)) {
+                    reasons.add("DC switch '" + dcSwitch.getId() + "' is operated but as a closed hybrid breaker opened, then reclosed and opened again in"
+                            + " turn, which is not written yet");
+                } else {
+                    lastActions.put(dcSwitch.getId(), operation.action());
                 }
             }
         }
@@ -252,9 +257,9 @@ final class EmtpVoltageSourceConverters {
                     number(ground.getR() > 0.0 ? ground.getR() : GROUND_CONNECTION_OHM) + ",0,0,0,0,"));
         }
         for (DcSwitch dcSwitch : network.getDcSwitches()) {
-            Optional<DcSwitchOperation> opening = events.stream().filter(e -> e instanceof DcSwitchOperation o && o.switchId().equals(dcSwitch.getId()))
-                    .map(DcSwitchOperation.class::cast).findFirst();
-            dcSwitch(devices, dcSwitch, opening.map(DcSwitchOperation::timeSeconds).orElse(Double.NaN), settings);
+            List<DcSwitchOperation> operations = events.stream().filter(e -> e instanceof DcSwitchOperation o && o.switchId().equals(dcSwitch.getId()))
+                    .map(DcSwitchOperation.class::cast).sorted(Comparator.comparingDouble(DcSwitchOperation::timeSeconds)).toList();
+            dcSwitch(devices, dcSwitch, operations, settings);
         }
         int index = 0;
         for (EmtEvent event : events) {
@@ -276,19 +281,21 @@ final class EmtpVoltageSourceConverters {
     /**
      * A DC switch, as upstream's backends write it. Left alone, its state: closed, its resistance - {@link
      * NumericalAids#FAULT_ON_RESISTANCE_OHM} at the least - and a {@link HybridDcBreakerModel}'s reactor, {@code 16L/Dt} across it; open,
-     * nothing. A hybrid breaker opened at {@code openingSeconds}: its reactor, if any, from DC node 1 to a node of its own, then its main
-     * branch - that resistance and a switch closed from the steady state on, opened at the order whatever its current - and across it its
+     * nothing. A hybrid breaker operated, {@code operations} in time order: its reactor, if any, from DC node 1 to a node of its own, then its
+     * main branch - that resistance and a switch per interval it is closed for, from the steady state on or a reclosing's order to an
+     * opening's, letting go at the order whatever its current, as ATP's cards - and across it its
      * energy absorber, an EMTP ZnO column (its first segment from {@link #ZNO_FIRST_SEGMENT_PU} at the least: EMTP joins it to the origin
      * linearly, at currents nothing reads); with a reactor, the breaker's RC across them ({@link NumericalAids#DC_BREAKER_SNUBBER_F}).
      */
-    private static void dcSwitch(List<EmtpSynchronousMachines.Device> devices, DcSwitch dcSwitch, double openingSeconds, EmtpSimulationSettings settings) {
+    private static void dcSwitch(List<EmtpSynchronousMachines.Device> devices, DcSwitch dcSwitch, List<DcSwitchOperation> operations,
+                                 EmtpSimulationSettings settings) {
         String id = sanitize(dcSwitch.getId());
         String node1 = dcNode(dcSwitch.getDcNode1());
         String node2 = dcNode(dcSwitch.getDcNode2());
         double resistance = Math.max(dcSwitch.getR(), NumericalAids.FAULT_ON_RESISTANCE_OHM);
         HybridDcBreakerModel model = dcSwitch.getExtension(DcBreakerModel.class) instanceof HybridDcBreakerModel hybrid ? hybrid : null;
         double reactor = model == null ? 0.0 : model.getReactorInductance();
-        if (Double.isNaN(openingSeconds)) {
+        if (operations.isEmpty()) {
             if (!dcSwitch.isOpen()) {
                 devices.add(element("_RLC", id, List.of(node1, node2), number(resistance) + "," + number(reactor) + ",0,0,0,"));
                 if (reactor > 0.0) {
@@ -309,8 +316,19 @@ final class EmtpVoltageSourceConverters {
         }
         String inner = id + "_S";
         devices.add(element("_RLC", id + "_R", List.of(side, inner), number(resistance) + ",0,0,0,0,"));
-        devices.add(element("_Sw0", id, List.of(inner, node2), "-1," + number(NumericalAids.switchingInstant(openingSeconds, settings.timeStepSeconds())) + ","
-                + number(ANY_CURRENT_AMPERES) + ",0,0,,1,.1,.001,5,?i,"));
+        String closedFrom = "-1";
+        int interval = 0;
+        for (DcSwitchOperation operation : operations) {
+            String order = number(NumericalAids.switchingInstant(operation.timeSeconds(), settings.timeStepSeconds()));
+            if (operation.action() == BreakerAction.OPEN) {
+                devices.add(mainBranchSwitch(id, ++interval, inner, node2, closedFrom, order));
+            } else {
+                closedFrom = order;
+            }
+        }
+        if (operations.get(operations.size() - 1).action() == BreakerAction.CLOSE) {
+            devices.add(mainBranchSwitch(id, ++interval, inner, node2, closedFrom, "1E15"));
+        }
         ZnOArrester arrester = model.getArrester();
         List<String> lines = new ArrayList<>(List.of("_ZnO;" + id + "_ZNO;2;2;" + side + "," + node2 + ",",
                 number(arrester.referenceVoltage()) + ",,,1e-06,15,5,1,?i,"));
@@ -320,6 +338,13 @@ final class EmtpVoltageSourceConverters {
             lines.add(number(segment.coefficient()) + " " + number(segment.exponent()) + " " + number(minimum));
         }
         devices.add(new EmtpSynchronousMachines.Device("_ZnO", lines));
+    }
+
+    /** A hybrid breaker's main branch's switch for its {@code interval}-th closed interval, {@code <id>} then {@code <id>_<interval>}, its
+     * current recorded. */
+    private static EmtpSynchronousMachines.Device mainBranchSwitch(String id, int interval, String inner, String node2, String closing, String opening) {
+        return element("_Sw0", interval == 1 ? id : id + "_" + interval, List.of(inner, node2), closing + "," + opening + "," + number(ANY_CURRENT_AMPERES)
+                + ",0,0,,1,.1,.001,5,?i,");
     }
 
     /** The DC node's EMTP node. */
