@@ -17,11 +17,16 @@ import com.powsybl.simuemt.extensions.event.DcFault;
 import com.powsybl.simuemt.extensions.event.DcSwitchOperation;
 import com.powsybl.simuemt.extensions.event.EmtEvent;
 import com.powsybl.simuemt.extensions.event.FaultClearing;
+import com.powsybl.simuemt.extensions.hvdc.AutomaticRestart;
 import com.powsybl.simuemt.extensions.hvdc.AveragedConverterModel;
 import com.powsybl.simuemt.extensions.hvdc.AveragedVscModel;
 import com.powsybl.simuemt.extensions.hvdc.OvercurrentProtection;
 import com.powsybl.simuemt.extensions.hvdc.VoltageSourceConverterModel;
 import com.powsybl.simuemt.extensions.hvdc.VscProtectionModel;
+import com.powsybl.simuemt.extensions.hvdc.control.FaultRideThrough;
+import com.powsybl.simuemt.extensions.hvdc.control.GridFollowingControl;
+import com.powsybl.simuemt.extensions.hvdc.control.VscControlModel;
+import com.powsybl.simuemt.preprocessing.EmtEventsXml;
 import com.powsybl.simuemt.preprocessing.EmtExtensionsXmlReader;
 import com.powsybl.simuemt.preprocessing.EmtNetworkPreprocessor;
 import com.powsybl.simuemt.testresources.ExampleNetworks;
@@ -264,6 +269,66 @@ class EmtpVoltageSourceConverterTest {
         softly.assertThat(current).as("VSC3 DC current at 0.4-0.5 s, pu: ATP's").isCloseTo(5.8125, within(0.03));
         softly.assertThat(decay).as("VSC3 DC current at 0.5-0.6 s against 0.4-0.5 s: ATP's").isCloseTo(0.387, within(0.01));
         softly.assertThat(end).as("VSC3 DC current at 1.1-1.2 s against 0.4-0.5 s: died out").isLessThan(0.002);
+        softly.assertAll();
+    }
+
+    /**
+     * Upstream's {@code AtpSolverIntegrationTest#aStationRestartsItselfTwiceThenStaysBlocked}: example 4's MMC grid with its DC breaker,
+     * every station protected at 2 pu, VSC3's protection restarting it ({@code AutomaticRestart}: above 0.5 pu for 20 ms, blocked 0.1 s at
+     * least, twice at most), VSC3 with an active power recovery ramp of 2 pu/s; DC3P faulted three times ({@code
+     * dc-faults-dc3p-solid-0.3-1.2-1.9-breaker-dcb-0.302-t3-open-0.36-close-0.55}), DCB opened and left open, T3 opened and reclosed - held
+     * to ATP's checks: VSC3 blocked at each fault; restarted first on its DC voltage, 20 ms after it rose past 0.5 pu once T3 reclosed,
+     * then on its minimum blocked time, 0.1 s after its second trip; blocked for good after its third; its section on its droop at 1.028
+     * pu, its power about 0, while it runs; its DC current's crest 3 to 4.5 pu at its first restart; VSC1 and VSC2 never blocked. Run 2.5 s,
+     * kept in {@code target/emtp/station-restart}.
+     *
+     * <p>Run 2026-11-15, ATP's to the step: VSC3 blocked at 0.3002, 1.2003 and 1.9003 s, restarted at 0.5746 s - its DC voltage up at
+     * 0.5546 s - and 1.3003 s; its DC current's crest 3.67 pu at the first restart (ATP 3.7); its section at 1.0280 and 1.0281 pu running,
+     * 0.723 blocked for good; its power -5e-4 and -1.2e-3 pu.
+     */
+    @Test
+    @Tag("emtp")
+    void aStationRestartsItselfTwiceThenStaysBlocked() {
+        double runEnd = 2.5;
+        Network network = ExampleNetworks.readVscBench("vsc-three-terminal-dc-breaker-mmc", EmtExtensionsXmlReader::readNetwork);
+        network.getVoltageSourceConverters().forEach(c -> c.addExtension(VscProtectionModel.class, new OvercurrentProtection(2.0, 0.0)));
+        VoltageSourceConverter vsc3 = network.getVoltageSourceConverter("VSC3");
+        vsc3.addExtension(VscProtectionModel.class, new OvercurrentProtection(2.0, 0.0, new AutomaticRestart(0.5, 0.02, 0.1, 2)));
+        vsc3.addExtension(VscControlModel.class, GridFollowingControl.of(vsc3).withFaultRideThrough(new FaultRideThrough(0.9, 2.0, 2.0)));
+        EmtNetworkPreprocessor.preprocess(network, LocalComputationManager.getDefault());
+        List<EmtEvent> events = EmtEventsXml.read(ExampleNetworks.resource("/events/dc-faults-dc3p-solid-0.3-1.2-1.9-breaker-dcb-0.302-t3-open-0.36-close-0.55.xml"));
+        EmtpOutput output = EmtpRunner.run(EmtpNetlistWriter.write(network, Path.of("target", "emtp", "station-restart"), new EmtpSimulationSettings(20.0e-6, runEnd,
+                FREQUENCY), events), EmtpSettings.defaults()).output();
+        String run = "control:VSC3_RUN";
+        double firstTrip = output.firstTimeBelow(run, 0.5, 0.1);
+        double firstRestart = output.firstTimeAbove(run, 0.5, firstTrip);
+        double secondTrip = output.firstTimeBelow(run, 0.5, firstRestart);
+        double secondRestart = output.firstTimeAbove(run, 0.5, secondTrip);
+        double thirdTrip = output.firstTimeBelow(run, 0.5, secondRestart);
+        double voltageUp = output.firstTimeAbove("control:VSC3_VDC", 0.5, 0.5);
+        System.out.printf(Locale.ROOT, "VSC3 blocked %.4f s, voltage up %.4f s, restarted %.4f s, blocked %.4f s, restarted %.4f s, blocked %.4f s; DC voltage %.3f"
+                + " blocked for good, %.4f and %.4f running, power %.4f and %.4f; DC current's crest %.2f pu%n", firstTrip, voltageUp, firstRestart, secondTrip,
+                secondRestart, thirdTrip, output.mean("control:VSC3_VDC", 2.0, runEnd), output.mean("control:VSC3_VDC", 1.0, 1.2), output.mean("control:VSC3_VDC", 1.7, 1.9),
+                output.mean("control:VSC3_P", 1.0, 1.2), output.mean("control:VSC3_P", 1.7, 1.9), output.peakAbsolute("control:VSC3_IDC", firstRestart, firstRestart + 0.05));
+        SoftAssertions softly = new SoftAssertions();
+        softly.assertThat(firstTrip).as("VSC3 blocked by its protection at, s: the first fault").isBetween(0.3, 0.301);
+        softly.assertThat(voltageUp).as("VSC3's DC voltage above the threshold at, s: T3 reclosed").isBetween(0.55, 0.56);
+        softly.assertThat(firstRestart - voltageUp).as("VSC3's first restart after its DC voltage rose, s: the hold time").isCloseTo(0.02, within(2.0e-4));
+        softly.assertThat(secondTrip).as("VSC3 blocked again at, s: the second fault").isBetween(1.2, 1.201);
+        softly.assertThat(output.mean("control:VSC3_VDC", 1.26, 1.3)).as("VSC3's DC voltage before its second restart, pu").isBetween(0.7, 0.8);
+        softly.assertThat(secondRestart - secondTrip).as("VSC3's second restart after its trip, s: the minimum blocked time").isCloseTo(0.1, within(2.0e-4));
+        softly.assertThat(thirdTrip).as("VSC3 blocked again at, s: the third fault").isBetween(1.9, 1.901);
+        softly.assertThat(output.firstTimeAbove(run, 0.5, thirdTrip)).as("VSC3 restarted after its third trip: never").isNaN();
+        softly.assertThat(output.mean("control:VSC3_VDC", 2.0, runEnd)).as("VSC3's DC voltage blocked for good, pu: its diodes'").isBetween(0.6, 0.8);
+        for (double[] running : new double[][] {{1.0, 1.2}, {1.7, 1.9}}) {
+            softly.assertThat(output.mean("control:VSC3_VDC", running[0], running[1])).as("VSC3's DC voltage restarted, pu").isCloseTo(1.028, within(0.005));
+            softly.assertThat(output.mean("control:VSC3_P", running[0], running[1])).as("VSC3's power restarted, pu").isCloseTo(0.0, within(0.01));
+        }
+        softly.assertThat(output.peakAbsolute("control:VSC3_IDC", firstRestart, firstRestart + 0.05)).as("VSC3's DC current's crest at its first restart, pu")
+                .isBetween(3.0, 4.5);
+        for (String id : List.of("VSC1", "VSC2")) {
+            softly.assertThat(output.firstTimeBelow("control:" + id + "_RUN", 0.5, 0.1)).as("%s blocked, s: never, DCB open", id).isNaN();
+        }
         softly.assertAll();
     }
 

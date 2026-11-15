@@ -19,6 +19,7 @@ import com.powsybl.simuemt.extensions.event.ConverterDeblocking;
 import com.powsybl.simuemt.extensions.event.DcFault;
 import com.powsybl.simuemt.extensions.event.DcSwitchOperation;
 import com.powsybl.simuemt.extensions.event.EmtEvent;
+import com.powsybl.simuemt.extensions.hvdc.AutomaticRestart;
 import com.powsybl.simuemt.extensions.hvdc.AveragedConverterModel;
 import com.powsybl.simuemt.extensions.hvdc.AveragedDcChopperModel;
 import com.powsybl.simuemt.extensions.hvdc.AveragedMmcModel;
@@ -110,8 +111,9 @@ import static com.supergrid.simuemt.emtp.EmtpSynchronousMachines.function;
  * <p>A {@link ConverterBlocking} of a grid-following converter - an MMC's equivalent capacitor then behind its diode ({@link
  * #capacitorBehindDiode}), unless earthed at its midpoint -, and its {@link ConverterDeblocking} once after: {@link
  * #blocking}, its integrals held while it is blocked and restarted from 0 at the deblocking ({@link #freeze}). An {@link
- * OvercurrentProtection} without automatic restart: blocked as by an event when its worst arm current passes its threshold, its delay
- * on ({@link #runningFlag}), its DC current read on a meter at its DC terminal, every switch of its blocking on its running flag.
+ * OvercurrentProtection}: blocked as by an event when its worst arm current passes its threshold, its delay on ({@link #runningFlag}),
+ * its DC current read on a meter at its DC terminal, every switch of its blocking on its running flag; restarted by its {@link
+ * AutomaticRestart}, if any ({@link #automaticRestart}).
  *
  * <p>Refused, until written: a PLL but the SRF and DDSRF ones, a protection, a chopper but the averaged one, a
  * chopper at an MMC's DC terminal; what {@link EmtpGridFormingControls} refuses.
@@ -152,10 +154,9 @@ final class EmtpVoltageSourceConverters {
             reasons.add("its PLL but the SRF and DDSRF ones are not written yet");
         }
         if (converter.getExtension(VscProtectionModel.class) != null && (!(converter.getExtension(VscProtectionModel.class) instanceof OvercurrentProtection protection)
-                || protection.getAutomaticRestart().isPresent() || converter.getExtension(VscControlModel.class) instanceof GridFormingControl
+                || converter.getExtension(VscControlModel.class) instanceof GridFormingControl
                 || converter.getExtension(VoltageSourceConverterModel.class) instanceof AveragedMmcModel && converter.getExtension(DcEarthingModel.class) != null)) {
-            reasons.add("its protection but an overcurrent one, without automatic restart, on a grid-following converter not earthed at its midpoint is not written"
-                    + " yet");
+            reasons.add("its protection but an overcurrent one on a grid-following converter not earthed at its midpoint is not written yet");
         }
         if (converter.getExtension(DcEarthingModel.class) != null && !(converter.getExtension(DcEarthingModel.class) instanceof DcMidpointEarthing)) {
             reasons.add("its DC earthing but the midpoint one is not written yet");
@@ -530,7 +531,7 @@ final class EmtpVoltageSourceConverters {
         }
         emfsAndDcCurrent(devices, converter, initial, dualSequence, current, cos2, sin2, emfMagnitude, emfAngle, omega, settings);
         if (blockable) {
-            freeze(devices, id, List.of("_IDI", "_IQI", "_PREF", "_UDI", "_UQI", "_UDNI", "_UQNI"), !Double.isNaN(deblockingSeconds));
+            freeze(devices, id, List.of("_IDI", "_IQI", "_PREF", "_UDI", "_UQI", "_UDNI", "_UQNI"), !Double.isNaN(deblockingSeconds) || restartsAutomatically(converter));
         }
         return devices;
     }
@@ -720,6 +721,11 @@ final class EmtpVoltageSourceConverters {
                 + ",0,0,"));
     }
 
+    /** Whether {@code converter}'s protection restarts it automatically. */
+    private static boolean restartsAutomatically(VoltageSourceConverter converter) {
+        return converter.getExtension(VscProtectionModel.class) instanceof OvercurrentProtection protection && protection.getAutomaticRestart().isPresent();
+    }
+
     /** Whether {@code converter} carries an {@link OvercurrentProtection}: its running flag then its protection's too. */
     static boolean isProtected(VoltageSourceConverter converter) {
         return converter.getExtension(VscProtectionModel.class) instanceof OvercurrentProtection;
@@ -747,6 +753,9 @@ final class EmtpVoltageSourceConverters {
             protection(devices, id, protection, initial, settings);
             dcCurrentRecorded(devices, id, initial);
             inputs.add(protectionLatch(devices, id + "_PT", id + "_PTI", protection));
+            if (protection.getAutomaticRestart().isPresent()) {
+                inputs.set(1, automaticRestart(devices, id, protection, settings));
+            }
             before = before + "*u[2]";
             if (deblocked) {
                 devices.add(function(id + "_PRI", id + "_PRI", List.of(id + "_PTI", id + "_DEB"), 0.0, "u[1]*u[2]"));
@@ -763,6 +772,49 @@ final class EmtpVoltageSourceConverters {
         // Recorded, as the other backends record it.
         devices.add(scoped(function(id + "_RUN", id + "_RUN", inputs, 1.0, running + "+0*u[1]")));
         devices.add(function(id + "_GATE", id + "_GATE", List.of(id + "_RUN"), 0.0, "1-u[1]"));
+    }
+
+    /**
+     * An {@link AutomaticRestart}'s ladder, as ATP's, a stage per attempt: tripped - by its protection, or after the stage before's restart
+     * - and not yet restarted, the stage counts how long it has been blocked and how long its DC voltage, as its controls measure it, has
+     * stood above its threshold on end - that count bled away, {@link NumericalAids#RESTART_RESET_TIME_CONSTANT_SECONDS}, while it is
+     * below -; past both times it restarts, latched, its protection re-armed. Returns the running flag the ladder leaves, {@code <id>_R<n>}:
+     * the protection's flag, plus each stage's restart times its re-armed protection's. The first restart is the deblocked flag {@code
+     * <id>_DEB} the integrals restart from 0 on ({@link #freeze}). Each latch the free integral of its rate within 1 - never falling, its rate
+     * no less than 0 -, as the protection's ({@link #protectionLatch}).
+     */
+    private static String automaticRestart(List<EmtpSynchronousMachines.Device> devices, String id, OvercurrentProtection protection,
+                                           EmtpSimulationSettings settings) {
+        AutomaticRestart restart = protection.getAutomaticRestart().orElseThrow();
+        String up = id + "_RVU";
+        devices.add(function(up, up, List.of(id + "_VDC"), 1.0, step("u[1]-" + number(restart.dcVoltageThreshold()))));
+        String bleed = number(1.0 / NumericalAids.RESTART_RESET_TIME_CONSTANT_SECONDS);
+        String rate = number(2.0 / settings.timeStepSeconds());
+        String previousFlag = id + "_PTF";
+        String previousRestart = null;
+        String running = previousFlag;
+        for (int stage = 1; stage <= restart.maxAttempts(); stage++) {
+            String prefix = id + "_R" + stage;
+            List<String> trippedInputs = previousRestart == null ? List.of(previousFlag) : List.of(previousFlag, previousRestart);
+            String tripped = previousRestart == null ? "(1-u[1])" : "u[2]*(1-u[1])";
+            devices.add(function(prefix + "T", prefix + "T", trippedInputs, 0.0, tripped));
+            devices.add(function(prefix + "B", prefix + "B", List.of(prefix + "T", prefix + "D"), 0.0, "u[1]*(1-u[2])"));
+            devices.add(integrator(prefix + "S", prefix + "S", prefix + "B", 1.0, 0.0));
+            devices.add(function(prefix + "HR", prefix + "HR", List.of(prefix + "B", up, prefix + "H"), 0.0, "u[1]*u[2]-(1-u[2])*u[3]*" + bleed));
+            devices.add(integrator(prefix + "H", prefix + "H", prefix + "HR", 1.0, 0.0));
+            devices.add(function(prefix + "K", prefix + "K", List.of(prefix + "T", up, prefix + "S", prefix + "H"), 0.0, "u[1]*u[2]*"
+                    + step("u[3]-" + number(restart.minimumBlockedTime())) + "*" + step("u[4]-" + number(restart.holdTime())) + "*" + rate));
+            devices.add(integrator(prefix + "X", prefix + "X", prefix + "K", 1.0, 0.0));
+            devices.add(function(prefix + "D", prefix + "D", List.of(prefix + "X"), 0.0, "0.5*(u[1]+1-ABS(u[1]-1))"));
+            devices.add(function(prefix + "U", prefix + "U", List.of(id + "_PTI", prefix + "D"), 0.0, "u[1]*u[2]"));
+            String flag = protectionLatch(devices, prefix + "P", prefix + "U", protection);
+            devices.add(function(prefix + "R", prefix + "R", List.of(running, prefix + "D", flag), 1.0, "u[1]+u[2]*u[3]"));
+            running = prefix + "R";
+            previousFlag = flag;
+            previousRestart = prefix + "D";
+        }
+        devices.add(function(id + "_DEB", id + "_DEB", List.of(id + "_R1D"), 0.0, "u[1]"));
+        return running;
     }
 
     /** A protected converter's DC current, {@code control:<id>_IDC}, per unit of its base, unfiltered - as the other backends record it. */
@@ -831,7 +883,9 @@ final class EmtpVoltageSourceConverters {
                     fresh.set(0, "_c_fs;" + integral + "N;2;2;" + integral + "N," + input + "D,");
                     fresh.set(1, "0" + data.substring(data.indexOf(',')));
                     gates.add(new EmtpSynchronousMachines.Device(device.part(), fresh));
-                    gates.add(function(input + "D", input + "D", List.of(input, id + "_DEB"), 0.0, "u[1]*u[2]"));
+                    // Restarting automatically, the fresh integral bled away while blocked: each restart from 0, as ATP's.
+                    gates.add(function(input + "D", input + "D", List.of(input, id + "_DEB", id + "_RUN", integral + "N"), 0.0,
+                            "u[1]*u[2]*u[3]-(1-u[3])*u[4]*" + number(1.0 / NumericalAids.RESTART_RESET_TIME_CONSTANT_SECONDS)));
                     double initialValue = Double.parseDouble(data.substring(0, data.indexOf(',')));
                     gates.add(function(integral, integral, List.of(integral + "O", integral + "N", id + "_DEB"), initialValue, "(1-u[3])*u[1]+u[2]"));
                 }
