@@ -8,6 +8,7 @@ import com.powsybl.iidm.network.VoltageSourceConverter;
 import com.powsybl.simuemt.extensions.hvdc.AveragedConverterModel;
 import com.powsybl.simuemt.extensions.hvdc.AveragedVscInitialState;
 import com.powsybl.simuemt.extensions.hvdc.control.GridFormingControl;
+import com.powsybl.simuemt.extensions.hvdc.control.PowerFrequencyDroop;
 import com.powsybl.simuemt.extensions.hvdc.control.SingleSequenceCurrentControl;
 import com.powsybl.simuemt.extensions.hvdc.control.SrfPll;
 import com.powsybl.simuemt.extensions.hvdc.control.SteadyStateCurrentLimit;
@@ -31,7 +32,7 @@ import static com.supergrid.simuemt.emtp.EmtpVoltageSourceConverters.windupGate;
 
 /**
  * A {@link GridFormingControl} in EMTP's control blocks, as upstream's backends write it: the converter an internal EMF behind a virtual
- * admittance, its angle a {@link VirtualSynchronousMachine}'s, its magnitude on its reactive power droop; the current through the
+ * admittance, its angle a {@link VirtualSynchronousMachine}'s or a {@link PowerFrequencyDroop}'s, its magnitude on its reactive power droop; the current through the
  * admittance - integrated in the machine's frame, {@code (Xv / wb) di/dt = E - v - Rv i - j w Xv i} - the current reference, within the
  * current limit, which the single-sequence current loop follows. The swing {@code 2H dw/dt = P - P* - D (w - 1)}, its power reference
  * less a {@code DcVoltageDroop}'s share, damped by a {@link TransientDamping}'s {@code - Dt (w - wf)}; with a {@link
@@ -42,8 +43,6 @@ import static com.supergrid.simuemt.emtp.EmtpVoltageSourceConverters.windupGate;
  * its virtual machine pre-synchronised on the bus meanwhile: by its steady-state current limit's PLL, its speed drawn to the PLL's and
  * {@code delta_IT} to 0, or by its resynchronization PLL, its speed that PLL's integral and its angle drawn by its proportional term -,
  * as ATP's.
- *
- * <p>Refused, until written: a power-frequency droop.
  *
  * @author Jean-Baptiste Heyberger : jean-baptiste.heyberger@supergrid-institute.com
  */
@@ -57,8 +56,8 @@ final class EmtpGridFormingControls {
     /** Why {@code control} cannot be written yet - empty if it can. */
     static List<String> unsupportedReasons(GridFormingControl control) {
         List<String> reasons = new ArrayList<>();
-        if (!(control.getSynchronization() instanceof VirtualSynchronousMachine)) {
-            reasons.add("its grid-forming synchronization but the virtual synchronous machine is not written yet");
+        if (!(control.getSynchronization() instanceof VirtualSynchronousMachine || control.getSynchronization() instanceof PowerFrequencyDroop)) {
+            reasons.add("its grid-forming synchronization but the virtual synchronous machine and the power-frequency droop is not written yet");
         }
         return reasons;
     }
@@ -138,41 +137,16 @@ final class EmtpGridFormingControls {
         devices.add(function(dRef, dRef, List.of(dState, qState), id0, "-u[1]*" + scale));
         devices.add(function(qRef, qRef, List.of(dState, qState), iq0, "-u[2]*" + scale));
 
-        // The virtual synchronous machine, on the power reference less the DC voltage's droop, damped by its damper winding's term.
-        VirtualSynchronousMachine vsm = (VirtualSynchronousMachine) control.getSynchronization();
+        // The power reference less the DC voltage's droop; the synchronization on it, pre-synchronised while blocked.
         String reference = control.getDcVoltageDroop().map(droop -> number(initial.activePower()) + "-(" + number(droop.gain()) + ")*(u[3]-("
                 + number(initial.dcVoltage() / initial.dcNominalVoltage()) + "))").orElse(number(initial.activePower()));
-        List<String> swingInputs = new ArrayList<>(List.of(p, speed, vdc));
-        String damper = "";
-        if (control.getTransientDamping().isPresent()) {
-            TransientDamping damping = control.getTransientDamping().get();
-            devices.add(firstOrder(id + "_GWF", id + "_GWF", speed, 1.0, 1.0, 1.0, 0.0, damping.timeConstant()));
-            swingInputs.add(id + "_GWF");
-            damper = "-(" + number(damping.gain()) + ")*(u[2]-u[4])";
-        }
-        String swing = "(u[1]-(" + reference + ")-(" + number(vsm.dampingCoefficient()) + ")*(u[2]-1)" + damper + ")/" + number(2.0 * vsm.inertiaConstant());
-        String acceleration = id + "_GA";
-        String running = id + "_GAU";
-        if (limit != null) {
-            // REGFM_B1: the speed deviation a limited integrator's, within +/- dw_max.
-            devices.add(function(id + "_GAR", id + "_GAR", swingInputs, 0.0, swing));
-            devices.add(function(running, running, List.of(id + "_GAR", speed), 0.0,
-                    "u[1]*" + windupGate("(u[2]-1)", number(limit.maxSpeedDeviation()), "u[1]")));
-        } else {
-            devices.add(function(running, running, swingInputs, 0.0, swing));
-        }
-        // Pre-synchronised while blocked: its speed drawn to the limit's PLL's within its proportional gain, or the resynchronization PLL's
-        // integral of the bus's q-axis voltage.
         SrfPll resynchronization = deblocked && limit == null ? control.getResynchronizationPll().orElse(null) : null;
-        Track speedTrack = null;
-        if (deblocked && limit != null) {
-            speedTrack = new Track(List.of(speed, id + "_GLW"), "(" + number(limit.pll().proportionalGain()) + ")*(1+u[2]/" + number(omega) + "-u[1])");
-        } else if (resynchronization != null) {
-            speedTrack = new Track(List.of(vq), "(" + number(resynchronization.integralGain() / omega) + ")*u[1]");
+        Synchronized on = new Synchronized(id, limit, resynchronization, omega, p, speed, vdc, vq, reference, blockable, deblocked);
+        if (control.getSynchronization() instanceof PowerFrequencyDroop droop) {
+            powerFrequencyDroop(devices, on, droop, initial);
+        } else {
+            virtualSynchronousMachine(devices, on, control);
         }
-        resynchronized(devices, id, acceleration, running, blockable, speedTrack);
-        devices.add(integrator(speed, speed, acceleration, 1.0, 1.0));
-        devices.set(devices.size() - 1, EmtpVoltageSourceConverters.scoped(devices.get(devices.size() - 1)));
 
         // The angle: the machine's own, or the PLL's plus delta_IT with a steady-state current limit.
         String deviation = id + "_GTD";
@@ -198,6 +172,80 @@ final class EmtpGridFormingControls {
         double eq0 = -initial.directEmf() * sin + initial.quadratureEmf() * cos;
         devices.add(function(id + "_ED", id + "_ED", List.of(vd, iqPu, ud), ed0, "u[1]+(" + number(x) + ")*u[2]-u[3]"));
         devices.add(function(id + "_EQ", id + "_EQ", List.of(vq, idPu, uq), eq0, "u[1]-(" + number(x) + ")*u[2]-u[3]"));
+    }
+
+    /** What a synchronization is written on: its converter's limit and resynchronization PLL, if any, its signals' names, its power reference
+     * - an expression of {@code u[3]}, the DC voltage -, whether it is blockable and deblocked. */
+    private record Synchronized(String id, SteadyStateCurrentLimit limit, SrfPll resynchronization, double omega, String p, String speed, String vdc,
+                                String vq, String reference, boolean blockable, boolean deblocked) {
+    }
+
+    /**
+     * The {@link VirtualSynchronousMachine}: its swing {@code 2H dw/dt = P - P* - D (w - 1)}, damped by a {@link TransientDamping}'s term,
+     * its speed {@code <id>_GW} within {@code +/- dw_max} with a steady-state current limit. Pre-synchronised while blocked, deblocked: its
+     * speed drawn to the limit's PLL's within its proportional gain, or the resynchronization PLL's integral of the bus's q-axis voltage.
+     */
+    private static void virtualSynchronousMachine(List<EmtpSynchronousMachines.Device> devices, Synchronized on, GridFormingControl control) {
+        String id = on.id();
+        VirtualSynchronousMachine vsm = (VirtualSynchronousMachine) control.getSynchronization();
+        List<String> swingInputs = new ArrayList<>(List.of(on.p(), on.speed(), on.vdc()));
+        String damper = "";
+        if (control.getTransientDamping().isPresent()) {
+            TransientDamping damping = control.getTransientDamping().get();
+            devices.add(firstOrder(id + "_GWF", id + "_GWF", on.speed(), 1.0, 1.0, 1.0, 0.0, damping.timeConstant()));
+            swingInputs.add(id + "_GWF");
+            damper = "-(" + number(damping.gain()) + ")*(u[2]-u[4])";
+        }
+        String swing = "(u[1]-(" + on.reference() + ")-(" + number(vsm.dampingCoefficient()) + ")*(u[2]-1)" + damper + ")/" + number(2.0 * vsm.inertiaConstant());
+        String running = id + "_GAU";
+        SteadyStateCurrentLimit limit = on.limit();
+        if (limit != null) {
+            // REGFM_B1: the speed deviation a limited integrator's, within +/- dw_max.
+            devices.add(function(id + "_GAR", id + "_GAR", swingInputs, 0.0, swing));
+            devices.add(function(running, running, List.of(id + "_GAR", on.speed()), 0.0,
+                    "u[1]*" + windupGate("(u[2]-1)", number(limit.maxSpeedDeviation()), "u[1]")));
+        } else {
+            devices.add(function(running, running, swingInputs, 0.0, swing));
+        }
+        Track track = null;
+        if (on.deblocked() && limit != null) {
+            track = new Track(List.of(on.speed(), id + "_GLW"), "(" + number(limit.pll().proportionalGain()) + ")*(1+u[2]/" + number(on.omega()) + "-u[1])");
+        } else if (on.resynchronization() != null) {
+            track = new Track(List.of(on.vq()), "(" + number(on.resynchronization().integralGain() / on.omega()) + ")*u[1]");
+        }
+        resynchronized(devices, id, id + "_GA", running, on.blockable(), track);
+        devices.add(EmtpVoltageSourceConverters.scoped(integrator(on.speed(), on.speed(), id + "_GA", 1.0, 1.0)));
+    }
+
+    /**
+     * A {@link PowerFrequencyDroop} - WECC's REGFM_A1 -: the power through its filter {@code <id>_GPF}, {@code Tf dPf/dt = P - Pf}, and the
+     * speed straight from it, {@code w = 1 + mp (Pf - P*)}, within {@code +/- dw_max} with a steady-state current limit. Pre-synchronised
+     * while blocked, deblocked: the filtered power drawn to where the speed is the limit's PLL's, within its proportional gain, or the
+     * resynchronization PLL's integral of the bus's q-axis voltage through the droop, as ATP's.
+     */
+    private static void powerFrequencyDroop(List<EmtpSynchronousMachines.Device> devices, Synchronized on, PowerFrequencyDroop droop,
+                                            AveragedVscInitialState initial) {
+        String id = on.id();
+        String powerReference = id + "_GPS";
+        devices.add(function(powerReference, powerReference, List.of(on.p(), on.speed(), on.vdc()), initial.activePower(), on.reference() + "+0*u[1]"));
+        String filtered = id + "_GPF";
+        String running = id + "_GPU";
+        devices.add(function(running, running, List.of(on.p(), filtered), 0.0, "(u[1]-u[2])/" + number(droop.filterTimeConstant())));
+        SteadyStateCurrentLimit limit = on.limit();
+        Track track = null;
+        if (on.deblocked() && limit != null) {
+            track = new Track(List.of(powerReference, id + "_GLW", filtered), "(" + number(limit.pll().proportionalGain()) + ")*(u[1]+u[2]/"
+                    + number(on.omega() * droop.droop()) + "-u[3])");
+        } else if (on.resynchronization() != null) {
+            track = new Track(List.of(on.vq()), "(" + number(on.resynchronization().integralGain() / (on.omega() * droop.droop())) + ")*u[1]");
+        }
+        resynchronized(devices, id, id + "_GPQ", running, on.blockable(), track);
+        devices.add(integrator(filtered, filtered, id + "_GPQ", 1.0, initial.activePower()));
+        String deviation = "(" + number(droop.droop()) + ")*(u[1]-u[2])";
+        if (limit != null) {
+            deviation = clampExpression(deviation, number(limit.maxSpeedDeviation()));
+        }
+        devices.add(EmtpVoltageSourceConverters.scoped(function(on.speed(), on.speed(), List.of(filtered, powerReference), 1.0, "1+" + deviation)));
     }
 
     /**
