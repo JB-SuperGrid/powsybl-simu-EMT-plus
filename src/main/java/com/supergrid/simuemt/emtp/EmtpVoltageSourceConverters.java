@@ -107,7 +107,8 @@ import static com.supergrid.simuemt.emtp.EmtpSynchronousMachines.function;
  *
  * <p>A {@link GridFormingControl}: {@link EmtpGridFormingControls}'s angle and EMF, the EMFs and the DC current as here.
  *
- * <p>A {@link ConverterBlocking} of a two-level grid-following converter, and its {@link ConverterDeblocking} once after: {@link
+ * <p>A {@link ConverterBlocking} of a grid-following converter - an MMC's equivalent capacitor then behind its diode ({@link
+ * #capacitorBehindDiode}), unless earthed at its midpoint -, and its {@link ConverterDeblocking} once after: {@link
  * #blocking}, its integrals held while it is blocked and restarted from 0 at the deblocking ({@link #freeze}). An {@link
  * OvercurrentProtection} without automatic restart: blocked as by an event when its worst arm current passes its threshold, its delay
  * on ({@link #runningFlag}), its DC current read on a meter at its DC terminal, every switch of its blocking on its running flag.
@@ -151,9 +152,10 @@ final class EmtpVoltageSourceConverters {
             reasons.add("its PLL but the SRF and DDSRF ones are not written yet");
         }
         if (converter.getExtension(VscProtectionModel.class) != null && (!(converter.getExtension(VscProtectionModel.class) instanceof OvercurrentProtection protection)
-                || protection.getAutomaticRestart().isPresent() || !(converter.getExtension(VoltageSourceConverterModel.class) instanceof AveragedVscModel)
-                || converter.getExtension(VscControlModel.class) instanceof GridFormingControl)) {
-            reasons.add("its protection but an overcurrent one, without automatic restart, on a two-level grid-following converter is not written yet");
+                || protection.getAutomaticRestart().isPresent() || converter.getExtension(VscControlModel.class) instanceof GridFormingControl
+                || converter.getExtension(VoltageSourceConverterModel.class) instanceof AveragedMmcModel && converter.getExtension(DcEarthingModel.class) != null)) {
+            reasons.add("its protection but an overcurrent one, without automatic restart, on a grid-following converter not earthed at its midpoint is not written"
+                    + " yet");
         }
         if (converter.getExtension(DcEarthingModel.class) != null && !(converter.getExtension(DcEarthingModel.class) instanceof DcMidpointEarthing)) {
             reasons.add("its DC earthing but the midpoint one is not written yet");
@@ -183,9 +185,9 @@ final class EmtpVoltageSourceConverters {
         VoltageSourceConverter converter = network.getVoltageSourceConverter(blocking.converterId());
         if (converter == null) {
             reasons.add("converter '" + blocking.converterId() + "' is blocked, which the network has not");
-        } else if (!(converter.getExtension(VoltageSourceConverterModel.class) instanceof AveragedVscModel)
-                || converter.getExtension(VscControlModel.class) instanceof GridFormingControl) {
-            reasons.add("converter '" + converter.getId() + "' is blocked but as a two-level grid-following one, which is not written yet");
+        } else if (converter.getExtension(VscControlModel.class) instanceof GridFormingControl
+                || converter.getExtension(VoltageSourceConverterModel.class) instanceof AveragedMmcModel && converter.getExtension(DcEarthingModel.class) != null) {
+            reasons.add("converter '" + converter.getId() + "' is blocked but as a grid-following one not earthed at its midpoint, which is not written yet");
         } else if (events.stream().filter(e -> e instanceof ConverterBlocking b && b.converterId().equals(converter.getId())).count() > 1) {
             reasons.add("converter '" + converter.getId() + "' is blocked more than once");
         } else if (events.stream().filter(e -> e instanceof ConverterDeblocking d && d.converterId().equals(converter.getId())
@@ -624,6 +626,9 @@ final class EmtpVoltageSourceConverters {
         String pole = model.hasDcReactor() || isProtected(converter) ? id + "_CP" : dcNode(converter.getDcTerminal1().getDcNode());
         String ret = dcNode(converter.getDcTerminal2().getDcNode());
         boolean poleHigher = converter.getDcTerminal1().getDcNode().getV() >= converter.getDcTerminal2().getDcNode().getV();
+        if (model.blocksCapacitorDischarge()) {
+            capacitorBehindDiode(devices, id, pole, ret);
+        }
         String high = poleHigher ? pole : ret;
         String low = poleHigher ? ret : pole;
         // Every switch on the running flag, whatever its current: the cut closed while it is up, the valves' gates and snubbers while it is
@@ -674,6 +679,36 @@ final class EmtpVoltageSourceConverters {
                 devices.add(element("_RLC", id + "_SD" + tag, List.of(snubber, rail), number(NumericalAids.VALVE_GRADING_OHM) + ",0,0,0,0,"));
             }
         }
+    }
+
+    /**
+     * A blockable MMC's equivalent capacitor - its DC current with it - on a node of its own, {@code <id>_CQ}, behind a diode from its pole,
+     * as ATP's: blocked half-bridge submodules charge, never discharge. Bypassed while it runs - a switch on its running flag, closed in the
+     * steady state, through {@link NumericalAids#FAULT_ON_RESISTANCE_OHM} -; the diode through the same resistance, its snubber and grading
+     * resistor switched across it once blocked; the blocked pole's RC to its return, {@link NumericalAids#MMC_POLE_SNUBBER_F}.
+     */
+    private static void capacitorBehindDiode(List<EmtpSynchronousMachines.Device> devices, String id, String pole, String ret) {
+        String capacitor = id + "_CQ";
+        for (int k = 0; k < devices.size(); k++) {
+            List<String> lines = devices.get(k).lines();
+            String header = lines.get(0);
+            if (("_RLC;" + id + "_CDC;2;2;" + pole + "," + ret + ",").equals(header)) {
+                devices.set(k, new EmtpSynchronousMachines.Device("_RLC", List.of("_RLC;" + id + "_CDC;2;2;" + capacitor + "," + ret + ",", lines.get(1))));
+            } else if (("_RLC;" + id + "_TP;2;2;" + id + "_DCP," + pole + ",").equals(header)) {
+                devices.set(k, new EmtpSynchronousMachines.Device("_RLC", List.of("_RLC;" + id + "_TP;2;2;" + id + "_DCP," + capacitor + ",", lines.get(1))));
+            }
+        }
+        String fault = number(NumericalAids.FAULT_ON_RESISTANCE_OHM) + ",0,0,0,0,";
+        devices.add(element("_cSw", id + "_BYP", List.of(pole, id + "_CW", id + "_RUN"), "1,0,0,0,0,1e6,0,"));
+        devices.add(element("_RLC", id + "_BYR", List.of(id + "_CW", capacitor), fault));
+        devices.add(element("_D0", id + "_CDIO", List.of(pole, id + "_CY"), "0.001,0,0,"));
+        devices.add(element("_RLC", id + "_CDR", List.of(id + "_CY", capacitor), fault));
+        devices.add(element("_cSw", id + "_CSS", List.of(pole, id + "_CZ", id + "_GATE"), "0,0,0,0,0,1e6,0,"));
+        devices.add(element("_RLC", id + "_CSR", List.of(id + "_CZ", capacitor), number(NumericalAids.VALVE_SNUBBER_OHM) + ",0," + number(NumericalAids.VALVE_SNUBBER_F)
+                + ",0,0,"));
+        devices.add(element("_RLC", id + "_CSG", List.of(id + "_CZ", capacitor), number(NumericalAids.VALVE_GRADING_OHM) + ",0,0,0,0,"));
+        devices.add(element("_RLC", id + "_PSN", List.of(pole, ret), number(NumericalAids.MMC_POLE_SNUBBER_OHM) + ",0," + number(NumericalAids.MMC_POLE_SNUBBER_F)
+                + ",0,0,"));
     }
 
     /** Whether {@code converter} carries an {@link OvercurrentProtection}: its running flag then its protection's too. */

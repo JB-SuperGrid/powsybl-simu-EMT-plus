@@ -13,6 +13,8 @@ import com.powsybl.simuemt.extensions.event.DcFault;
 import com.powsybl.simuemt.extensions.event.DcSwitchOperation;
 import com.powsybl.simuemt.extensions.event.EmtEvent;
 import com.powsybl.simuemt.extensions.event.FaultClearing;
+import com.powsybl.simuemt.extensions.hvdc.OvercurrentProtection;
+import com.powsybl.simuemt.extensions.hvdc.VscProtectionModel;
 import com.powsybl.simuemt.pscad.PscadEdition;
 import com.powsybl.simuemt.pscad.PscadOutput;
 import com.powsybl.simuemt.pscad.PscadSimulationSettings;
@@ -201,6 +203,26 @@ class EmtpVscFaultAgainstPscadTest {
         }
         compare(EmtpVoltageSourceConverterTest::protectedWithDcReactors, start -> List.of(new DcFault("FDC", "DC3P", 0.0, start, start + 10.0)), channels,
                 "vsc-protection", 0.2, SETTLED_TOLERANCE, 0.06, false, PSCAD_SHIFT, PscadSwitching.INTERPOLATED);
+    }
+
+    /**
+     * The same on example 4's MMC stations ({@code mmc-protected}): each equivalent capacitor behind its diode once blocked.
+     *
+     * <p>Run 2026-11-15, 45 s the two: the running flags identical, every station within 1.8e-3 pu of PSCAD's (VSC3's power), the DC
+     * voltages 2e-4 - where the two-level stations with their 100 mH DC reactors stand 6% apart on their powers.
+     */
+    @Test
+    void protectedMmcsTrippingOnADcFaultRunInEmtpAsInPscadProfessional() throws IOException {
+        List<Channel> channels = new ArrayList<>(converters("VSC1", "VSC2", "VSC3"));
+        for (String id : List.of("VSC1", "VSC2", "VSC3")) {
+            channels.add(new Channel(id + "_RUN", "control:" + id + "_RUN", id + "_RUN", 1.0));
+        }
+        compare(() -> {
+            Network network = EmtpVoltageSourceConverterTest.bench("vsc-three-terminal-all-droop-mmc");
+            network.getVoltageSourceConverters().forEach(c -> c.addExtension(VscProtectionModel.class, new OvercurrentProtection(2.0, 0.0)));
+            return network;
+        }, start -> List.of(new DcFault("FDC", "DC3P", 0.0, start, start + 10.0)), channels, "mmc-protection", 0.2, SETTLED_TOLERANCE, 0.01, false,
+                PSCAD_SHIFT, PscadSwitching.INTERPOLATED);
     }
 
     private static List<Channel> converters(String... ids) {
