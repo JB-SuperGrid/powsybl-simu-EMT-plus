@@ -8,6 +8,7 @@ import com.powsybl.commons.PowsyblException;
 import com.powsybl.computation.local.LocalComputationManager;
 import com.powsybl.iidm.network.Bus;
 import com.powsybl.iidm.network.Network;
+import com.powsybl.simuemt.extensions.circuit.ElectricalNodes;
 import com.powsybl.simuemt.extensions.circuit.VectorGroupOffsets;
 import com.powsybl.simuemt.preprocessing.EmtExtensionsXmlReader;
 import com.powsybl.simuemt.preprocessing.EmtNetworkPreprocessor;
@@ -34,9 +35,10 @@ import static org.assertj.core.api.Assertions.within;
  * holds that the writer does not write yet, said by name - nothing left out silently. The examples it writes are pinned, so that what
  * the writer gains or loses shows; and - tagged {@code emtp} - each is run live, every bus on the load flow.
  *
- * <p>2026-11-14, upstream's {@code 6346a20c}: 36 of its 132 examples written - since the shunts, the grounds, the open ends, the SVC, the battery and the WT4B - CIGRE DCS2 with it. Its
+ * <p>2026-11-15, upstream's {@code 6346a20c}: 62 of its 132 examples written - since the shunts, the grounds, the open ends, the SVC, the battery, the WT4B - CIGRE DCS2 with it -,
+ * and the switches. Its
  * refusals, the most frequent first: power electronics (VSCs, MMCs, their DC sides), load models (infinite buses,
- * induction motors, constant power), wind turbines, switches, line models and zero-sequence data, arresters, excitation limiters,
+ * induction motors, constant power), line models and zero-sequence data, arresters, excitation limiters,
  * governors but TGOV1, PSS2A.
  *
  * @author Jean-Baptiste Heyberger : jean-baptiste.heyberger@supergrid-institute.com
@@ -67,6 +69,10 @@ class EmtpExampleCoverageTest {
             "createTwoBusNetworkWithTgov1",
             "createTwoBusNetworkWithSvc1",
             "createTwoBusNetworkWithReecC",
+            "createTwoBusNetworkWithRealSwitch",
+            "createTwoBusNetworkWithOpenSwitchBetweenTwoFeeders",
+            "createTwoBusNetworkWithDeadFeederBehindOpenSwitch",
+            "vsc-monopole-island",
             "createWindTurbineNetwork",
             "createFourBusNetworkWithThreeWindingsTransformerMagnetizingBranchAndTap",
             "createFourBusNetworkWithPhaseShiftingLegAndWindings",
@@ -165,6 +171,7 @@ class EmtpExampleCoverageTest {
         EmtpRunner.Run run = EmtpRunner.run(EmtpNetlistWriter.write(network, Path.of("target", "emtp", "example-" + name.replaceAll("[^A-Za-z0-9]+", "-")),
                 SETTINGS), EmtpSettings.defaults());
         VectorGroupOffsets offsets = VectorGroupOffsets.of(network);
+        ElectricalNodes nodes = ElectricalNodes.of(network);
         EmtpOutput output = run.output();
         EmtpSteadyState steadyState = run.steadyState();
         double[] last = {SETTINGS.stopTimeSeconds() - 1.0 / FREQUENCY, SETTINGS.stopTimeSeconds()};
@@ -179,8 +186,10 @@ class EmtpExampleCoverageTest {
             }
             double crest = bus.getV() * 1.0e3 * Math.sqrt(2.0 / 3.0);
             double angle = bus.getAngle() + offsets.degrees(bus);
-            EmtpSteadyState.Phasor phasor = steadyState.voltage(EmtpNetlistWriter.node(bus.getId(), 'a')).orElseThrow();
-            var fundamental = output.fundamentalPhasor(EmtpNetlistWriter.voltageScope(bus.getId(), 'A'), FREQUENCY, last[0], last[1]);
+            // A bus a closed switch joins to another is that one's node.
+            String nodeBus = nodes.representativeId(bus.getId());
+            EmtpSteadyState.Phasor phasor = steadyState.voltage(EmtpNetlistWriter.node(nodeBus, 'a')).orElseThrow();
+            var fundamental = output.fundamentalPhasor(EmtpNetlistWriter.voltageScope(nodeBus, 'A'), FREQUENCY, last[0], last[1]);
             if (GROUNDED.equals(name)) {
                 if ("B2".equals(bus.getId())) {
                     System.out.printf(Locale.ROOT, "%s: B2 at %.2e of its voltage, %.2e the last period%n", name, phasor.magnitude() / crest,
