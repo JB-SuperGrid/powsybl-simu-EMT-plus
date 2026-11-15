@@ -19,6 +19,8 @@ import org.assertj.core.api.SoftAssertions;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -132,6 +134,31 @@ class EmtpVoltageSourceConverterTest {
             softly.assertThat(p).as("%s's power, pu", id).isCloseTo(0.0, within(tolerance));
             softly.assertThat(q).as("%s's reactive power, pu", id).isCloseTo(0.0, within(1.0e-3));
         }
+        softly.assertAll();
+    }
+
+    /**
+     * A symmetric monopole - each converter's DC capacitor split, its midpoint earthed - through a solid pole-to-earth fault on DC2P from
+     * 0.3 s to the end, run 1 s: its DC side shifted to earth, DC2P at earth and the negative poles at some -500 kV from 0.5 s on - what
+     * upstream holds ATP, Xyce and Kestrel to alike ({@code BackendComparisonTest#allThreeBackendsCarryASymmetricMonopoleThroughAPoleToEarthFault}:
+     * DC2P within 10 V of earth, DC1N 490 to 502 kV below it). PSCAD refuses a converter's own DC earthing. Kept in {@code
+     * target/emtp/<bench>-dc-fault}.
+     *
+     * <p>Run 2026-11-15: DC2P 0.75 V, DC1N 497.81 kV below earth from 0.5 s, on the two-level converters and the MMCs alike - the DC
+     * voltage station holding 500 kV across its terminals either way.
+     */
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"vsc-symmetric-monopole-infinite-buses", "vsc-symmetric-monopole-mmc"})
+    @Tag("emtp")
+    void aSymmetricMonopoleShiftsToEarthThroughAPoleToEarthFault(String name) {
+        EmtpOutput output = EmtpRunner.run(EmtpNetlistWriter.write(bench(name), Path.of("target", "emtp", name + "-dc-fault"),
+                new EmtpSimulationSettings(20.0e-6, 1.0, FREQUENCY), List.of(new DcFault("F", "DC2P", 0.0, 0.3, 10.0))), EmtpSettings.defaults()).output();
+        double dc2p = output.mean(EmtpVoltageSourceConverters.dcVoltageScope("DC2P"), 0.5, 1.0);
+        double dc1n = output.mean(EmtpVoltageSourceConverters.dcVoltageScope("DC1N"), 0.5, 1.0);
+        System.out.printf(Locale.ROOT, "%s: DC2P %.2f V, DC1N %.2f kV after the fault%n", name, dc2p, dc1n / 1.0e3);
+        SoftAssertions softly = new SoftAssertions();
+        softly.assertThat(dc2p).as("%s, DC2P after the fault, V", name).isCloseTo(0.0, within(10.0));
+        softly.assertThat(-dc1n / 1.0e3).as("%s, DC1N after the fault, kV below earth", name).isBetween(490.0, 502.0);
         softly.assertAll();
     }
 
