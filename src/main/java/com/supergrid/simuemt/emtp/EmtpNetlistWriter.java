@@ -47,6 +47,8 @@ import com.powsybl.simuemt.extensions.event.FaultClearing;
 import com.powsybl.simuemt.extensions.event.SwitchOperation;
 import com.powsybl.simuemt.extensions.infinitebus.InfiniteBusEmf;
 import com.powsybl.simuemt.extensions.infinitebus.InfiniteBusGeneratorModel;
+import com.powsybl.simuemt.extensions.infinitebus.InfiniteBusLoadModel;
+import com.powsybl.simuemt.extensions.infinitebus.InfiniteBusModel;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -209,7 +211,9 @@ public final class EmtpNetlistWriter {
             }
         }
         for (Load load : network.getLoads()) {
-            if (inService(load)) {
+            if (inService(load) && load.getExtension(LoadModel.class) instanceof InfiniteBusLoadModel model) {
+                writeInfiniteBus(devices, load, model, settings);
+            } else if (inService(load)) {
                 writeLoad(devices, load, settings);
             }
         }
@@ -736,7 +740,12 @@ public final class EmtpNetlistWriter {
     }
 
     private static void writeInfiniteBus(Devices lines, Generator generator, EmtpSimulationSettings settings) {
-        InfiniteBusGeneratorModel model = (InfiniteBusGeneratorModel) generator.getExtension(GeneratorModel.class);
+        writeInfiniteBus(lines, generator, (InfiniteBusGeneratorModel) generator.getExtension(GeneratorModel.class), settings);
+    }
+
+    /** An infinite bus anchored on {@code generator} - a generator or a load ({@link InfiniteBusLoadModel}), which changes nothing but
+     * where it sits: its EMF behind its Thevenin impedance. */
+    private static void writeInfiniteBus(Devices lines, com.powsybl.iidm.network.Injection<?> generator, InfiniteBusModel model, EmtpSimulationSettings settings) {
         Bus bus = generator.getTerminal().getBusBreakerView().getBus();
         double nominalKv = bus.getVoltageLevel().getNominalV();
         InfiniteBusEmf emf = InfiniteBusEmf.fromLoadFlow(generator, model, settings.nominalFrequencyHz(), settings.timeStepSeconds());
@@ -827,6 +836,9 @@ public final class EmtpNetlistWriter {
                         .forEach(e -> reasons.add("'" + c.getId() + "' has a " + e.getClass().getSimpleName().replace("Impl", "")
                                 + ", which is not written yet")));
         for (Load load : network.getLoads()) {
+            if (load.getExtension(LoadModel.class) instanceof InfiniteBusLoadModel) {
+                continue;
+            }
             if (load.getExtension(LoadModel.class) != null) {
                 reasons.add("load '" + load.getId() + "' has a load model, " + load.getExtension(LoadModel.class).getClass().getSimpleName());
             } else if (LoadBranches.isDelta(load) || load.getQ0() < 0.0) {
@@ -881,7 +893,8 @@ public final class EmtpNetlistWriter {
             }
         });
         // What starts from its bus's load-flow operating point cannot on a bus the load flow left de-energized - behind an open switch.
-        Stream.of(network.getGeneratorStream(), network.getStaticVarCompensatorStream(), network.getBatteryStream())
+        Stream.of(network.getGeneratorStream(), network.getStaticVarCompensatorStream(), network.getBatteryStream(),
+                        network.getLoadStream().filter(l -> l.getExtension(LoadModel.class) instanceof InfiniteBusLoadModel))
                 .flatMap(st -> st.map(c -> (com.powsybl.iidm.network.Injection<?>) c))
                 .filter(c -> c.getTerminal().getBusBreakerView().getBus() != null && Double.isNaN(c.getTerminal().getBusBreakerView().getBus().getV()))
                 .forEach(c -> reasons.add("'" + c.getId() + "' is on bus '" + c.getTerminal().getBusBreakerView().getBus().getId()
