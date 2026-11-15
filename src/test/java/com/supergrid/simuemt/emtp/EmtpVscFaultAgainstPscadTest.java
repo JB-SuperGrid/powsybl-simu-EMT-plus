@@ -190,10 +190,8 @@ class EmtpVscFaultAgainstPscadTest {
      *
      * <p>Run 2026-11-15, 40 s the two: the running flags identical - each protection tripping on the same step, ATP's 0.85, 4.67 and 9.93
      * ms after the fault for VSC3, VSC2 and VSC1 ({@link EmtpVoltageSourceConverterTest#theStationsProtectionsBlockThemOnASolidDcFault});
-     * the DC voltages within 3.5e-3 pu of PSCAD's, the reactive powers 2.1e-2, the AC voltages 1.5e-2; the powers drawn into the fault 4.6e-2
-     * off on VSC1 (0.768 against 0.722 from 0.15 s on), 5.7e-2 on VSC3 in the window holding the fault - held within 6e-2. Upstream holds
-     * PSCAD and ATP to the same structural checks only on these powers ({@code PscadProConvertersTest}); the gap's cause not traced - not the
-     * valves' snubbers, ATP's which PSCAD has not: EMTP without them 0.740 (2026-11-15).
+     * every station within 1.5e-3 pu of PSCAD's, the DC voltages 3.6e-4. (Without the stations' 80 mH bridge inductance, left out at first,
+     * the powers drawn into the fault stood 6% over PSCAD's.)
      */
     @Test
     void protectedConvertersTrippingOnADcFaultRunInEmtpAsInPscadProfessional() throws IOException {
@@ -202,14 +200,14 @@ class EmtpVscFaultAgainstPscadTest {
             channels.add(new Channel(id + "_RUN", "control:" + id + "_RUN", id + "_RUN", 1.0));
         }
         compare(EmtpVoltageSourceConverterTest::protectedWithDcReactors, start -> List.of(new DcFault("FDC", "DC3P", 0.0, start, start + 10.0)), channels,
-                "vsc-protection", 0.2, SETTLED_TOLERANCE, 0.06, false, PSCAD_SHIFT, PscadSwitching.INTERPOLATED);
+                "vsc-protection", 0.2, SETTLED_TOLERANCE, 0.01, false, PSCAD_SHIFT, PscadSwitching.INTERPOLATED);
     }
 
     /**
      * The same on example 4's MMC stations ({@code mmc-protected}): each equivalent capacitor behind its diode once blocked.
      *
      * <p>Run 2026-11-15, 45 s the two: the running flags identical, every station within 1.8e-3 pu of PSCAD's (VSC3's power), the DC
-     * voltages 2e-4 - where the two-level stations with their 100 mH DC reactors stand 6% apart on their powers.
+     * voltages 2e-4.
      */
     @Test
     void protectedMmcsTrippingOnADcFaultRunInEmtpAsInPscadProfessional() throws IOException {

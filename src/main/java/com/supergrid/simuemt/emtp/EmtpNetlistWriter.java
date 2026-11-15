@@ -30,6 +30,8 @@ import com.powsybl.simuemt.extensions.circuit.ThreeWindingsTransformerWindings;
 import com.powsybl.simuemt.extensions.circuit.TransformerWindings;
 import com.powsybl.simuemt.extensions.circuit.VectorGroupOffsets;
 import com.powsybl.simuemt.extensions.circuit.ZeroSequenceFluxPath;
+import com.powsybl.simuemt.extensions.event.BranchOperation;
+import com.powsybl.simuemt.extensions.event.BreakerAction;
 import com.powsybl.simuemt.extensions.event.BusFault;
 import com.powsybl.simuemt.extensions.event.ConverterBlocking;
 import com.powsybl.simuemt.extensions.event.ConverterDeblocking;
@@ -132,6 +134,10 @@ public final class EmtpNetlistWriter {
                 refused.addAll(EmtpVoltageSourceConverters.unsupportedBlockingReasons(network, blocking, events));
                 continue;
             }
+            if (event instanceof BranchOperation operation) {
+                refused.addAll(unsupportedBranchOperationReasons(network, operation, events));
+                continue;
+            }
             if (event instanceof ConverterDeblocking deblocking) {
                 if (events.stream().noneMatch(e -> e instanceof ConverterBlocking b && b.converterId().equals(deblocking.converterId()))) {
                     refused.add("converter '" + deblocking.converterId() + "' is deblocked, not blocked by an event before");
@@ -148,7 +154,16 @@ public final class EmtpNetlistWriter {
         if (!refused.isEmpty()) {
             throw new PowsyblException("SimuEmt Plus: EMTP cannot write network '" + network.getId() + "' yet: " + String.join("; ", refused));
         }
-        Devices devices = new Devices();
+        OPERATED_ENDS.set(events.stream().filter(BranchOperation.class::isInstance).map(e -> operatedEndKey(((BranchOperation) e).branchId(),
+                ((BranchOperation) e).side().getNum())).collect(java.util.stream.Collectors.toSet()));
+        try {
+            return write(network, directory, settings, events, new Devices());
+        } finally {
+            OPERATED_ENDS.remove();
+        }
+    }
+
+    private static Path write(Network network, Path directory, EmtpSimulationSettings settings, List<? extends EmtEvent> events, Devices devices) {
         // An element disconnected at every end is out of service: not written (one disconnected at some ends only is refused).
         for (Line line : network.getLines()) {
             if (inService(line)) {
@@ -220,6 +235,7 @@ public final class EmtpNetlistWriter {
         }
         List<String> referenced = new ArrayList<>(network.getBusBreakerView().getBusStream().map(Identifiable::getId).toList());
         referenced.addAll(openEnds(network));
+        branchBreakers(devices, network, events, settings, referenced);
         for (String busId : referenced) {
             for (String phase : PHASES) {
                 String node = node(busId, phase.charAt(0));
@@ -831,7 +847,70 @@ public final class EmtpNetlistWriter {
      * <id>_O<side>} - as upstream's backends give an open end, nothing between it and the bus it would be on. */
     private static String endId(Identifiable<?> connectable, com.powsybl.iidm.network.Terminal terminal, int side) {
         Bus bus = terminal.getBusBreakerView().getBus();
+        if (bus != null && OPERATED_ENDS.get() != null && OPERATED_ENDS.get().contains(operatedEndKey(connectable.getId(), side))) {
+            return operatedEnd(connectable.getId(), side);
+        }
         return bus != null ? bus.getId() : openEnd(connectable, side);
+    }
+
+    /** The branch ends the run being written operates ({@link BranchOperation}): each a node of its own, {@link #operatedEnd}. */
+    private static final ThreadLocal<java.util.Set<String>> OPERATED_ENDS = new ThreadLocal<>();
+
+    private static String operatedEndKey(String branchId, int side) {
+        return branchId + "#" + side;
+    }
+
+    /** An operated branch end's node: {@code <branch>_E<side>}, its breaker between it and its bus. */
+    private static String operatedEnd(String branchId, int side) {
+        return sanitize(branchId) + "_E" + side;
+    }
+
+    /** Why {@code operation} cannot be written yet - empty if it can: a line's or a two-winding transformer's end connected in the load
+     * flow, opened once and reclosed once after at most. */
+    private static List<String> unsupportedBranchOperationReasons(Network network, BranchOperation operation, List<? extends EmtEvent> events) {
+        List<String> reasons = new ArrayList<>();
+        com.powsybl.iidm.network.Branch<?> branch = network.getBranch(operation.branchId());
+        if (!(branch instanceof Line || branch instanceof TwoWindingsTransformer) || branch.getTerminal(operation.side()).getBusBreakerView().getBus() == null) {
+            reasons.add("branch '" + operation.branchId() + "' end " + operation.side().getNum() + " is operated but as a connected line's or two-winding"
+                    + " transformer's, which is not written yet");
+            return reasons;
+        }
+        List<BranchOperation> operations = events.stream().filter(e -> e instanceof BranchOperation o && o.branchId().equals(operation.branchId())
+                && o.side() == operation.side()).map(BranchOperation.class::cast).sorted(java.util.Comparator.comparingDouble(BranchOperation::timeSeconds)).toList();
+        boolean openThenClose = operations.size() == 2 && operations.get(0).action() == BreakerAction.OPEN && operations.get(1).action() == BreakerAction.CLOSE;
+        if (!(operations.size() == 1 && operations.get(0).action() == BreakerAction.OPEN || openThenClose)) {
+            reasons.add("branch '" + operation.branchId() + "' end " + operation.side().getNum() + " is operated but opened once, then reclosed once at"
+                    + " most, which is not written yet");
+        }
+        return reasons;
+    }
+
+    /**
+     * Each operated branch end's breaker, its three poles from the bus to the end's node - earthed through 1 Gohm as a bus is, added to
+     * {@code referenced}: closed from the steady state, opened at its order at its current's first zero, or whatever its current ({@link
+     * FaultClearing#AT_ORDER}); reclosed, a second switch beside it closing then, as ATP's.
+     */
+    private static void branchBreakers(Devices devices, Network network, List<? extends EmtEvent> events, EmtpSimulationSettings settings, List<String> referenced) {
+        java.util.Map<String, List<BranchOperation>> byEnd = new java.util.LinkedHashMap<>();
+        events.stream().filter(BranchOperation.class::isInstance).map(BranchOperation.class::cast)
+                .sorted(java.util.Comparator.comparingDouble(BranchOperation::timeSeconds))
+                .forEach(o -> byEnd.computeIfAbsent(operatedEndKey(o.branchId(), o.side().getNum()), k -> new ArrayList<>()).add(o));
+        for (List<BranchOperation> operations : byEnd.values()) {
+            BranchOperation opening = operations.get(0);
+            String busId = network.getBranch(opening.branchId()).getTerminal(opening.side()).getBusBreakerView().getBus().getId();
+            String end = operatedEnd(opening.branchId(), opening.side().getNum());
+            referenced.add(end);
+            double margin = opening.clearing() == FaultClearing.AT_ORDER ? ANY_CURRENT_AMPERES : 0.0;
+            for (String phase : PHASES) {
+                String label = end + "_BRK" + phase;
+                devices.add("_Sw0", label, List.of(node(busId, phase.charAt(0)), node(end, phase.charAt(0))), STEADY_STATE_START + ","
+                        + number(NumericalAids.switchingInstant(opening.timeSeconds(), settings.timeStepSeconds())) + "," + number(margin) + ",0,0,,1,.1,.001,5,");
+                if (operations.size() > 1) {
+                    devices.add("_Sw0", label + "R", List.of(node(busId, phase.charAt(0)), node(end, phase.charAt(0))),
+                            number(NumericalAids.switchingInstant(operations.get(1).timeSeconds(), settings.timeStepSeconds())) + "," + NEVER + ",0,0,0,,1,.1,.001,5,");
+                }
+            }
+        }
     }
 
     private static String openEnd(Identifiable<?> connectable, int side) {
