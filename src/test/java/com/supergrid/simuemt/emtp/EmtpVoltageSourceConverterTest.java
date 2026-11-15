@@ -476,7 +476,45 @@ class EmtpVoltageSourceConverterTest {
     @Test
     @Tag("emtp")
     void aGridFormingStationRestartsInStepWithItsBusOnItsResynchronizationPll() {
+        EmtpOutput output = gridFormingDeblocked(resynchronizedStation(false), "gfm-resynchronization-pll");
+        SoftAssertions softly = new SoftAssertions();
+        softly.assertThat(output.mean("control:VSC2_GW", 0.45, 0.5)).as("VSC2's speed blocked: drawn to the bus's").isCloseTo(1.0, within(1.0e-3));
+        restartedInStep(softly, output, 0.55, 0.84, 0.9, 2.5e-3, 2.3);
+        softly.assertAll();
+    }
+
+    /**
+     * Upstream's {@code AtpSolverIntegrationTest#aDroopGridFormingStationRestartsInStepWithItsBusOnItsResynchronizationPll}: the same on a
+     * power-frequency droop ({@code ExampleNetworks#withThirdVscExampleDroop}) - held to ATP's checks: its speed blocked on the bus's within
+     * 1e-3 over the last 50 ms; restarted in step, its power -0.25 to 0 pu over the first 20 ms, its reactive power under 0.4 pu from then
+     * on, its crest 1.05 to 1.15 pu, the droop's answer; back on the load flow's within 1e-3 pu at 2-2.5 s, VSC1 too, its DC voltage within
+     * 1e-3. Kept in {@code target/emtp/gfm-droop-resynchronization-pll}.
+     *
+     * <p>Run 2026-11-15, ATP's: its speed 0.99908 over the last 50 ms blocked (ATP 0.99908); its power -0.160 pu over the first 20 ms (ATP
+     * -0.16), its crest 1.100 pu (ATP 1.10), its reactive power within 0.336 pu (ATP 0.35); back within 1e-6 pu (ATP 1e-4).
+     */
+    @Test
+    @Tag("emtp")
+    void aDroopGridFormingStationRestartsInStepWithItsBusOnItsResynchronizationPll() {
+        EmtpOutput output = gridFormingDeblocked(resynchronizedStation(true), "gfm-droop-resynchronization-pll");
+        SoftAssertions softly = new SoftAssertions();
+        softly.assertThat(output.mean("control:VSC2_GW", 0.45, 0.5)).as("VSC2's speed blocked: drawn to the bus's").isCloseTo(1.0, within(1.0e-3));
+        softly.assertThat(output.mean("control:VSC2_P", 0.5, 0.52)).as("VSC2's power over the deblocking's first 20 ms, pu: in step").isBetween(-0.25, 0.0);
+        softly.assertThat(output.peakAbsolute("control:VSC2_Q", 0.52, 2.5)).as("VSC2's reactive power once restarted, pu").isLessThan(0.4);
+        softly.assertThat(output.peakAbsolute("control:VSC2_P", 0.52, 2.5)).as("VSC2's power's crest once restarted, pu: the droop's answer").isBetween(1.05, 1.15);
+        for (String signal : List.of("control:VSC2_P", "control:VSC1_P", "control:VSC1_VDC")) {
+            softly.assertThat(output.mean(signal, 2.0, 2.5)).as("%s at the end: the load flow's", signal).isCloseTo(output.mean(signal, 0.2, 0.3), within(1.0e-3));
+        }
+        softly.assertAll();
+    }
+
+    /** Example 3 between infinite buses, its grid-forming VSC2 - on its virtual machine, or on a power-frequency droop if {@code droop} -
+     * with no steady-state current limit, resynchronised by a {@code resynchronizationPll} of that limit's PLL's gains. */
+    private static Network resynchronizedStation(boolean droop) {
         Network network = ExampleNetworks.readVscBench("vsc-monopole-infinite-buses-3", EmtExtensionsXmlReader::readNetwork);
+        if (droop) {
+            ExampleNetworks.withThirdVscExampleDroop(network);
+        }
         VoltageSourceConverter vsc2 = network.getVoltageSourceConverter("VSC2");
         GridFormingControl control = GridFormingControl.of(vsc2);
         SrfPll limitsPll = control.getSteadyStateCurrentLimit().orElseThrow().pll();
@@ -484,11 +522,7 @@ class EmtpVoltageSourceConverterTest {
                 control.getCurrentControl(), control.getCurrentLimit(), control.getMeasurement(), null, control.getTransientDamping().orElse(null),
                 control.getDcVoltageDroop().orElse(null), limitsPll));
         EmtNetworkPreprocessor.preprocess(network, LocalComputationManager.getDefault());
-        EmtpOutput output = gridFormingDeblocked(network, "gfm-resynchronization-pll");
-        SoftAssertions softly = new SoftAssertions();
-        softly.assertThat(output.mean("control:VSC2_GW", 0.45, 0.5)).as("VSC2's speed blocked: drawn to the bus's").isCloseTo(1.0, within(1.0e-3));
-        restartedInStep(softly, output, 0.55, 0.84, 0.9, 2.5e-3, 2.3);
-        softly.assertAll();
+        return network;
     }
 
     /** {@code network}'s VSC2 blocked at 0.3 s and deblocked at 0.5 s, run 2.5 s, kept in {@code target/emtp/<name>}. */
