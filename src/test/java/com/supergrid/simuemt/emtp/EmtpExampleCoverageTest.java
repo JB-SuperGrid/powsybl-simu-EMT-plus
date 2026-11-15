@@ -34,7 +34,7 @@ import static org.assertj.core.api.Assertions.within;
  * holds that the writer does not write yet, said by name - nothing left out silently. The examples it writes are pinned, so that what
  * the writer gains or loses shows; and - tagged {@code emtp} - each is run live, every bus on the load flow.
  *
- * <p>2026-11-14, upstream's {@code 6346a20c}: 34 of its 132 examples written - since the shunts, the grounds, the open ends, the SVC and the battery. Its
+ * <p>2026-11-14, upstream's {@code 6346a20c}: 36 of its 132 examples written - since the shunts, the grounds, the open ends, the SVC, the battery and the WT4B - CIGRE DCS2 with it. Its
  * refusals, the most frequent first: power electronics (VSCs, MMCs, their DC sides), load models (infinite buses,
  * induction motors, constant power), wind turbines, switches, line models and zero-sequence data, arresters, excitation limiters,
  * governors but TGOV1, PSS2A.
@@ -67,6 +67,7 @@ class EmtpExampleCoverageTest {
             "createTwoBusNetworkWithTgov1",
             "createTwoBusNetworkWithSvc1",
             "createTwoBusNetworkWithReecC",
+            "createWindTurbineNetwork",
             "createFourBusNetworkWithThreeWindingsTransformerMagnetizingBranchAndTap",
             "createFourBusNetworkWithPhaseShiftingLegAndWindings",
             "createFourBusNetworkWithPurePhaseShiftingLeg",
@@ -88,6 +89,7 @@ class EmtpExampleCoverageTest {
             "vsc-symmetric-monopole-converter-transformers",
             "vsc-symmetric-monopole-infinite-buses",
             "vsc-symmetric-monopole-mmc",
+            "cigre-dcs2",
             "vsc-three-terminal",
             "vsc-three-terminal-all-droop",
             "vsc-three-terminal-all-droop-mmc",
@@ -198,8 +200,8 @@ class EmtpExampleCoverageTest {
             // A VSC example's DC voltage station carries the converters' reactor losses (2.6e-3 pu of a 250 MVA converter's, 0.65 MW), which
             // the load flow leaves out: its converter bus 0.02 to 0.03 degree off behind a converter transformer, and vsc-monopole's and
             // vsc-monopole-2's machines, free of any governor, slowing down - their angles 0.04 degree off at 0.2 s, 0.18 at 0.8 s (runs
-            // 2026-11-14). Their steady state within 0.01.
-            double lastDegrees = name.startsWith("vsc-") ? 0.05 : degrees;
+            // 2026-11-14). Their steady state within 0.01. CIGRE DCS2's VSC stations alike: 0.031 degree at its offshore buses (2026-11-15).
+            double lastDegrees = name.startsWith("vsc-") || "cigre-dcs2".equals(name) ? 0.05 : degrees;
             softly.assertThat(errors[3]).as("%s, %s's last period, degrees", name, bus.getId()).isCloseTo(0.0, within(lastDegrees));
         }
         System.out.printf(Locale.ROOT, "%s: buses within %.1e pu and %.1e degree%n", name, worstPu, worstDegrees);

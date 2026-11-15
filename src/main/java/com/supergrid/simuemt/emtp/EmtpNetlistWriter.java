@@ -132,7 +132,13 @@ public final class EmtpNetlistWriter {
             if (event instanceof DcFault || event instanceof DcSwitchOperation) {
                 continue;
             }
-            if (event instanceof ConverterBlocking blocking) {
+            if (event instanceof ConverterBlocking blocking && network.getGenerator(blocking.converterId()) != null
+                    && EmtpWindTurbines.isWindTurbine(network.getGenerator(blocking.converterId()))) {
+                if (events.stream().filter(e -> e instanceof ConverterBlocking b && b.converterId().equals(blocking.converterId())).count() > 1) {
+                    refused.add("wind turbine '" + blocking.converterId() + "' is blocked more than once");
+                }
+                continue;
+            } else if (event instanceof ConverterBlocking blocking) {
                 refused.addAll(EmtpVoltageSourceConverters.unsupportedBlockingReasons(network, blocking, events));
                 continue;
             }
@@ -143,6 +149,8 @@ public final class EmtpNetlistWriter {
             if (event instanceof ConverterDeblocking deblocking) {
                 if (events.stream().noneMatch(e -> e instanceof ConverterBlocking b && b.converterId().equals(deblocking.converterId()))) {
                     refused.add("converter '" + deblocking.converterId() + "' is deblocked, not blocked by an event before");
+                } else if (network.getGenerator(deblocking.converterId()) != null) {
+                    refused.add("wind turbine '" + deblocking.converterId() + "' is deblocked: a WT4B's restart is not simulated");
                 }
                 continue;
             }
@@ -201,7 +209,14 @@ public final class EmtpNetlistWriter {
             }
         }
         for (Generator generator : network.getGeneratorStream().filter(EmtpNetlistWriter::inService).toList()) {
-            if (EmtpSynchronousMachines.isMachine(generator)) {
+            if (EmtpWindTurbines.isWindTurbine(generator)) {
+                Bus bus = generator.getTerminal().getBusBreakerView().getBus();
+                double blocking = events.stream().filter(e -> e instanceof ConverterBlocking b && b.converterId().equals(generator.getId()))
+                        .mapToDouble(e -> ((ConverterBlocking) e).timeSeconds()).findFirst().orElse(Double.NaN);
+                for (EmtpSynchronousMachines.Device device : EmtpWindTurbines.turbine(generator, phaseNodes(bus.getId()), blocking, settings)) {
+                    devices.addBlock(device.part(), device.lines());
+                }
+            } else if (EmtpSynchronousMachines.isMachine(generator)) {
                 Bus bus = generator.getTerminal().getBusBreakerView().getBus();
                 devices.addBlock("_SM", EmtpSynchronousMachines.lines(generator, id(generator), phaseNodes(bus.getId()),
                         VectorGroupOffsets.of(network).degrees(bus), settings));
@@ -799,7 +814,12 @@ public final class EmtpNetlistWriter {
             }
         }
         for (Generator generator : network.getGenerators()) {
-            if (EmtpSynchronousMachines.isMachine(generator)) {
+            if (EmtpWindTurbines.isWindTurbine(generator)) {
+                List<String> turbineReasons = EmtpWindTurbines.unsupportedReasons(generator);
+                if (!turbineReasons.isEmpty()) {
+                    reasons.add("generator '" + generator.getId() + "': " + String.join(", ", turbineReasons));
+                }
+            } else if (EmtpSynchronousMachines.isMachine(generator)) {
                 List<String> machineReasons = EmtpSynchronousMachines.unsupportedReasons(generator);
                 if (!machineReasons.isEmpty()) {
                     reasons.add("generator '" + generator.getId() + "': " + String.join(", ", machineReasons));
