@@ -32,6 +32,7 @@ import com.powsybl.simuemt.extensions.hvdc.DcMidpointEarthing;
 import com.powsybl.simuemt.extensions.hvdc.DcVoltageDroopLaw;
 import com.powsybl.simuemt.extensions.hvdc.HybridDcBreakerModel;
 import com.powsybl.simuemt.extensions.hvdc.LumpedDcLineModel;
+import com.powsybl.simuemt.extensions.hvdc.OvercurrentProtection;
 import com.powsybl.simuemt.extensions.hvdc.VoltageSourceConverterModel;
 import com.powsybl.simuemt.extensions.hvdc.VscProtectionModel;
 import com.powsybl.simuemt.extensions.hvdc.control.Ddsrf;
@@ -107,7 +108,9 @@ import static com.supergrid.simuemt.emtp.EmtpSynchronousMachines.function;
  * <p>A {@link GridFormingControl}: {@link EmtpGridFormingControls}'s angle and EMF, the EMFs and the DC current as here.
  *
  * <p>A {@link ConverterBlocking} of a two-level grid-following converter, and its {@link ConverterDeblocking} once after: {@link
- * #blocking}, its integrals held while it is blocked and restarted from 0 at the deblocking ({@link #freeze}).
+ * #blocking}, its integrals held while it is blocked and restarted from 0 at the deblocking ({@link #freeze}). An {@link
+ * OvercurrentProtection} without automatic restart: blocked as by an event when its worst arm current passes its threshold, its delay
+ * on ({@link #runningFlag}), its DC current read on a meter at its DC terminal, every switch of its blocking on its running flag.
  *
  * <p>Refused, until written: a PLL but the SRF and DDSRF ones, a protection, a chopper but the averaged one, a
  * chopper at an MMC's DC terminal; what {@link EmtpGridFormingControls} refuses.
@@ -147,8 +150,10 @@ final class EmtpVoltageSourceConverters {
                 || GridFollowingControl.of(converter).getSynchronization() instanceof DdsrfPll)) {
             reasons.add("its PLL but the SRF and DDSRF ones are not written yet");
         }
-        if (converter.getExtension(VscProtectionModel.class) != null) {
-            reasons.add("its protection is not written yet");
+        if (converter.getExtension(VscProtectionModel.class) != null && (!(converter.getExtension(VscProtectionModel.class) instanceof OvercurrentProtection protection)
+                || protection.getAutomaticRestart().isPresent() || !(converter.getExtension(VoltageSourceConverterModel.class) instanceof AveragedVscModel)
+                || converter.getExtension(VscControlModel.class) instanceof GridFormingControl)) {
+            reasons.add("its protection but an overcurrent one, without automatic restart, on a two-level grid-following converter is not written yet");
         }
         if (converter.getExtension(DcEarthingModel.class) != null && !(converter.getExtension(DcEarthingModel.class) instanceof DcMidpointEarthing)) {
             reasons.add("its DC earthing but the midpoint one is not written yet");
@@ -352,7 +357,8 @@ final class EmtpVoltageSourceConverters {
         String[] v = new String[3];
         String[] i = new String[3];
         powerStage(devices, converter, model, initial, phaseNodes, v, i, emfMagnitude, emfAngle, omega, settings);
-        if (!Double.isNaN(blockingSeconds)) {
+        boolean blockable = !Double.isNaN(blockingSeconds) || isProtected(converter);
+        if (blockable) {
             blocking(devices, converter, model, initial, blockingSeconds, deblockingSeconds, settings);
         }
         String vPole = id + "_VDP";
@@ -382,7 +388,7 @@ final class EmtpVoltageSourceConverters {
         devices.add(park(id + "_VQ", vq, v, theta, "SIN", vbpk, 0.0, true));
         // The source's current is counted from its star point to its EMF, out of the converter: negated, the current from the bus into it.
         // Blocked, its currents read on its meter, from the bus into it; otherwise on its sources, counted out of it.
-        boolean metered = !Double.isNaN(blockingSeconds);
+        boolean metered = blockable;
         String[] read = metered ? new String[] {id + "_IMa", id + "_IMb", id + "_IMc"} : i;
         double currentBase = metered ? ibpk : -ibpk;
         devices.add(park(id + "_ID", idPu, read, theta, "COS", currentBase, initial.directCurrent(), false));
@@ -521,7 +527,7 @@ final class EmtpVoltageSourceConverters {
             negativeSequenceLoop(devices, id, control, x, voltage, current, negativeReference);
         }
         emfsAndDcCurrent(devices, converter, initial, dualSequence, current, cos2, sin2, emfMagnitude, emfAngle, omega, settings);
-        if (!Double.isNaN(blockingSeconds)) {
+        if (blockable) {
             freeze(devices, id, List.of("_IDI", "_IQI", "_PREF", "_UDI", "_UQI", "_UDNI", "_UQNI"), !Double.isNaN(deblockingSeconds));
         }
         return devices;
@@ -613,23 +619,17 @@ final class EmtpVoltageSourceConverters {
     private static void blocking(List<EmtpSynchronousMachines.Device> devices, VoltageSourceConverter converter, AveragedConverterModel model,
                                  AveragedVscInitialState initial, double blockingSeconds, double deblockingSeconds, EmtpSimulationSettings settings) {
         String id = sanitize(converter.getId());
-        double order = NumericalAids.switchingInstant(blockingSeconds, settings.timeStepSeconds());
-        // Deblocked, the flag {@code <id>_DEB}, 0 then 1 from the deblocking, and the running flag back to 1 with it.
-        boolean deblocked = !Double.isNaN(deblockingSeconds);
-        double release = deblocked ? NumericalAids.switchingInstant(deblockingSeconds, settings.timeStepSeconds()) : Double.NaN;
-        String deblockedFlag = deblocked ? "+" + step("t-(" + number(release) + ")") : "";
-        devices.add(function(id + "_RUN", id + "_RUN", List.of(id + "_ZERO"), 1.0, step("(" + number(order) + ")-t") + deblockedFlag + "+0*u[1]"));
-        if (deblocked) {
-            devices.add(function(id + "_DEB", id + "_DEB", List.of(id + "_ZERO"), 0.0, step("t-(" + number(release) + ")") + "+0*u[1]"));
-        }
-        String pole = dcNode(converter.getDcTerminal1().getDcNode());
+        runningFlag(devices, converter, initial, blockingSeconds, deblockingSeconds, settings);
+        // The bridge's pole rail on the converter's own side: its capacitor's node, behind its DC reactor or its meter, as ATP's.
+        String pole = model.hasDcReactor() || isProtected(converter) ? id + "_CP" : dcNode(converter.getDcTerminal1().getDcNode());
         String ret = dcNode(converter.getDcTerminal2().getDcNode());
         boolean poleHigher = converter.getDcTerminal1().getDcNode().getV() >= converter.getDcTerminal2().getDcNode().getV();
         String high = poleHigher ? pole : ret;
         String low = poleHigher ? ret : pole;
-        // The valves' switches closed at the order; opened at the deblocking whatever their current, as Xyce's and Kestrel's valves are
-        // behind switches their gate opens.
-        String atOrder = number(order) + "," + (deblocked ? number(release) + "," + number(ANY_CURRENT_AMPERES) : "1E15,0") + ",0,0,,1,.1,.001,5,";
+        // Every switch on the running flag, whatever its current: the cut closed while it is up, the valves' gates and snubbers while it is
+        // down ({@code <id>_GATE}) - opened at a deblocking, as Xyce's and Kestrel's valves are behind switches their gate opens.
+        String closedFirst = "1,0,0,0,0,1e6,0,";
+        String openFirst = "0,0,0,0,0,1e6,0,";
         String[] meterBus = new String[3];
         for (char phase : "abc".toCharArray()) {
             String emfSide = id + "_K" + phase;
@@ -651,11 +651,7 @@ final class EmtpVoltageSourceConverters {
                     devices.set(k, new EmtpSynchronousMachines.Device("_cV", List.of(lines.get(0).replace("," + id + "_N,", ",,"), lines.get(1))));
                 }
             }
-            devices.add(element("_Sw0", id + "_CUT" + phase, List.of(emfSide, valveSide), "-1," + number(order) + "," + number(ANY_CURRENT_AMPERES) + ",0,0,,1,.1,.001,5,"));
-            if (deblocked) {
-                // The cut made again at the deblocking.
-                devices.add(element("_Sw0", id + "_MAKE" + phase, List.of(emfSide, valveSide), number(release) + ",1E15,0,0,0,,1,.1,.001,5,"));
-            }
+            devices.add(element("_cSw", id + "_CUT" + phase, List.of(emfSide, valveSide, id + "_RUN"), closedFirst));
             // The meter: a controlled source held at 0 V, its current - from the bus into the converter, through the bridge too once blocked -
             // observed, what the controls read (PSCAD's and ATP's meter).
             devices.add(element("_cV", id + "_MET" + phase, List.of(id + "_X" + phase, meterBus[phase - 'a'], id + "_ZERO", id + "_MV" + phase, id + "_IM" + phase,
@@ -666,18 +662,92 @@ final class EmtpVoltageSourceConverters {
                 String rail = upper ? high : low;
                 String gate = id + "_G" + tag;
                 String diodeEnd = id + "_D" + tag;
-                devices.add(element("_Sw0", id + "_SG" + tag, List.of(valveSide, gate), atOrder));
+                devices.add(element("_cSw", id + "_SG" + tag, List.of(valveSide, gate, id + "_GATE"), openFirst));
                 // Between an open switch and a diode off, the gate's node is held by 1 Gohm to earth, as a bus is.
                 devices.add(element("_RLC", id + "_GR" + tag, List.of(gate), number(NumericalAids.BUS_EARTH_REFERENCE_OHM) + ",0,0,0,0,"));
                 devices.add(element("_D0", id + "_V" + tag, upper ? List.of(gate, diodeEnd) : List.of(diodeEnd, gate), "0.001,0,0,"));
                 devices.add(element("_RLC", id + "_VR" + tag, List.of(diodeEnd, rail), number(NumericalAids.FAULT_ON_RESISTANCE_OHM) + ",0,0,0,0,"));
                 String snubber = id + "_S" + tag;
-                devices.add(element("_Sw0", id + "_SS" + tag, List.of(valveSide, snubber), atOrder));
+                devices.add(element("_cSw", id + "_SS" + tag, List.of(valveSide, snubber, id + "_GATE"), openFirst));
                 devices.add(element("_RLC", id + "_SR" + tag, List.of(snubber, rail), number(NumericalAids.VALVE_SNUBBER_OHM) + ",0,"
                         + number(NumericalAids.VALVE_SNUBBER_F) + ",0,0,"));
                 devices.add(element("_RLC", id + "_SD" + tag, List.of(snubber, rail), number(NumericalAids.VALVE_GRADING_OHM) + ",0,0,0,0,"));
             }
         }
+    }
+
+    /** Whether {@code converter} carries an {@link OvercurrentProtection}: its running flag then its protection's too. */
+    static boolean isProtected(VoltageSourceConverter converter) {
+        return converter.getExtension(VscProtectionModel.class) instanceof OvercurrentProtection;
+    }
+
+    /**
+     * The running flag {@code <id>_RUN} - 1 while the converter runs - and its complement, the valves' gate {@code <id>_GATE}: down from
+     * its blocking event's order, if any, and from its {@link OvercurrentProtection}'s trip, if it has one; with a deblocking, the
+     * deblocked flag {@code <id>_DEB} up from it, the running flag back to 1, and the protection re-armed then - a trip from then on
+     * blocking it again, for good -, as ATP's.
+     */
+    private static void runningFlag(List<EmtpSynchronousMachines.Device> devices, VoltageSourceConverter converter, AveragedVscInitialState initial,
+                                    double blockingSeconds, double deblockingSeconds, EmtpSimulationSettings settings) {
+        String id = sanitize(converter.getId());
+        List<String> inputs = new ArrayList<>(List.of(id + "_ZERO"));
+        String before = Double.isNaN(blockingSeconds) ? "1"
+                : step("(" + number(NumericalAids.switchingInstant(blockingSeconds, settings.timeStepSeconds())) + ")-t");
+        boolean deblocked = !Double.isNaN(deblockingSeconds);
+        String after = "1";
+        if (deblocked) {
+            String release = number(NumericalAids.switchingInstant(deblockingSeconds, settings.timeStepSeconds()));
+            devices.add(function(id + "_DEB", id + "_DEB", List.of(id + "_ZERO"), 0.0, step("t-(" + release + ")") + "+0*u[1]"));
+        }
+        if (converter.getExtension(VscProtectionModel.class) instanceof OvercurrentProtection protection) {
+            protection(devices, id, protection, initial, settings);
+            inputs.add(protectionLatch(devices, id + "_PT", id + "_PTI", protection));
+            before = before + "*u[2]";
+            if (deblocked) {
+                devices.add(function(id + "_PRI", id + "_PRI", List.of(id + "_PTI", id + "_DEB"), 0.0, "u[1]*u[2]"));
+                inputs.add(protectionLatch(devices, id + "_PR", id + "_PRI", protection));
+                after = "u[3]";
+            }
+        }
+        String running = before;
+        if (deblocked) {
+            inputs.add(id + "_DEB");
+            String d = "u[" + inputs.size() + "]";
+            running = "(1-" + d + ")*" + before + "+" + d + "*" + after;
+        }
+        // Recorded, as the other backends record it.
+        devices.add(scoped(function(id + "_RUN", id + "_RUN", inputs, 1.0, running + "+0*u[1]")));
+        devices.add(function(id + "_GATE", id + "_GATE", List.of(id + "_RUN"), 0.0, "1-u[1]"));
+    }
+
+    /** An {@link OvercurrentProtection}'s detection {@code <id>_PTI}: the worst arm current, {@code |i_dc| / 3 + |i_k| / 2}, past its
+     * threshold - times {@code 2 / Dt}, the latch's rate, as ATP's. */
+    private static void protection(List<EmtpSynchronousMachines.Device> devices, String id, OvercurrentProtection protection, AveragedVscInitialState initial,
+                                   EmtpSimulationSettings settings) {
+        String threshold = number(protection.getThreshold() * OvercurrentProtection.ratedArmCurrentAmps(initial));
+        String trips = "";
+        for (int k = 2; k <= 4; k++) {
+            trips += (k > 2 ? "+" : "") + step("ABS(u[1])/3+0.5*ABS(u[" + k + "])-" + threshold);
+        }
+        devices.add(function(id + "_PTI", id + "_PTI", List.of(id + "_IDCM", id + "_IMa", id + "_IMb", id + "_IMc"), 0.0,
+                "(" + trips + ")*" + number(2.0 / settings.timeStepSeconds())));
+    }
+
+    /** A protection's latch on {@code input}: its integral - never falling, {@code input} being no less than 0 - within 1, then its delay's
+     * timer, as ATP's - its flag {@code <prefix>F}, 1 until the delay has run from the trip. (The integral held at 1 by a gate on itself,
+     * EMTP's control loop solved it at 0 for good; 2026-11-15.) */
+    private static String protectionLatch(List<EmtpSynchronousMachines.Device> devices, String prefix, String input, OvercurrentProtection protection) {
+        String state = prefix + "X";
+        devices.add(integrator(state, state, input, 1.0, 0.0));
+        devices.add(function(prefix + "L", prefix + "L", List.of(state), 0.0, "0.5*(u[1]+1-ABS(u[1]-1))"));
+        String flag = prefix + "F";
+        if (protection.getDelay() > 0.0) {
+            devices.add(integrator(prefix + "T", prefix + "T", prefix + "L", 1.0, 0.0));
+            devices.add(function(flag, flag, List.of(prefix + "T"), 1.0, step(number(protection.getDelay()) + "-u[1]")));
+        } else {
+            devices.add(function(flag, flag, List.of(prefix + "L"), 1.0, "1-u[1]"));
+        }
+        return flag;
     }
 
     /**
@@ -766,9 +836,21 @@ final class EmtpVoltageSourceConverters {
             double seriesH = model.dcSeriesInductanceH(baseKv, omega);
             seriesOhm = model.dcSeriesResistanceOhm(baseKv);
             pole = id + "_CP";
-            devices.add(element("_RLC", id + "_DCL", List.of(pole, terminal), number(seriesOhm) + "," + number(seriesH) + ",0,0,0,"));
-            devices.add(element("_RLC", id + "_DCLD", List.of(pole, terminal),
+            // Protected, its DC current read beyond its DC series inductance, on a meter at its DC terminal (below), as PSCAD's.
+            String reactorEnd = isProtected(converter) ? id + "_DCI" : terminal;
+            devices.add(element("_RLC", id + "_DCL", List.of(pole, reactorEnd), number(seriesOhm) + "," + number(seriesH) + ",0,0,0,"));
+            devices.add(element("_RLC", id + "_DCLD", List.of(pole, reactorEnd),
                     number(NumericalAids.seriesInductanceDampingOhm(seriesH, settings.timeStepSeconds())) + ",0,0,0,0,"));
+            if (isProtected(converter)) {
+                devices.add(element("_cV", id + "_DCMET", List.of(terminal, reactorEnd, id + "_ZERO", id + "_DCMV", id + "_IDCM", id + "_DCMP"),
+                        "-1,1E15,0,?v,?i,?p,>v,>i,>p,"));
+            }
+        }
+        if (isProtected(converter) && !model.hasDcReactor()) {
+            // Protected, its DC current read on a meter - a controlled source held at 0 V - from its own pole to its DC terminal 1's node.
+            pole = id + "_CP";
+            devices.add(element("_cV", id + "_DCMET", List.of(terminal, pole, id + "_ZERO", id + "_DCMV", id + "_IDCM", id + "_DCMP"),
+                    "-1,1E15,0,?v,?i,?p,>v,>i,>p,"));
         }
         String measured = model.measuresDcVoltageAtTerminal() ? terminal : pole;
         String poleTie = id + "_DCP";

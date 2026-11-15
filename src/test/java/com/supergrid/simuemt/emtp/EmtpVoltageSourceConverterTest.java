@@ -12,6 +12,10 @@ import com.powsybl.iidm.network.VoltageSourceConverter;
 import com.powsybl.simuemt.extensions.circuit.NumericalAids;
 import com.powsybl.simuemt.extensions.event.DcFault;
 import com.powsybl.simuemt.extensions.event.DcSwitchOperation;
+import com.powsybl.simuemt.extensions.hvdc.AveragedVscModel;
+import com.powsybl.simuemt.extensions.hvdc.OvercurrentProtection;
+import com.powsybl.simuemt.extensions.hvdc.VoltageSourceConverterModel;
+import com.powsybl.simuemt.extensions.hvdc.VscProtectionModel;
 import com.powsybl.simuemt.preprocessing.EmtExtensionsXmlReader;
 import com.powsybl.simuemt.preprocessing.EmtNetworkPreprocessor;
 import com.powsybl.simuemt.testresources.ExampleNetworks;
@@ -160,6 +164,72 @@ class EmtpVoltageSourceConverterTest {
         softly.assertThat(dc2p).as("%s, DC2P after the fault, V", name).isCloseTo(0.0, within(10.0));
         softly.assertThat(-dc1n / 1.0e3).as("%s, DC1N after the fault, kV below earth", name).isBetween(490.0, 502.0);
         softly.assertAll();
+    }
+
+    /**
+     * Upstream's {@code dc-fault-protected}: example 4 on its droops, each station with a 100 mH DC reactor and protected against its arms'
+     * overcurrent at 2 pu, no delay, through a solid fault on DC3P from 0.3 s to the end, no order to block, run 1.3 s - held to the checks
+     * upstream holds ATP and Kestrel to, which the overlay holds PSCAD Professional to ({@code
+     * PscadProConvertersTest#theStationsProtectionsBlockThemOnASolidDcFault}): the protections blocking VSC3, VSC2 and VSC1 in turn - ATP's
+     * 0.85, 4.67 and 9.93 ms after the fault -; then every 0.2 s VSC3's AC side a bolted short behind its phase reactor, {@code Q / V^2} its
+     * {@code 1 / X} within 0.07, its DC side at earth; VSC1 and VSC2 rectifying into the fault through the DC lines, VSC2's DC voltage within
+     * [0.03, 0.15], VSC1's 0.01 above it, each drawing more than 0.4 pu. Kept in {@code target/emtp/dc-fault-protected}.
+     *
+     * <p>Run 2026-11-15: VSC3, VSC2 and VSC1 blocked 0.85, 4.67 and 9.93 ms after the fault - ATP's to the hundredth of a millisecond -;
+     * VSC3's {@code Q / V^2} 6.624 to 6.700 against 6.667, its DC voltage within 2e-4 pu of earth; VSC2's DC voltage 0.072 to 0.083 pu,
+     * VSC1's 0.106 to 0.123; their powers 0.53 to 1.01 pu, rising as their DC currents do.
+     */
+    @Test
+    @Tag("emtp")
+    void theStationsProtectionsBlockThemOnASolidDcFault() {
+        double fault = 0.3;
+        double runEnd = 1.3;
+        Network network = protectedWithDcReactors();
+        EmtpOutput output = EmtpRunner.run(EmtpNetlistWriter.write(network, Path.of("target", "emtp", "dc-fault-protected"),
+                new EmtpSimulationSettings(20.0e-6, runEnd, FREQUENCY), List.of(new DcFault("FDC", "DC3P", 0.0, fault, 10.0))), EmtpSettings.defaults()).output();
+        SoftAssertions softly = new SoftAssertions();
+        double[] atp = {9.93e-3, 4.67e-3, 0.85e-3};
+        String[] ids = {"VSC1", "VSC2", "VSC3"};
+        for (int k = 0; k < 3; k++) {
+            double blocked = output.firstTimeBelow("control:" + ids[k] + "_RUN", 0.5, 0.2) - NumericalAids.switchingInstant(fault, 20.0e-6);
+            System.out.printf(Locale.ROOT, "%s blocked %.2f ms after the fault (ATP %.2f)%n", ids[k], blocked * 1.0e3, atp[k] * 1.0e3);
+            softly.assertThat(blocked).as("%s blocked after the fault, s, against ATP's", ids[k]).isCloseTo(atp[k], within(0.5e-3));
+        }
+        double reactance = ((AveragedVscModel) network.getVoltageSourceConverter("VSC3").getExtension(VoltageSourceConverterModel.class))
+                .getPhaseReactorReactance();
+        for (double start = 0.4; start < runEnd - 1.0e-9; start += 0.2) {
+            double end = start + 0.2;
+            double v3 = output.mean("control:VSC3_VAC", start, end);
+            double shortCircuit = output.mean("control:VSC3_Q", start, end) / (v3 * v3);
+            double vdc1 = output.mean("control:VSC1_VDC", start, end);
+            double vdc2 = output.mean("control:VSC2_VDC", start, end);
+            double vdc3 = output.mean("control:VSC3_VDC", start, end);
+            double p1 = output.mean("control:VSC1_P", start, end);
+            double p2 = output.mean("control:VSC2_P", start, end);
+            System.out.printf(Locale.ROOT, "from %.1f s: VSC3 Q/V^2 %.3f (1/X %.3f), DC %.4f; VSC2 DC %.4f, VSC1 DC %.4f; P %.3f and %.3f%n", start, shortCircuit,
+                    1.0 / reactance, vdc3, vdc2, vdc1, p1, p2);
+            softly.assertThat(shortCircuit).as("VSC3 Q / V^2 from %.1f s", start).isCloseTo(1.0 / reactance, within(0.07));
+            softly.assertThat(vdc3).as("VSC3 DC voltage from %.1f s, pu", start).isCloseTo(0.0, within(0.005));
+            softly.assertThat(vdc2).as("VSC2 DC voltage from %.1f s, pu", start).isBetween(0.03, 0.15);
+            softly.assertThat(vdc1).as("VSC1 DC voltage from %.1f s, pu", start).isGreaterThan(vdc2 + 0.01);
+            softly.assertThat(p1).as("VSC1 power from %.1f s, pu", start).isGreaterThan(0.4);
+            softly.assertThat(p2).as("VSC2 power from %.1f s, pu", start).isGreaterThan(0.4);
+        }
+        softly.assertAll();
+    }
+
+    /** Example 4 on its droops, each station with a 100 mH DC reactor and protected against its arms' overcurrent at 2 pu, no delay:
+     * upstream's {@code dc-fault-protected} bench. */
+    static Network protectedWithDcReactors() {
+        Network network = ExampleNetworks.readVscBench("vsc-three-terminal-all-droop", EmtExtensionsXmlReader::readNetwork);
+        for (VoltageSourceConverter converter : network.getVoltageSourceConverters()) {
+            AveragedVscModel model = (AveragedVscModel) converter.getExtension(VoltageSourceConverterModel.class);
+            converter.addExtension(VoltageSourceConverterModel.class, new AveragedVscModel(model.getRatedApparentPower(), model.getPhaseReactorResistance(),
+                    model.getPhaseReactorReactance(), model.getDcCapacitorEnergyConstant(), 0.1, model.getBridgeInductance()));
+            converter.addExtension(VscProtectionModel.class, new OvercurrentProtection(2.0, 0.0));
+        }
+        EmtNetworkPreprocessor.preprocess(network, LocalComputationManager.getDefault());
+        return network;
     }
 
     static Network bench() {

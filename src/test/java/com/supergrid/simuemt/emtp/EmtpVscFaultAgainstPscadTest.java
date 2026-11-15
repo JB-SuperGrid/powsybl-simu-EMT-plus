@@ -4,6 +4,7 @@
  */
 package com.supergrid.simuemt.emtp;
 
+import com.powsybl.iidm.network.Network;
 import com.powsybl.simuemt.extensions.circuit.NumericalAids;
 import com.powsybl.simuemt.extensions.event.BusFault;
 import com.powsybl.simuemt.extensions.event.ConverterBlocking;
@@ -15,6 +16,7 @@ import com.powsybl.simuemt.extensions.event.FaultClearing;
 import com.powsybl.simuemt.pscad.PscadEdition;
 import com.powsybl.simuemt.pscad.PscadOutput;
 import com.powsybl.simuemt.pscad.PscadSimulationSettings;
+import com.powsybl.simuemt.pscad.PscadSwitching;
 import com.supergrid.simuemt.pscadpro.PscadProSettings;
 import com.supergrid.simuemt.pscadpro.PscadProSimulation;
 import org.assertj.core.api.SoftAssertions;
@@ -29,6 +31,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.function.DoubleFunction;
+import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.within;
 
@@ -177,6 +180,29 @@ class EmtpVscFaultAgainstPscadTest {
                 channels, "vsc-deblocking", 5.0e-3, SETTLED_TOLERANCE, TRANSIENT_TOLERANCE, false);
     }
 
+    /**
+     * Upstream's {@code dc-fault-protected} ({@link EmtpVoltageSourceConverterTest#protectedWithDcReactors}): example 4's stations with their
+     * DC reactors, protected at 2 pu, through a solid fault on DC3P from the fault to the end, blocked in turn by their protections and
+     * feeding the fault through their bridges - by 200 ms windows, as upstream holds PSCAD, ATP and Kestrel to one another on it: the
+     * bridges' conduction a chatter no two solvers share window by 5 ms window. The running flags by the same windows.
+     *
+     * <p>Run 2026-11-15, 40 s the two: the running flags identical - each protection tripping on the same step, ATP's 0.85, 4.67 and 9.93
+     * ms after the fault for VSC3, VSC2 and VSC1 ({@link EmtpVoltageSourceConverterTest#theStationsProtectionsBlockThemOnASolidDcFault});
+     * the DC voltages within 3.5e-3 pu of PSCAD's, the reactive powers 2.1e-2, the AC voltages 1.5e-2; the powers drawn into the fault 4.6e-2
+     * off on VSC1 (0.768 against 0.722 from 0.15 s on), 5.7e-2 on VSC3 in the window holding the fault - held within 6e-2. Upstream holds
+     * PSCAD and ATP to the same structural checks only on these powers ({@code PscadProConvertersTest}); the gap's cause not traced - not the
+     * valves' snubbers, ATP's which PSCAD has not: EMTP without them 0.740 (2026-11-15).
+     */
+    @Test
+    void protectedConvertersTrippingOnADcFaultRunInEmtpAsInPscadProfessional() throws IOException {
+        List<Channel> channels = new ArrayList<>(converters("VSC1", "VSC2", "VSC3"));
+        for (String id : List.of("VSC1", "VSC2", "VSC3")) {
+            channels.add(new Channel(id + "_RUN", "control:" + id + "_RUN", id + "_RUN", 1.0));
+        }
+        compare(EmtpVoltageSourceConverterTest::protectedWithDcReactors, start -> List.of(new DcFault("FDC", "DC3P", 0.0, start, start + 10.0)), channels,
+                "vsc-protection", 0.2, SETTLED_TOLERANCE, 0.06, false, PSCAD_SHIFT, PscadSwitching.INTERPOLATED);
+    }
+
     private static List<Channel> converters(String... ids) {
         List<Channel> channels = new ArrayList<>();
         for (String id : ids) {
@@ -194,11 +220,18 @@ class EmtpVscFaultAgainstPscadTest {
 
     private static void compare(String bench, DoubleFunction<List<? extends EmtEvent>> events, List<Channel> channels, String name, double window,
                                 double settledTolerance, double transientTolerance, boolean settlesAfter, double pscadShift) throws IOException {
-        EmtpOutput emtp = EmtpRunner.run(EmtpNetlistWriter.write(EmtpVoltageSourceConverterTest.bench(bench), Path.of("target", "emtp", name),
+        compare(() -> EmtpVoltageSourceConverterTest.bench(bench), events, channels, name, window, settledTolerance, transientTolerance, settlesAfter,
+                pscadShift, PscadSwitching.INTERPOLATED);
+    }
+
+    private static void compare(Supplier<Network> bench, DoubleFunction<List<? extends EmtEvent>> events, List<Channel> channels, String name,
+                                double window, double settledTolerance, double transientTolerance, boolean settlesAfter, double pscadShift,
+                                PscadSwitching switching) throws IOException {
+        EmtpOutput emtp = EmtpRunner.run(EmtpNetlistWriter.write(bench.get(), Path.of("target", "emtp", name),
                 new EmtpSimulationSettings(TIME_STEP, EMTP_FAULT + 0.45, FREQUENCY), events.apply(EMTP_FAULT)), EmtpSettings.defaults()).output();
         double pscadFault = EMTP_FAULT + pscadShift;
-        PscadOutput pscad = PscadProSimulation.run(EmtpVoltageSourceConverterTest.bench(bench), Path.of("target", "pscad", name),
-                new PscadSimulationSettings(TIME_STEP, pscadFault + 0.45, FREQUENCY, PscadEdition.PROFESSIONAL), events.apply(pscadFault),
+        PscadOutput pscad = PscadProSimulation.run(bench.get(), Path.of("target", "pscad", name),
+                new PscadSimulationSettings(TIME_STEP, pscadFault + 0.45, FREQUENCY, PscadEdition.PROFESSIONAL, switching), events.apply(pscadFault),
                 PscadProSettings.defaults()).output();
 
         double[] worstSettled = new double[channels.size()];
