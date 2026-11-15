@@ -15,8 +15,10 @@ import com.powsybl.iidm.network.Load;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.ShuntCompensator;
 import com.powsybl.iidm.network.StaticVarCompensator;
+import com.powsybl.iidm.network.Switch;
 import com.powsybl.iidm.network.ThreeWindingsTransformer;
 import com.powsybl.iidm.network.TwoWindingsTransformer;
+import com.powsybl.iidm.network.VoltageLevel;
 import com.powsybl.iidm.network.extensions.ThreeWindingsTransformerFortescue;
 import com.powsybl.iidm.network.extensions.ThreeWindingsTransformerPhaseAngleClock;
 import com.powsybl.iidm.network.extensions.TwoWindingsTransformerFortescue;
@@ -24,6 +26,7 @@ import com.powsybl.iidm.network.extensions.TwoWindingsTransformerPhaseAngleClock
 import com.powsybl.iidm.network.extensions.WindingConnectionType;
 import com.powsybl.simuemt.extensions.GeneratorModel;
 import com.powsybl.simuemt.extensions.LoadModel;
+import com.powsybl.simuemt.extensions.circuit.ElectricalNodes;
 import com.powsybl.simuemt.extensions.circuit.LoadBranches;
 import com.powsybl.simuemt.extensions.circuit.NumericalAids;
 import com.powsybl.simuemt.extensions.circuit.PhaseShiftCoefficients;
@@ -41,6 +44,7 @@ import com.powsybl.simuemt.extensions.event.DcFault;
 import com.powsybl.simuemt.extensions.event.DcSwitchOperation;
 import com.powsybl.simuemt.extensions.event.EmtEvent;
 import com.powsybl.simuemt.extensions.event.FaultClearing;
+import com.powsybl.simuemt.extensions.event.SwitchOperation;
 import com.powsybl.simuemt.extensions.infinitebus.InfiniteBusEmf;
 import com.powsybl.simuemt.extensions.infinitebus.InfiniteBusGeneratorModel;
 
@@ -94,10 +98,12 @@ import java.util.stream.Stream;
  * <p>A shunt compensator, per phase to earth: its conductance's resistance, its susceptance a reactor's inductance or a bank's
  * capacitance with {@code Dt/16C} in series, as ATP's; a ground, a 0.01 ohm earthing per phase, as ATP's. A branch's or a transformer's
  * end disconnected in the network is a node of its own, earthed through 1 Gohm as a bus is, as upstream's backends give an open end.
+ * A switch closed in the load flow joins its buses into one node, an open one nothing ({@link ElectricalNodes}); one the run operates
+ * ({@link SwitchOperation}) is a breaker between its buses' nodes, its closed resistance in series, as upstream's backends write it.
  *
  * <p>EMTP starts the run from its own steady-state solution, every source active from {@code -1} s. An element disconnected at every end
  * is out of service and not written. Anything else the network holds - another kind of generator or load, a line's shunt conductance,
- * a line model, zero-sequence data or an arrester on a line or a transformer, a switch - or the run goes through is refused, said so,
+ * a line model, zero-sequence data or an arrester on a line or a transformer, a generator on a bus the load flow left dead - or the run goes through is refused, said so,
  * until written.
  *
  * @author Jean-Baptiste Heyberger : jean-baptiste.heyberger@supergrid-institute.com
@@ -146,6 +152,12 @@ public final class EmtpNetlistWriter {
                 refused.addAll(unsupportedBranchOperationReasons(network, operation, events));
                 continue;
             }
+            if (event instanceof SwitchOperation operation) {
+                if (network.getSwitch(operation.switchId()) == null) {
+                    refused.add("switch '" + operation.switchId() + "' is operated, which the network has not");
+                }
+                continue;
+            }
             if (event instanceof ConverterDeblocking deblocking) {
                 if (events.stream().noneMatch(e -> e instanceof ConverterBlocking b && b.converterId().equals(deblocking.converterId()))) {
                     refused.add("converter '" + deblocking.converterId() + "' is deblocked, not blocked by an event before");
@@ -166,10 +178,16 @@ public final class EmtpNetlistWriter {
         }
         OPERATED_ENDS.set(events.stream().filter(BranchOperation.class::isInstance).map(e -> operatedEndKey(((BranchOperation) e).branchId(),
                 ((BranchOperation) e).side().getNum())).collect(java.util.stream.Collectors.toSet()));
+        ElectricalNodes nodes = ElectricalNodes.of(network, events);
+        NODES.set(nodes);
+        REPRESENTATIVES.set(network.getBusBreakerView().getBusStream().collect(java.util.stream.Collectors.toMap(Identifiable::getId,
+                b -> nodes.representative(b).getId())));
         try {
             return write(network, directory, settings, events, new Devices());
         } finally {
             OPERATED_ENDS.remove();
+            NODES.remove();
+            REPRESENTATIVES.remove();
         }
     }
 
@@ -268,9 +286,11 @@ public final class EmtpNetlistWriter {
                 }
             }
         }
-        List<String> referenced = new ArrayList<>(network.getBusBreakerView().getBusStream().map(Identifiable::getId).toList());
+        // One node per group of buses closed switches join - its representative's -, as every backend writes them.
+        List<String> referenced = new ArrayList<>(NODES.get().representatives().stream().map(Identifiable::getId).toList());
         referenced.addAll(openEnds(network));
         branchBreakers(devices, network, events, settings, referenced);
+        switchBreakers(devices, settings);
         for (String busId : referenced) {
             for (String phase : PHASES) {
                 String node = node(busId, phase.charAt(0));
@@ -860,9 +880,13 @@ public final class EmtpNetlistWriter {
                 reasons.add("battery '" + battery.getId() + "': " + String.join(", ", batteryReasons));
             }
         });
-        Stream.of(network.getSwitchStream(), network.getHvdcLineStream())
-                .flatMap(s -> s.map(Identifiable::getId))
-                .forEach(id -> reasons.add("'" + id + "' is of a kind not written yet"));
+        // What starts from its bus's load-flow operating point cannot on a bus the load flow left de-energized - behind an open switch.
+        Stream.of(network.getGeneratorStream(), network.getStaticVarCompensatorStream(), network.getBatteryStream())
+                .flatMap(st -> st.map(c -> (com.powsybl.iidm.network.Injection<?>) c))
+                .filter(c -> c.getTerminal().getBusBreakerView().getBus() != null && Double.isNaN(c.getTerminal().getBusBreakerView().getBus().getV()))
+                .forEach(c -> reasons.add("'" + c.getId() + "' is on bus '" + c.getTerminal().getBusBreakerView().getBus().getId()
+                        + "', which the load flow left de-energized"));
+        network.getHvdcLineStream().forEach(hvdc -> reasons.add("'" + hvdc.getId() + "' is of a kind not written yet"));
         return reasons;
     }
 
@@ -963,6 +987,50 @@ public final class EmtpNetlistWriter {
         }
     }
 
+    /** The electrical nodes of the network being written and its run ({@link ElectricalNodes}): which buses closed switches join. */
+    private static final ThreadLocal<ElectricalNodes> NODES = new ThreadLocal<>();
+    /** Each bus's node's - its group's representative's - id. */
+    private static final ThreadLocal<Map<String, String>> REPRESENTATIVES = new ThreadLocal<>();
+
+    /**
+     * Each switch the run operates ({@link SwitchOperation}), its two buses two nodes: per phase, from its first bus, the closed
+     * resistance every backend gives a breaker ({@link NumericalAids#FAULT_ON_RESISTANCE_OHM}), then a switch per interval it is
+     * closed for - from the steady state if the load flow has it closed; opening at its order at its current's first zero, or whatever
+     * its current ({@link FaultClearing#AT_ORDER}).
+     */
+    private static void switchBreakers(Devices devices, EmtpSimulationSettings settings) {
+        ElectricalNodes nodes = NODES.get();
+        for (Switch aSwitch : nodes.operatedSwitches()) {
+            VoltageLevel.BusBreakerView view = aSwitch.getVoltageLevel().getBusBreakerView();
+            String bus1 = view.getBus1(aSwitch.getId()).getId();
+            String bus2 = view.getBus2(aSwitch.getId()).getId();
+            List<String[]> intervals = new ArrayList<>();
+            String close = aSwitch.isOpen() ? null : STEADY_STATE_START;
+            for (SwitchOperation operation : nodes.operations(aSwitch)) {
+                String instant = number(NumericalAids.switchingInstant(operation.timeSeconds(), settings.timeStepSeconds()));
+                if (operation.opens()) {
+                    intervals.add(new String[] {close, instant, number(operation.clearing() == FaultClearing.AT_ORDER ? ANY_CURRENT_AMPERES : 0.0)});
+                    close = null;
+                } else {
+                    close = instant;
+                }
+            }
+            if (close != null) {
+                intervals.add(new String[] {close, NEVER, "0"});
+            }
+            String id = id(aSwitch);
+            for (String phase : PHASES) {
+                String inner = id + "_S" + phase;
+                devices.add("_RLC", id + "_R" + phase, List.of(node(bus1, phase.charAt(0)), inner), rl(NumericalAids.FAULT_ON_RESISTANCE_OHM, 0.0));
+                for (int k = 0; k < intervals.size(); k++) {
+                    String[] interval = intervals.get(k);
+                    devices.add("_Sw0", id + "_BRK" + phase + (k == 0 ? "" : String.valueOf(k + 1)), List.of(inner, node(bus2, phase.charAt(0))),
+                            interval[0] + "," + interval[1] + "," + interval[2] + ",0,0,,1,.1,.001,5,");
+                }
+            }
+        }
+    }
+
     private static String openEnd(Identifiable<?> connectable, int side) {
         return sanitize(connectable.getId()) + "_O" + side;
     }
@@ -991,7 +1059,8 @@ public final class EmtpNetlistWriter {
 
     /** Bus {@code busId}'s node of {@code phase}: {@code B1a}. */
     static String node(String busId, char phase) {
-        return sanitize(busId) + Character.toLowerCase(phase);
+        Map<String, String> representatives = REPRESENTATIVES.get();
+        return sanitize(representatives == null ? busId : representatives.getOrDefault(busId, busId)) + Character.toLowerCase(phase);
     }
 
     private static String id(Identifiable<?> identifiable) {
