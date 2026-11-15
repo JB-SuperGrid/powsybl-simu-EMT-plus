@@ -73,6 +73,15 @@ class EmtpNetlistWriterTest {
                 "_RLC;L1_2_a;2;2;B1a,B2a,", "_RLC;LOAD_La;1;1;ZLOADa,", "_Vsine;GEN_a;1;1;EGENa,", "_RLC;REF_B2a;1;1;B2a,");
     }
 
+    /** An infinite bus anchored on a load ({@code InfiniteBusLoadModel}): its EMF behind its Thevenin impedance, as on a generator - no
+     * load impedance. */
+    @Test
+    void writesAnInfiniteBusOnALoadAsOnAGenerator(@TempDir Path tempDir) throws IOException {
+        Network network = ExampleNetworks.withLoadFlow(ExampleNetworks.createTwoBusNetworkWithInfiniteBusLoad());
+        List<String> lines = Files.readAllLines(EmtpNetlistWriter.write(network, tempDir, SETTINGS), StandardCharsets.ISO_8859_1);
+        assertThat(lines).contains("_Vsine;LOAD_a;1;1;ELOADa,", "_RLC;LOAD_Za;2;2;ELOADa,B2a,").noneMatch(l -> l.startsWith("_RLC;LOAD_Ra;"));
+    }
+
     @Test
     void refusesWhatItDoesNotWriteYet(@TempDir Path tempDir) {
         Network network = twoBus();

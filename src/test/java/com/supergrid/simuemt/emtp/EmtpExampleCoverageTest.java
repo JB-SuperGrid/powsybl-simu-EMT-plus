@@ -35,10 +35,10 @@ import static org.assertj.core.api.Assertions.within;
  * holds that the writer does not write yet, said by name - nothing left out silently. The examples it writes are pinned, so that what
  * the writer gains or loses shows; and - tagged {@code emtp} - each is run live, every bus on the load flow.
  *
- * <p>2026-11-15, upstream's {@code 6346a20c}: 62 of its 132 examples written - since the shunts, the grounds, the open ends, the SVC, the battery, the WT4B - CIGRE DCS2 with it -,
- * and the switches. Its
- * refusals, the most frequent first: power electronics (VSCs, MMCs, their DC sides), load models (infinite buses,
- * induction motors, constant power), line models and zero-sequence data, arresters, excitation limiters,
+ * <p>2026-11-15, upstream's {@code 6346a20c}: 63 of its 132 examples written - since the shunts, the grounds, the open ends, the SVC, the battery, the WT4B - CIGRE DCS2 with it -, the switches
+ * and the infinite buses on a load. Its
+ * refusals, the most frequent first: power electronics (VSCs, MMCs, their DC sides), load models
+ * (induction motors, constant power), line models and zero-sequence data, arresters, excitation limiters,
  * governors but TGOV1, PSS2A.
  *
  * @author Jean-Baptiste Heyberger : jean-baptiste.heyberger@supergrid-institute.com
@@ -60,6 +60,7 @@ class EmtpExampleCoverageTest {
             "createTwoBusNetworkWithEmtExtensions",
             "createTwoBusNetworkWithIdealInfiniteBusGenerator",
             "createTwoBusNetworkWithInfiniteBusGenerator",
+            "createTwoBusNetworkWithInfiniteBusLoad",
             "createTwoBusNetworkWithParallelLines",
             "createTwoBusNetworkWithSt1A",
             "createTwoBusNetworkWithSt4B",
