@@ -25,6 +25,8 @@ import com.powsybl.simuemt.extensions.hvdc.VoltageSourceConverterModel;
 import com.powsybl.simuemt.extensions.hvdc.VscProtectionModel;
 import com.powsybl.simuemt.extensions.hvdc.control.FaultRideThrough;
 import com.powsybl.simuemt.extensions.hvdc.control.GridFollowingControl;
+import com.powsybl.simuemt.extensions.hvdc.control.GridFormingControl;
+import com.powsybl.simuemt.extensions.hvdc.control.SrfPll;
 import com.powsybl.simuemt.extensions.hvdc.control.VscControlModel;
 import com.powsybl.simuemt.preprocessing.EmtEventsXml;
 import com.powsybl.simuemt.preprocessing.EmtExtensionsXmlReader;
@@ -432,6 +434,90 @@ class EmtpVoltageSourceConverterTest {
             softly.assertThat(output.firstTimeBelow("control:" + id + "_RUN", 0.5, 0.1)).as("%s blocked, s: never, DCB open", id).isNaN();
         }
         softly.assertAll();
+    }
+
+    /**
+     * Upstream's {@code AtpSolverIntegrationTest#aDeblockedGridFormingStationRestartsInStepWithItsBus}: example 3 between infinite buses,
+     * its grid-forming VSC2 blocked at 0.3 s and deblocked at 0.5 s ({@code converter-blocking-vsc2-0.3-deblock-0.5}), its AC side kept -
+     * held to ATP's checks: blocked, its virtual machine pre-synchronised by its steady-state current limit's PLL, {@code delta_IT} from
+     * over 0.14 rad to 0 within 1e-4, its speed on the bus's within 1e-3; its bus 0.78 to 0.84 pu, its diodes clamping the negative
+     * half-waves; restarted in step, its power -0.25 to 0 pu over the first 20 ms, its reactive power under 0.5 pu from then on, its swing's
+     * crest 0.85 to 0.95 pu; back on the load flow's within 3e-3 pu at 2.3-2.5 s, VSC1 too, its DC voltage within 1e-3. Kept in {@code
+     * target/emtp/gfm-deblock}.
+     *
+     * <p>Run 2026-11-15, ATP's within a few thousandths: blocked, its speed 0.99985, its bus 0.810 pu; its power -0.150 pu over the first
+     * 20 ms (ATP -0.15), its swing's crest 0.9096 pu (ATP 0.9097), its reactive power within 0.420 pu (ATP 0.43); back within 2.2e-3 pu at
+     * 2.3-2.5 s, VSC1 too, its DC voltage 5e-5.
+     */
+    @Test
+    @Tag("emtp")
+    void aDeblockedGridFormingStationRestartsInStepWithItsBus() {
+        Network network = ExampleNetworks.readVscBench("vsc-monopole-infinite-buses-3", EmtExtensionsXmlReader::readNetwork);
+        EmtNetworkPreprocessor.preprocess(network, LocalComputationManager.getDefault());
+        EmtpOutput output = gridFormingDeblocked(network, "gfm-deblock");
+        SoftAssertions softly = new SoftAssertions();
+        softly.assertThat(output.mean("control:VSC2_GLDY", 0.2, 0.3)).as("VSC2's delta_IT before the block, rad").isGreaterThan(0.14);
+        softly.assertThat(output.mean("control:VSC2_GLDY", 0.4, 0.5)).as("VSC2's delta_IT blocked, rad: drawn to 0").isCloseTo(0.0, within(1.0e-4));
+        softly.assertThat(output.mean("control:VSC2_GW", 0.4, 0.5)).as("VSC2's speed blocked: the bus's").isCloseTo(1.0, within(1.0e-3));
+        restartedInStep(softly, output, 0.5, 0.85, 0.95, 3.0e-3, 2.3);
+        softly.assertAll();
+    }
+
+    /**
+     * Upstream's {@code AtpSolverIntegrationTest#aGridFormingStationRestartsInStepWithItsBusOnItsResynchronizationPll}: the same with no
+     * steady-state current limit, VSC2 resynchronised by its own {@code resynchronizationPll}, the limit's PLL's gains - held to ATP's
+     * checks: its speed blocked on the bus's within 1e-3 over the last 50 ms; restarted in step, its power -0.25 to 0 pu over the first 20
+     * ms, its reactive power under 0.55 pu from then on, its swing's crest 0.84 to 0.90 pu; back on the load flow's within 2.5e-3 pu, VSC1
+     * within 3e-3. Kept in {@code target/emtp/gfm-resynchronization-pll}.
+     *
+     * <p>Run 2026-11-15, ATP's: its speed 0.99908 over the last 50 ms blocked (ATP 0.99908); its power -0.132 pu over the first 20 ms (ATP
+     * -0.13), its swing's crest 0.867 pu (ATP 0.867), its reactive power within 0.459 pu (ATP 0.47); back within 1.2e-3 pu (ATP 1.2e-3).
+     */
+    @Test
+    @Tag("emtp")
+    void aGridFormingStationRestartsInStepWithItsBusOnItsResynchronizationPll() {
+        Network network = ExampleNetworks.readVscBench("vsc-monopole-infinite-buses-3", EmtExtensionsXmlReader::readNetwork);
+        VoltageSourceConverter vsc2 = network.getVoltageSourceConverter("VSC2");
+        GridFormingControl control = GridFormingControl.of(vsc2);
+        SrfPll limitsPll = control.getSteadyStateCurrentLimit().orElseThrow().pll();
+        vsc2.addExtension(VscControlModel.class, new GridFormingControl(control.getSynchronization(), control.getVoltageDroop(), control.getVirtualAdmittance(),
+                control.getCurrentControl(), control.getCurrentLimit(), control.getMeasurement(), null, control.getTransientDamping().orElse(null),
+                control.getDcVoltageDroop().orElse(null), limitsPll));
+        EmtNetworkPreprocessor.preprocess(network, LocalComputationManager.getDefault());
+        EmtpOutput output = gridFormingDeblocked(network, "gfm-resynchronization-pll");
+        SoftAssertions softly = new SoftAssertions();
+        softly.assertThat(output.mean("control:VSC2_GW", 0.45, 0.5)).as("VSC2's speed blocked: drawn to the bus's").isCloseTo(1.0, within(1.0e-3));
+        restartedInStep(softly, output, 0.55, 0.84, 0.9, 2.5e-3, 2.3);
+        softly.assertAll();
+    }
+
+    /** {@code network}'s VSC2 blocked at 0.3 s and deblocked at 0.5 s, run 2.5 s, kept in {@code target/emtp/<name>}. */
+    private static EmtpOutput gridFormingDeblocked(Network network, String name) {
+        List<EmtEvent> events = EmtEventsXml.read(ExampleNetworks.resource("/events/converter-blocking-vsc2-0.3-deblock-0.5.xml"));
+        EmtpOutput output = EmtpRunner.run(EmtpNetlistWriter.write(network, Path.of("target", "emtp", name), new EmtpSimulationSettings(20.0e-6, 2.5, FREQUENCY),
+                events), EmtpSettings.defaults()).output();
+        System.out.printf(Locale.ROOT, "%s: speed %.5f blocked (last 50 ms), bus %.3f pu blocked; VSC2 P %.4f before, %.4f first 20 ms, crest %.4f, Q crest %.3f,"
+                + " %.2e back; VSC1 %.2e back, its DC voltage %.2e%n", name, output.mean("control:VSC2_GW", 0.45, 0.5), output.mean("control:VSC2_VAC", 0.4, 0.5),
+                output.mean("control:VSC2_P", 0.2, 0.3), output.mean("control:VSC2_P", 0.5, 0.52), output.peakAbsolute("control:VSC2_P", 0.52, 2.5),
+                output.peakAbsolute("control:VSC2_Q", 0.52, 2.5), output.mean("control:VSC2_P", 2.3, 2.5) - output.mean("control:VSC2_P", 0.2, 0.3),
+                output.mean("control:VSC1_P", 2.3, 2.5) - output.mean("control:VSC1_P", 0.2, 0.3),
+                output.mean("control:VSC1_VDC", 2.3, 2.5) - output.mean("control:VSC1_VDC", 0.2, 0.3));
+        return output;
+    }
+
+    /** ATP's checks of a grid-forming VSC2 restarted at 0.5 s in step with its bus. */
+    private static void restartedInStep(SoftAssertions softly, EmtpOutput output, double maxReactive, double crestLow, double crestHigh, double tolerance,
+                                        double settled) {
+        softly.assertThat(output.mean("control:VSC2_VAC", 0.4, 0.5)).as("VSC2's AC voltage blocked, pu: its diodes clamping").isBetween(0.78, 0.84);
+        softly.assertThat(output.mean("control:VSC2_P", 0.5, 0.52)).as("VSC2's power over the deblocking's first 20 ms, pu: in step").isBetween(-0.25, 0.0);
+        softly.assertThat(output.peakAbsolute("control:VSC2_Q", 0.52, 2.5)).as("VSC2's reactive power once restarted, pu: no inrush").isLessThan(maxReactive);
+        softly.assertThat(output.peakAbsolute("control:VSC2_P", 0.52, 2.5)).as("VSC2's power's crest once restarted, pu").isBetween(crestLow, crestHigh);
+        softly.assertThat(output.mean("control:VSC2_P", settled, 2.5)).as("VSC2's power at the end, pu: the load flow's")
+                .isCloseTo(output.mean("control:VSC2_P", 0.2, 0.3), within(tolerance));
+        softly.assertThat(output.mean("control:VSC1_P", settled, 2.5)).as("VSC1's power at the end, pu").isCloseTo(output.mean("control:VSC1_P", 0.2, 0.3),
+                within(3.0e-3));
+        softly.assertThat(output.mean("control:VSC1_VDC", settled, 2.5)).as("VSC1's DC voltage at the end, pu").isCloseTo(output.mean("control:VSC1_VDC", 0.2, 0.3),
+                within(1.0e-3));
     }
 
     /** The solid fault on DC3P at 0.3 s, the transformers' station ends T1, T2, T3 opened at 0.36 s at their currents' zeros, run 1.2 s. */

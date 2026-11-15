@@ -180,16 +180,15 @@ final class EmtpVoltageSourceConverters {
         return reasons;
     }
 
-    /** Why {@code blocking} cannot be written yet - empty if it can: a two-level grid-following converter blocked once, deblocked once
-     * after at most. */
+    /** Why {@code blocking} cannot be written yet - empty if it can: a converter but an MMC earthed at its midpoint blocked once, deblocked
+     * once after at most. */
     static List<String> unsupportedBlockingReasons(Network network, ConverterBlocking blocking, List<? extends EmtEvent> events) {
         List<String> reasons = new ArrayList<>();
         VoltageSourceConverter converter = network.getVoltageSourceConverter(blocking.converterId());
         if (converter == null) {
             reasons.add("converter '" + blocking.converterId() + "' is blocked, which the network has not");
-        } else if (converter.getExtension(VscControlModel.class) instanceof GridFormingControl
-                || converter.getExtension(VoltageSourceConverterModel.class) instanceof AveragedMmcModel && converter.getExtension(DcEarthingModel.class) != null) {
-            reasons.add("converter '" + converter.getId() + "' is blocked but as a grid-following one not earthed at its midpoint, which is not written yet");
+        } else if (converter.getExtension(VoltageSourceConverterModel.class) instanceof AveragedMmcModel && converter.getExtension(DcEarthingModel.class) != null) {
+            reasons.add("converter '" + converter.getId() + "' is blocked but as a converter not an MMC earthed at its midpoint, which is not written yet");
         } else if (events.stream().filter(e -> e instanceof ConverterBlocking b && b.converterId().equals(converter.getId())).count() > 1) {
             reasons.add("converter '" + converter.getId() + "' is blocked more than once");
         } else if (events.stream().filter(e -> e instanceof ConverterDeblocking d && d.converterId().equals(converter.getId())
@@ -396,9 +395,14 @@ final class EmtpVoltageSourceConverters {
 
         // A grid-forming control: its internal EMF's angle and magnitude, the current through its virtual admittance followed.
         if (converter.getExtension(VscControlModel.class) instanceof GridFormingControl gridForming) {
-            EmtpGridFormingControls.write(devices, converter, model, gridForming, initial, v, i, angle0, omega);
+            EmtpGridFormingControls.write(devices, converter, model, gridForming, initial, v, i, angle0, omega, blockable, !Double.isNaN(deblockingSeconds));
             emfsAndDcCurrent(devices, converter, initial, false, new Sequences(id + "_ID", id + "_IQ", null, null, null, null), cos2, sin2,
                     emfMagnitude, emfAngle, omega, settings);
+            if (blockable) {
+                boolean restarts = !Double.isNaN(deblockingSeconds);
+                freeze(devices, id, List.of("_GXD", "_GXQ", "_UDI", "_UQI"), restarts);
+                freeze(devices, id, List.of("_GLHX", "_GLNX"), false);
+            }
             return devices;
         }
         GridFollowingControl control = GridFollowingControl.of(converter);
@@ -883,7 +887,7 @@ final class EmtpVoltageSourceConverters {
      * ({@code restarts}), each restarted from 0, as ATP's: the integral read {@code (1 - D) X + X'}, {@code X'} the integral from 0 of its
      * input times {@code D}, the deblocked flag - the held integral renamed {@code <id><suffix>O}, the fresh one {@code <id><suffix>N}.
      */
-    private static void freeze(List<EmtpSynchronousMachines.Device> devices, String id, List<String> suffixes, boolean restarts) {
+    static void freeze(List<EmtpSynchronousMachines.Device> devices, String id, List<String> suffixes, boolean restarts) {
         List<EmtpSynchronousMachines.Device> gates = new ArrayList<>();
         for (int k = 0; k < devices.size(); k++) {
             EmtpSynchronousMachines.Device device = devices.get(k);
@@ -1217,7 +1221,7 @@ final class EmtpVoltageSourceConverters {
 
     /** {@code device} with its output's scope requested: a converter's measurements, as the other backends record them ({@code
      * control:<id>_P}). */
-    private static EmtpSynchronousMachines.Device scoped(EmtpSynchronousMachines.Device device) {
+    static EmtpSynchronousMachines.Device scoped(EmtpSynchronousMachines.Device device) {
         List<String> lines = new ArrayList<>(device.lines());
         lines.set(1, lines.get(1) + "?s,");
         return new EmtpSynchronousMachines.Device(device.part(), lines);

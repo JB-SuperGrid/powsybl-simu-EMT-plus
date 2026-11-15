@@ -9,6 +9,7 @@ import com.powsybl.simuemt.extensions.hvdc.AveragedConverterModel;
 import com.powsybl.simuemt.extensions.hvdc.AveragedVscInitialState;
 import com.powsybl.simuemt.extensions.hvdc.control.GridFormingControl;
 import com.powsybl.simuemt.extensions.hvdc.control.SingleSequenceCurrentControl;
+import com.powsybl.simuemt.extensions.hvdc.control.SrfPll;
 import com.powsybl.simuemt.extensions.hvdc.control.SteadyStateCurrentLimit;
 import com.powsybl.simuemt.extensions.hvdc.control.TransientDamping;
 import com.powsybl.simuemt.extensions.hvdc.control.VirtualAdmittance;
@@ -37,7 +38,10 @@ import static com.supergrid.simuemt.emtp.EmtpVoltageSourceConverters.windupGate;
  * SteadyStateCurrentLimit} - WECC's REGFM_B1 -, its speed deviation within {@code +/- dw_max}, its angle the PLL's plus {@code delta_IT},
  * a limited integrator held within bounds the active current pulls in, and its EMF's magnitude within the bounds the reactive current
  * left sets. Every quantity drawn from the bus, as a grid-following control's; the Park transform on the EMF's angle; every block at
- * rest on the load flow.
+ * rest on the load flow. Blocked, its integrals held - deblocked, its virtual admittance's current and its current loop restarted from 0,
+ * its virtual machine pre-synchronised on the bus meanwhile: by its steady-state current limit's PLL, its speed drawn to the PLL's and
+ * {@code delta_IT} to 0, or by its resynchronization PLL, its speed that PLL's integral and its angle drawn by its proportional term -,
+ * as ATP's.
  *
  * <p>Refused, until written: a power-frequency droop.
  *
@@ -62,10 +66,14 @@ final class EmtpGridFormingControls {
     /**
      * {@code converter}'s grid-forming control, its bus voltages {@code v} and its EMFs' currents {@code i}, the bus at {@code busAngle0}
      * rad in the load flow: the Park transform, the measurements ({@code control:<id>_P}, {@code _Q}, {@code _VAC}, {@code _VDC}), the
-     * angle {@code <id>_TH} and the EMF's components {@code <id>_ED}, {@code <id>_EQ} in its frame.
+     * angle {@code <id>_TH} and the EMF's components {@code <id>_ED}, {@code <id>_EQ} in its frame. A {@code blockable} converter's currents
+     * read on its meter, from the bus into it, its integrals held on its running flag {@code <id>_RUN} - its speed and {@code delta_IT}
+     * here, the others by {@link EmtpVoltageSourceConverters#freeze}; {@code deblocked}, pre-synchronised on the bus while blocked ({@link
+     * #resynchronized}).
      */
     static void write(List<EmtpSynchronousMachines.Device> devices, VoltageSourceConverter converter, AveragedConverterModel model,
-                      GridFormingControl control, AveragedVscInitialState initial, String[] v, String[] i, double busAngle0, double omega) {
+                      GridFormingControl control, AveragedVscInitialState initial, String[] v, String[] i, double busAngle0, double omega,
+                      boolean blockable, boolean deblocked) {
         String id = EmtpVoltageSourceConverters.sanitize(converter.getId());
         double tau = control.getMeasurement().timeConstant();
         VirtualAdmittance admittance = control.getVirtualAdmittance();
@@ -90,8 +98,10 @@ final class EmtpGridFormingControls {
         double ibpk = initial.peakPhaseCurrentBase();
         devices.add(park(vd, vd, v, theta, "COS", vbpk, initial.terminalVoltage() * cos, false));
         devices.add(park(vq, vq, v, theta, "SIN", vbpk, -initial.terminalVoltage() * sin, true));
-        devices.add(park(idPu, idPu, i, theta, "COS", -ibpk, id0, false));
-        devices.add(park(iqPu, iqPu, i, theta, "SIN", -ibpk, iq0, true));
+        String[] read = blockable ? new String[] {id + "_IMa", id + "_IMb", id + "_IMc"} : i;
+        double currentBase = blockable ? ibpk : -ibpk;
+        devices.add(park(idPu, idPu, read, theta, "COS", currentBase, id0, false));
+        devices.add(park(iqPu, iqPu, read, theta, "SIN", currentBase, iq0, true));
         String p = measurement(devices, id + "_P", List.of(vd, vq, idPu, iqPu), "u[1]*u[3]+u[2]*u[4]", tau, initial.activePower());
         String q = measurement(devices, id + "_Q", List.of(vd, vq, idPu, iqPu), "u[2]*u[3]-u[1]*u[4]", tau, initial.reactivePower());
         String vac = measurement(devices, id + "_VAC", List.of(vd, vq), "SQRT(u[1]*u[1]+u[2]*u[2])", tau, initial.terminalVoltage());
@@ -142,22 +152,38 @@ final class EmtpGridFormingControls {
         }
         String swing = "(u[1]-(" + reference + ")-(" + number(vsm.dampingCoefficient()) + ")*(u[2]-1)" + damper + ")/" + number(2.0 * vsm.inertiaConstant());
         String acceleration = id + "_GA";
+        String running = id + "_GAU";
         if (limit != null) {
             // REGFM_B1: the speed deviation a limited integrator's, within +/- dw_max.
             devices.add(function(id + "_GAR", id + "_GAR", swingInputs, 0.0, swing));
-            devices.add(function(acceleration, acceleration, List.of(id + "_GAR", speed), 0.0,
+            devices.add(function(running, running, List.of(id + "_GAR", speed), 0.0,
                     "u[1]*" + windupGate("(u[2]-1)", number(limit.maxSpeedDeviation()), "u[1]")));
         } else {
-            devices.add(function(acceleration, acceleration, swingInputs, 0.0, swing));
+            devices.add(function(running, running, swingInputs, 0.0, swing));
         }
+        // Pre-synchronised while blocked: its speed drawn to the limit's PLL's within its proportional gain, or the resynchronization PLL's
+        // integral of the bus's q-axis voltage.
+        SrfPll resynchronization = deblocked && limit == null ? control.getResynchronizationPll().orElse(null) : null;
+        Track speedTrack = null;
+        if (deblocked && limit != null) {
+            speedTrack = new Track(List.of(speed, id + "_GLW"), "(" + number(limit.pll().proportionalGain()) + ")*(1+u[2]/" + number(omega) + "-u[1])");
+        } else if (resynchronization != null) {
+            speedTrack = new Track(List.of(vq), "(" + number(resynchronization.integralGain() / omega) + ")*u[1]");
+        }
+        resynchronized(devices, id, acceleration, running, blockable, speedTrack);
         devices.add(integrator(speed, speed, acceleration, 1.0, 1.0));
+        devices.set(devices.size() - 1, EmtpVoltageSourceConverters.scoped(devices.get(devices.size() - 1)));
 
         // The angle: the machine's own, or the PLL's plus delta_IT with a steady-state current limit.
         String deviation = id + "_GTD";
-        if (limit == null) {
+        if (limit == null && resynchronization != null) {
+            // Its angle drawn by the resynchronization PLL's proportional term while blocked.
+            devices.add(function(deviation, deviation, List.of(speed, vq, id + "_RUN"), 0.0, "(" + number(omega) + ")*(u[1]-1)+(1-u[3])*("
+                    + number(resynchronization.proportionalGain()) + ")*u[2]"));
+        } else if (limit == null) {
             devices.add(function(deviation, deviation, List.of(speed), 0.0, "(" + number(omega) + ")*(u[1]-1)"));
         } else {
-            steadyStateCurrentLimit(devices, id, limit, xv, initial, omega, speed, vd, vq, idPu, iqPu, vac, delta, tau);
+            steadyStateCurrentLimit(devices, id, limit, xv, initial, omega, speed, vd, vq, idPu, iqPu, vac, delta, tau, blockable, deblocked);
         }
         devices.add(integrator(id + "_GTI", id + "_GTI", deviation, 1.0, 0.0));
         devices.add(function(theta, theta, List.of(id + "_GTI"), angle0, "(" + number(angle0) + ")+(" + number(omega) + ")*t+u[1]"));
@@ -182,7 +208,7 @@ final class EmtpGridFormingControls {
      */
     private static void steadyStateCurrentLimit(List<EmtpSynchronousMachines.Device> devices, String id, SteadyStateCurrentLimit limit, double xv,
                                                 AveragedVscInitialState initial, double omega, String speed, String vd, String vq, String idPu, String iqPu,
-                                                String vac, double delta, double tau) {
+                                                String vac, double delta, double tau, boolean blockable, boolean deblocked) {
         String internal = id + "_GLDY";
         String pllQ = id + "_GLQ";
         devices.add(function(pllQ, pllQ, List.of(vd, vq, internal), 0.0, "u[1]*SIN(u[3])+u[2]*COS(u[3])"));
@@ -214,8 +240,41 @@ final class EmtpGridFormingControls {
         String upper = limitedIntegrator(devices, id + "_GLH", List.of(current), "(" + gain + ")*(" + number(maxActive) + "-u[1])", "0", number(maxAngle), maxAngle);
         String lower = limitedIntegrator(devices, id + "_GLN", List.of(current), "(" + gain + ")*(" + number(-maxActive) + "-u[1])", number(-maxAngle), "0",
                 -maxAngle);
-        limitedIntegrator(devices, id + "_GLD", List.of(speed, pllDeviation, lower, upper), "(" + number(omega) + ")*(u[1]-1)-u[2]", "u[3]", "u[4]", delta);
+        // Held while blocked - or, deblocked, drawn to 0 within the PLL's proportional gain: the EMF on the PLL's angle, the bus's.
+        String rate = "(" + number(omega) + ")*(u[1]-1)-u[2]";
+        if (deblocked) {
+            rate = "u[3]*(" + rate + ")-(1-u[3])*(" + number(limit.pll().proportionalGain()) + ")*u[4]";
+        } else if (blockable) {
+            rate = "u[3]*(" + rate + ")";
+        }
+        List<String> rateInputs = blockable ? List.of(speed, pllDeviation, id + "_RUN", internal) : List.of(speed, pllDeviation);
+        devices.add(function(id + "_GLDR", id + "_GLDR", rateInputs, 0.0, rate));
+        limitedIntegrator(devices, id + "_GLD", List.of(id + "_GLDR", lower, upper), "u[1]", "u[2]", "u[3]", delta);
+        int output = devices.size() - 3;
+        devices.set(output, EmtpVoltageSourceConverters.scoped(devices.get(output)));
         devices.add(function(id + "_GTD", id + "_GTD", List.of(pllDeviation, id + "_GLDE"), 0.0, "u[1]+u[2]"));
+    }
+
+    /** A blocked converter's pre-synchronising rate: an expression of {@code inputs}' {@code u[k]}. */
+    private record Track(List<String> inputs, String rate) {
+    }
+
+    /**
+     * The integrand {@code name}: {@code running} while the converter runs; held while it is blocked, if {@code blockable} - or, with a
+     * {@code track}, that rate then, which pre-synchronises it on the bus so that it restarts in step with it, as ATP's.
+     */
+    private static void resynchronized(List<EmtpSynchronousMachines.Device> devices, String id, String name, String running, boolean blockable, Track track) {
+        if (!blockable) {
+            devices.add(function(name, name, List.of(running), 0.0, "u[1]"));
+            return;
+        }
+        if (track == null) {
+            devices.add(function(name, name, List.of(running, id + "_RUN"), 0.0, "u[1]*u[2]"));
+            return;
+        }
+        String blocked = name + "B";
+        devices.add(function(blocked, blocked, track.inputs(), 0.0, track.rate()));
+        devices.add(function(name, name, List.of(running, blocked, id + "_RUN"), 0.0, "u[3]*u[1]+(1-u[3])*u[2]"));
     }
 
     /**
