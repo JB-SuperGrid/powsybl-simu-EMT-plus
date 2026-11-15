@@ -328,15 +328,20 @@ final class EmtpVoltageSourceConverters {
         if (operations.get(operations.size() - 1).action() == BreakerAction.CLOSE) {
             devices.add(mainBranchSwitch(id, ++interval, inner, node2, closedFrom, "1E15"));
         }
-        ZnOArrester arrester = model.getArrester();
-        List<String> lines = new ArrayList<>(List.of("_ZnO;" + id + "_ZNO;2;2;" + side + "," + node2 + ",",
+        devices.add(zno(id + "_ZNO", List.of(side, node2), model.getArrester()));
+    }
+
+    /** An EMTP ZnO column {@code name} on {@code nodes} - one: to earth -, {@code arrester}'s curve, its current recorded; its first segment
+     * from {@link #ZNO_FIRST_SEGMENT_PU} at the least (EMTP joins it to the origin linearly, at currents nothing reads). */
+    static EmtpSynchronousMachines.Device zno(String name, List<String> nodes, ZnOArrester arrester) {
+        List<String> lines = new ArrayList<>(List.of("_ZnO;" + name + ";" + nodes.size() + ";" + nodes.size() + ";" + String.join(",", nodes) + ",",
                 number(arrester.referenceVoltage()) + ",,,1e-06,15,5,1,?i,"));
         for (int k = 0; k < arrester.segments().size(); k++) {
             ZnOSegment segment = arrester.segments().get(k);
             double minimum = k == 0 ? Math.max(segment.minVoltage(), ZNO_FIRST_SEGMENT_PU) : segment.minVoltage();
             lines.add(number(segment.coefficient()) + " " + number(segment.exponent()) + " " + number(minimum));
         }
-        devices.add(new EmtpSynchronousMachines.Device("_ZnO", lines));
+        return new EmtpSynchronousMachines.Device("_ZnO", lines);
     }
 
     /** A hybrid breaker's main branch's switch for its {@code interval}-th closed interval, {@code <id>} then {@code <id>_<interval>}, its

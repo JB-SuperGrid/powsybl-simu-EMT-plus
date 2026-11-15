@@ -36,10 +36,10 @@ import static org.assertj.core.api.Assertions.within;
  * holds that the writer does not write yet, said by name - nothing left out silently. The examples it writes are pinned, so that what
  * the writer gains or loses shows; and - tagged {@code emtp} - each is run live, every bus on the load flow.
  *
- * <p>2026-11-15, upstream's {@code 6346a20c}: 67 of its 132 examples written - since the shunts, the grounds, the open ends, the SVC, the battery, the WT4B - CIGRE DCS2 with it -, the switches
- * the infinite buses on a load and the Bergeron lines. Its
+ * <p>2026-11-15, upstream's {@code 6346a20c}: 71 of its 132 examples written - since the shunts, the grounds, the open ends, the SVC, the battery, the WT4B - CIGRE DCS2 with it -, the switches
+ * the infinite buses on a load, the Bergeron lines and the ZnO arresters. Its
  * refusals, the most frequent first: power electronics (VSCs, MMCs, their DC sides), load models
- * (induction motors, constant power), zero-sequence data of lumped lines, arresters, excitation limiters,
+ * (induction motors, constant power), zero-sequence data of lumped lines, excitation limiters,
  * governors but TGOV1, PSS2A.
  *
  * @author Jean-Baptiste Heyberger : jean-baptiste.heyberger@supergrid-institute.com
@@ -66,6 +66,10 @@ class EmtpExampleCoverageTest {
             "createTwoBusNetworkWithModalBergeronLine",
             "createModalBergeronLineBench(false)",
             "createModalBergeronLineBench(true)",
+            "createTwoBusNetworkWithZnOArrester",
+            "createTwoBusNetworkWithClampingZnOArrester",
+            "createThreeBusNetworkWithTransformerAndZnOArresters",
+            "createTwoBusNetworkWithArresterAtTheFarEndOfALineOutOfService",
             "createTwoBusNetworkWithParallelLines",
             "createTwoBusNetworkWithSt1A",
             "createTwoBusNetworkWithSt4B",
@@ -143,8 +147,8 @@ class EmtpExampleCoverageTest {
         System.out.printf(Locale.ROOT, "%d of %d examples written%n", written.size(), ExampleCatalogue.examples().size());
         softly.assertThat(written).as("the examples written").containsExactlyInAnyOrderElementsOf(WRITTEN);
         softly.assertAll();
-        assertThatThrownBy(() -> EmtpNetlistWriter.write(ready(example("createThreeBusNetworkWithTransformerAndZnOArresters")), tempDir.resolve("arresters"),
-                SETTINGS)).hasMessageContaining("ZnOArresterModel, which is not written yet");
+        assertThatThrownBy(() -> EmtpNetlistWriter.write(ready(example("createTwoBusNetworkWithInductionMotor")), tempDir.resolve("motor"),
+                SETTINGS)).hasMessageContaining("has a load model, InductionMotorModel");
     }
 
     static List<String> written() {
@@ -159,6 +163,8 @@ class EmtpExampleCoverageTest {
     /** The one example off its load flow by construction: its {@code Ground} earths B2 solidly, phase by phase, as ATP's deck does, where
      * the load flow knows nothing of it - B2 held at earth instead, within 1% of its voltage. */
     private static final String GROUNDED = "createTwoBusNetworkWithGround";
+    /** An arrester undersized on purpose, clamping B2 below its load flow: held to its curve by {@link EmtpZnOArresterTest} instead. */
+    private static final String CLAMPING = "createTwoBusNetworkWithClampingZnOArrester";
 
     /**
      * Each example written, run live: every bus within 1e-4 pu and 0.01 degree of the load flow, displaced by its vector group, in EMTP's
@@ -197,6 +203,9 @@ class EmtpExampleCoverageTest {
             String nodeBus = nodes.representativeId(bus.getId());
             EmtpSteadyState.Phasor phasor = steadyState.voltage(EmtpNetlistWriter.node(nodeBus, 'a')).orElseThrow();
             var fundamental = output.fundamentalPhasor(EmtpNetlistWriter.voltageScope(nodeBus, 'A'), FREQUENCY, last[0], last[1]);
+            if (CLAMPING.equals(name)) {
+                continue;
+            }
             if (GROUNDED.equals(name)) {
                 if ("B2".equals(bus.getId())) {
                     System.out.printf(Locale.ROOT, "%s: B2 at %.2e of its voltage, %.2e the last period%n", name, phasor.magnitude() / crest,
