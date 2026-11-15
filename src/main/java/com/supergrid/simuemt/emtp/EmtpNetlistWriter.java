@@ -31,6 +31,7 @@ import com.powsybl.simuemt.extensions.circuit.TransformerWindings;
 import com.powsybl.simuemt.extensions.circuit.VectorGroupOffsets;
 import com.powsybl.simuemt.extensions.circuit.ZeroSequenceFluxPath;
 import com.powsybl.simuemt.extensions.event.BusFault;
+import com.powsybl.simuemt.extensions.event.ConverterBlocking;
 import com.powsybl.simuemt.extensions.event.DcFault;
 import com.powsybl.simuemt.extensions.event.DcSwitchOperation;
 import com.powsybl.simuemt.extensions.event.EmtEvent;
@@ -126,6 +127,10 @@ public final class EmtpNetlistWriter {
             if (event instanceof DcFault || event instanceof DcSwitchOperation) {
                 continue;
             }
+            if (event instanceof ConverterBlocking blocking) {
+                refused.addAll(EmtpVoltageSourceConverters.unsupportedBlockingReasons(network, blocking, events));
+                continue;
+            }
             if (!(event instanceof BusFault fault)) {
                 refused.add("event " + event.getClass().getSimpleName() + " is of a kind not written yet");
             } else if (network.getBusBreakerView().getBus(fault.busId()) == null) {
@@ -189,8 +194,10 @@ public final class EmtpNetlistWriter {
         }
         for (com.powsybl.iidm.network.VoltageSourceConverter converter : network.getVoltageSourceConverters()) {
             Bus bus = converter.getTerminal1().getBusBreakerView().getBus();
+            double blocking = events.stream().filter(e -> e instanceof ConverterBlocking b && b.converterId().equals(converter.getId()))
+                    .mapToDouble(e -> ((ConverterBlocking) e).timeSeconds()).findFirst().orElse(Double.NaN);
             for (EmtpSynchronousMachines.Device device : EmtpVoltageSourceConverters.converter(converter, phaseNodes(bus.getId()),
-                    VectorGroupOffsets.of(network).degrees(bus), settings)) {
+                    VectorGroupOffsets.of(network).degrees(bus), settings, blocking)) {
                 devices.addBlock(device.part(), device.lines());
             }
         }

@@ -14,6 +14,7 @@ import com.powsybl.simuemt.extensions.arrester.ZnOArrester;
 import com.powsybl.simuemt.extensions.arrester.ZnOSegment;
 import com.powsybl.simuemt.extensions.circuit.NumericalAids;
 import com.powsybl.simuemt.extensions.event.BreakerAction;
+import com.powsybl.simuemt.extensions.event.ConverterBlocking;
 import com.powsybl.simuemt.extensions.event.DcFault;
 import com.powsybl.simuemt.extensions.event.DcSwitchOperation;
 import com.powsybl.simuemt.extensions.event.EmtEvent;
@@ -104,6 +105,8 @@ import static com.supergrid.simuemt.emtp.EmtpSynchronousMachines.function;
  *
  * <p>A {@link GridFormingControl}: {@link EmtpGridFormingControls}'s angle and EMF, the EMFs and the DC current as here.
  *
+ * <p>A {@link ConverterBlocking} of a two-level grid-following converter, for good: {@link #blocking}.
+ *
  * <p>Refused, until written: a PLL but the SRF and DDSRF ones, a protection, a chopper but the averaged one, a
  * chopper at an MMC's DC terminal; what {@link EmtpGridFormingControls} refuses.
  *
@@ -163,6 +166,21 @@ final class EmtpVoltageSourceConverters {
         List<String> reasons = new ArrayList<>();
         network.getDcLineStream().filter(line -> line.getExtension(DcLineModel.class) != null && !(line.getExtension(DcLineModel.class) instanceof LumpedDcLineModel))
                 .forEach(line -> reasons.add("DC line '" + line.getId() + "''s model but the lumped one is not written yet"));
+        return reasons;
+    }
+
+    /** Why {@code blocking} cannot be written yet - empty if it can: a two-level grid-following converter blocked once, for good. */
+    static List<String> unsupportedBlockingReasons(Network network, ConverterBlocking blocking, List<? extends EmtEvent> events) {
+        List<String> reasons = new ArrayList<>();
+        VoltageSourceConverter converter = network.getVoltageSourceConverter(blocking.converterId());
+        if (converter == null) {
+            reasons.add("converter '" + blocking.converterId() + "' is blocked, which the network has not");
+        } else if (!(converter.getExtension(VoltageSourceConverterModel.class) instanceof AveragedVscModel)
+                || converter.getExtension(VscControlModel.class) instanceof GridFormingControl) {
+            reasons.add("converter '" + converter.getId() + "' is blocked but as a two-level grid-following one, which is not written yet");
+        } else if (events.stream().filter(e -> e instanceof ConverterBlocking b && b.converterId().equals(converter.getId())).count() > 1) {
+            reasons.add("converter '" + converter.getId() + "' is blocked more than once");
+        }
         return reasons;
     }
 
@@ -303,6 +321,12 @@ final class EmtpVoltageSourceConverters {
      * angle displaced by {@code offsetDegrees}, its bus's vector group's. */
     static List<EmtpSynchronousMachines.Device> converter(VoltageSourceConverter converter, String[] phaseNodes, double offsetDegrees,
                                                           EmtpSimulationSettings settings) {
+        return converter(converter, phaseNodes, offsetDegrees, settings, Double.NaN);
+    }
+
+    /** The same, {@code converter} blocked at {@code blockingSeconds} - {@code NaN} for never ({@link #blocking}). */
+    static List<EmtpSynchronousMachines.Device> converter(VoltageSourceConverter converter, String[] phaseNodes, double offsetDegrees,
+                                                          EmtpSimulationSettings settings, double blockingSeconds) {
         AveragedConverterModel model = (AveragedConverterModel) converter.getExtension(VoltageSourceConverterModel.class);
         AveragedVscInitialState initial = AveragedVscInitialState.of(converter, model);
         double omega = 2.0 * Math.PI * settings.nominalFrequencyHz();
@@ -320,6 +344,9 @@ final class EmtpVoltageSourceConverters {
         String[] v = new String[3];
         String[] i = new String[3];
         powerStage(devices, converter, model, initial, phaseNodes, v, i, emfMagnitude, emfAngle, omega, settings);
+        if (!Double.isNaN(blockingSeconds)) {
+            blocking(devices, converter, model, initial, blockingSeconds, settings);
+        }
         String vPole = id + "_VDP";
         String vReturn = id + "_VDR";
         String cos2 = id + "_C2";
@@ -346,8 +373,12 @@ final class EmtpVoltageSourceConverters {
         devices.add(park(id + "_VD", vd, v, theta, "COS", vbpk, initial.terminalVoltage(), false));
         devices.add(park(id + "_VQ", vq, v, theta, "SIN", vbpk, 0.0, true));
         // The source's current is counted from its star point to its EMF, out of the converter: negated, the current from the bus into it.
-        devices.add(park(id + "_ID", idPu, i, theta, "COS", -ibpk, initial.directCurrent(), false));
-        devices.add(park(id + "_IQ", iqPu, i, theta, "SIN", -ibpk, initial.quadratureCurrent(), true));
+        // Blocked, its currents read on its meter, from the bus into it; otherwise on its sources, counted out of it.
+        boolean metered = !Double.isNaN(blockingSeconds);
+        String[] read = metered ? new String[] {id + "_IMa", id + "_IMb", id + "_IMc"} : i;
+        double currentBase = metered ? ibpk : -ibpk;
+        devices.add(park(id + "_ID", idPu, read, theta, "COS", currentBase, initial.directCurrent(), false));
+        devices.add(park(id + "_IQ", iqPu, read, theta, "SIN", currentBase, initial.quadratureCurrent(), true));
         // The PLL - on the positive sequence's decoupled q-axis voltage alone, a DDSRF's (named ahead: EMTP's devices are in no order).
         pll(devices, id, control, control.getSynchronization() instanceof DdsrfPll ? id + "_BE2" : vq, theta, angle0, omega);
 
@@ -359,7 +390,7 @@ final class EmtpVoltageSourceConverters {
             devices.add(function(cos2, cos2, List.of(theta), Math.cos(2.0 * angle0), "COS(2*u[1])"));
             devices.add(function(sin2, sin2, List.of(theta), Math.sin(2.0 * angle0), "SIN(2*u[1])"));
             voltage = ddsrf(devices, ddsrf, id + "_B", vd, vq, v, theta, vbpk, cos2, sin2, initial.terminalVoltage(), 0.0);
-            current = ddsrf(devices, ddsrf, id + "_Z", idPu, iqPu, i, theta, -ibpk, cos2, sin2, initial.directCurrent(), initial.quadratureCurrent());
+            current = ddsrf(devices, ddsrf, id + "_Z", idPu, iqPu, read, theta, currentBase, cos2, sin2, initial.directCurrent(), initial.quadratureCurrent());
         }
         String pd = voltage.positiveD();
         String pq = voltage.positiveQ();
@@ -482,6 +513,9 @@ final class EmtpVoltageSourceConverters {
             negativeSequenceLoop(devices, id, control, x, voltage, current, negativeReference);
         }
         emfsAndDcCurrent(devices, converter, initial, dualSequence, current, cos2, sin2, emfMagnitude, emfAngle, omega, settings);
+        if (!Double.isNaN(blockingSeconds)) {
+            freeze(devices, id, List.of("_IDI", "_IQI", "_PREF", "_UDI", "_UQI", "_UDNI", "_UQNI"));
+        }
         return devices;
     }
 
@@ -503,18 +537,32 @@ final class EmtpVoltageSourceConverters {
         String dcCurrent = id + "_IDC";
         double vbpk = initial.peakPhaseVoltageBase();
         double dcBaseVolts = initial.dcNominalVoltage() * 1.0e3;
+        boolean blockable = devices.stream().anyMatch(d -> d.lines().get(0).startsWith("_c_fu;" + id + "_RUN;"));
         // The EMFs a step ahead of the angle the PLL tracks: EMTP's network takes a control signal a step after the control computes it,
         // as ATP's does - its EMFs rebuilt a step ahead too.
         String ahead = "+" + number(omega * settings.timeStepSeconds());
         // The negative sequence's frame turns the other way: phase b's angle the positive frame's phase c's, and c's b's.
         String third = number(2.0 * Math.PI / 3.0);
-        List<String> emfInputs = dualSequence ? List.of(ed, eq, theta, edNegative, eqNegative) : List.of(ed, eq, theta);
+        List<String> emfInputs = new ArrayList<>(dualSequence ? List.of(ed, eq, theta, edNegative, eqNegative) : List.of(ed, eq, theta));
+        // A blockable converter's EMFs, on earth, centred on its DC midpoint - from earth over NumericalAids.MIDPOINT_RAMP_SECONDS -, as a
+        // two-level converter's AC side is: its diode bridge idle while the DC voltage holds above the AC side's crest (ATP's).
+        String centre = "";
+        String alternating = "";
+        if (blockable) {
+            emfInputs.add(vPole);
+            emfInputs.add(vReturn);
+            emfInputs.add(id + "_RUN");
+            int k = emfInputs.size() - 1;
+            alternating = "*u[" + (k + 1) + "]";
+            centre = "+0.5*(1+(t/" + number(NumericalAids.MIDPOINT_RAMP_SECONDS) + ")-ABS(1-(t/" + number(NumericalAids.MIDPOINT_RAMP_SECONDS) + ")))*0.5*(u["
+                    + (k - 1) + "]+u[" + k + "])";
+        }
         for (int k = 0; k < 3; k++) {
             String shift = ahead + (k == 0 ? "" : k == 1 ? "-" + third : "+" + third);
             String negative = ahead + (k == 0 ? "" : k == 1 ? "+" + third : "-" + third);
             devices.add(function(id + "_EMF" + "abc".charAt(k), id + "_EMF" + "abc".charAt(k), emfInputs, emfMagnitude * Math.cos(emfAngle - 2.0 * Math.PI / 3.0 * (k == 2 ? -1 : k)),
                     "(" + number(vbpk) + ")*(u[1]*COS(u[3]" + shift + ")-u[2]*SIN(u[3]" + shift + ")"
-                            + (dualSequence ? "+u[4]*COS(u[3]" + negative + ")+u[5]*SIN(u[3]" + negative + ")" : "") + ")"));
+                            + (dualSequence ? "+u[4]*COS(u[3]" + negative + ")+u[5]*SIN(u[3]" + negative + ")" : "") + ")" + alternating + centre));
         }
 
         // The DC current: the EMFs' power over the DC voltage, less the chopper's. With a sequence each, the power of E = E+ e^j theta +
@@ -523,17 +571,110 @@ final class EmtpVoltageSourceConverters {
         String emfPower = emfPower(devices, id, initial, dualSequence, current, cos2, sin2);
         String chopper = "";
         List<String> dcInputs = new ArrayList<>(List.of(emfPower, vPole, vReturn));
+        String running = "";
+        if (blockable) {
+            dcInputs.add(id + "_RUN");
+            running = "*u[4]";
+        }
         if (converter.getExtension(DcChopperModel.class) instanceof AveragedDcChopperModel averaged) {
             double span = averaged.getFullConductionVoltage() - averaged.getActivationVoltage();
             String duty = id + "_DCH";
             devices.add(function(id + "_DCH", duty, List.of(vPole, vReturn), 0.0, clamp01("((u[1]-u[2])/" + number(dcBaseVolts) + "-" + number(averaged.getActivationVoltage())
                     + ")/" + number(span))));
             dcInputs.add(duty);
-            chopper = "-u[4]*(u[2]-u[3])/" + number(averaged.resistanceOhm(initial.dcNominalVoltage()));
+            chopper = "-u[" + dcInputs.size() + "]*(u[2]-u[3])/" + number(averaged.resistanceOhm(initial.dcNominalVoltage()));
         }
         String floor = number(DC_VOLTAGE_FLOOR_PU * dcBaseVolts);
         devices.add(function(id + "_IDCF", dcCurrent, dcInputs, initial.dcCurrent() * 1.0e3, "u[1]*" + number(initial.baseApparentPower() * 1.0e6)
-                + "/(0.5*((u[2]-u[3])+" + floor + "+ABS((u[2]-u[3])-" + floor + ")))" + chopper));
+                + "/(0.5*((u[2]-u[3])+" + floor + "+ABS((u[2]-u[3])-" + floor + ")))" + running + chopper));
+    }
+
+    /**
+     * {@code converter} blocked at {@code blockingSeconds}, as upstream's backends block it: its EMFs cut from their reactors by a switch
+     * opened at the order whatever its current - the valves' switches off, the reactors' current taken over by their diodes -; its valves
+     * left to a diode bridge, each diode through {@link NumericalAids#FAULT_ON_RESISTANCE_OHM} from each phase's EMF side of the reactor
+     * towards the DC node the load flow has higher and from the other back, behind a switch closed at the order - ATP's gate -, its snubber
+     * and grading resistor switched across it then; its EMFs on earth, centred on its DC midpoint; its currents read on a meter between its
+     * bus and its reactors - a controlled source held at 0 V, its current observed -, the bridge's with them once blocked, as PSCAD's and
+     * ATP's. The running flag {@code <id>_RUN}, 1 then 0 from the order: its EMFs' alternating part, its DC current and its controls'
+     * integrals - but the PLL's - stopped with it. (Cut at its currents' zeros instead, the EMFs gone at the order, the bus was shorted
+     * through the reactors for half a period: VSC1's power 0.9 pu off PSCAD's; 2026-11-15.)
+     */
+    private static void blocking(List<EmtpSynchronousMachines.Device> devices, VoltageSourceConverter converter, AveragedConverterModel model,
+                                 AveragedVscInitialState initial, double blockingSeconds, EmtpSimulationSettings settings) {
+        String id = sanitize(converter.getId());
+        double order = NumericalAids.switchingInstant(blockingSeconds, settings.timeStepSeconds());
+        devices.add(function(id + "_RUN", id + "_RUN", List.of(id + "_ZERO"), 1.0, step("(" + number(order) + ")-t") + "+0*u[1]"));
+        String pole = dcNode(converter.getDcTerminal1().getDcNode());
+        String ret = dcNode(converter.getDcTerminal2().getDcNode());
+        boolean poleHigher = converter.getDcTerminal1().getDcNode().getV() >= converter.getDcTerminal2().getDcNode().getV();
+        String high = poleHigher ? pole : ret;
+        String low = poleHigher ? ret : pole;
+        String atOrder = number(order) + ",1E15,0,0,0,,1,.1,.001,5,";
+        String[] meterBus = new String[3];
+        for (char phase : "abc".toCharArray()) {
+            String emfSide = id + "_K" + phase;
+            String valveSide = id + "_W" + phase;
+            for (int k = 0; k < devices.size(); k++) {
+                List<String> lines = devices.get(k).lines();
+                // The reactor from the valve side, with the cutting switch's resistance; the EMF on earth.
+                if (lines.get(0).equals("_RLC;" + id + "_R" + phase + ";2;2;" + emfSide + "," + id + "_J" + phase + ",")) {
+                    devices.set(k, element("_RLC", id + "_R" + phase, List.of(valveSide, id + "_J" + phase), number(initial.phaseReactorResistanceOhm(model)
+                            + NumericalAids.FAULT_ON_RESISTANCE_OHM) + ",0,0,0,0,"));
+                } else if (lines.get(0).startsWith("_RLC;" + id + "_L" + phase + ";") || lines.get(0).startsWith("_RLC;" + id + "_LD" + phase + ";")) {
+                    // The reactor's bus end on its meter's node.
+                    String header = lines.get(0);
+                    String busNode = header.substring(header.lastIndexOf(',', header.length() - 2) + 1, header.length() - 1);
+                    devices.set(k, new EmtpSynchronousMachines.Device("_RLC", List.of(header.substring(0, header.length() - busNode.length() - 1) + id + "_X" + phase
+                            + ",", lines.get(1))));
+                    meterBus[phase - 'a'] = busNode;
+                } else if (lines.get(0).startsWith("_cV;" + id + "_CV" + phase + ";")) {
+                    devices.set(k, new EmtpSynchronousMachines.Device("_cV", List.of(lines.get(0).replace("," + id + "_N,", ",,"), lines.get(1))));
+                }
+            }
+            devices.add(element("_Sw0", id + "_CUT" + phase, List.of(emfSide, valveSide), "-1," + number(order) + "," + number(ANY_CURRENT_AMPERES) + ",0,0,,1,.1,.001,5,"));
+            // The meter: a controlled source held at 0 V, its current - from the bus into the converter, through the bridge too once blocked -
+            // observed, what the controls read (PSCAD's and ATP's meter).
+            devices.add(element("_cV", id + "_MET" + phase, List.of(id + "_X" + phase, meterBus[phase - 'a'], id + "_ZERO", id + "_MV" + phase, id + "_IM" + phase,
+                    id + "_MP" + phase), "-1,1E15,0,?v,?i,?p,>v,>i,>p,"));
+            // Each diode through its resistance, behind its gate's switch; its snubber and grading resistor across it from the order.
+            for (boolean upper : new boolean[] {true, false}) {
+                String tag = (upper ? "H" : "L") + phase;
+                String rail = upper ? high : low;
+                String gate = id + "_G" + tag;
+                String diodeEnd = id + "_D" + tag;
+                devices.add(element("_Sw0", id + "_SG" + tag, List.of(valveSide, gate), atOrder));
+                // Between an open switch and a diode off, the gate's node is held by 1 Gohm to earth, as a bus is.
+                devices.add(element("_RLC", id + "_GR" + tag, List.of(gate), number(NumericalAids.BUS_EARTH_REFERENCE_OHM) + ",0,0,0,0,"));
+                devices.add(element("_D0", id + "_V" + tag, upper ? List.of(gate, diodeEnd) : List.of(diodeEnd, gate), "0.001,0,0,"));
+                devices.add(element("_RLC", id + "_VR" + tag, List.of(diodeEnd, rail), number(NumericalAids.FAULT_ON_RESISTANCE_OHM) + ",0,0,0,0,"));
+                String snubber = id + "_S" + tag;
+                devices.add(element("_Sw0", id + "_SS" + tag, List.of(valveSide, snubber), atOrder));
+                devices.add(element("_RLC", id + "_SR" + tag, List.of(snubber, rail), number(NumericalAids.VALVE_SNUBBER_OHM) + ",0,"
+                        + number(NumericalAids.VALVE_SNUBBER_F) + ",0,0,"));
+                devices.add(element("_RLC", id + "_SD" + tag, List.of(snubber, rail), number(NumericalAids.VALVE_GRADING_OHM) + ",0,0,0,0,"));
+            }
+        }
+    }
+
+    /** A blocked converter's integrals {@code <id><suffix>} held while it is blocked: each integrator's input times the running flag. */
+    private static void freeze(List<EmtpSynchronousMachines.Device> devices, String id, List<String> suffixes) {
+        List<EmtpSynchronousMachines.Device> gates = new ArrayList<>();
+        for (int k = 0; k < devices.size(); k++) {
+            EmtpSynchronousMachines.Device device = devices.get(k);
+            String header = device.lines().get(0);
+            for (String suffix : suffixes) {
+                String prefix = "_c_fs;" + id + suffix + ";2;2;" + id + suffix + ",";
+                if (header.startsWith(prefix)) {
+                    String input = header.substring(prefix.length(), header.length() - 1);
+                    List<String> lines = new ArrayList<>(device.lines());
+                    lines.set(0, prefix + input + "F,");
+                    devices.set(k, new EmtpSynchronousMachines.Device(device.part(), lines));
+                    gates.add(function(input + "F", input + "F", List.of(input, id + "_RUN"), 0.0, "u[1]*u[2]"));
+                }
+            }
+        }
+        devices.addAll(gates);
     }
 
     /** {@code converter}'s power stage: AC side, phase by phase, its EMF, its stand-in, its reactor and its bus's probe - {@code v} and {@code
