@@ -15,6 +15,7 @@ import com.powsybl.simuemt.extensions.arrester.ZnOSegment;
 import com.powsybl.simuemt.extensions.circuit.NumericalAids;
 import com.powsybl.simuemt.extensions.event.BreakerAction;
 import com.powsybl.simuemt.extensions.event.ConverterBlocking;
+import com.powsybl.simuemt.extensions.event.ConverterDeblocking;
 import com.powsybl.simuemt.extensions.event.DcFault;
 import com.powsybl.simuemt.extensions.event.DcSwitchOperation;
 import com.powsybl.simuemt.extensions.event.EmtEvent;
@@ -105,7 +106,8 @@ import static com.supergrid.simuemt.emtp.EmtpSynchronousMachines.function;
  *
  * <p>A {@link GridFormingControl}: {@link EmtpGridFormingControls}'s angle and EMF, the EMFs and the DC current as here.
  *
- * <p>A {@link ConverterBlocking} of a two-level grid-following converter, for good: {@link #blocking}.
+ * <p>A {@link ConverterBlocking} of a two-level grid-following converter, and its {@link ConverterDeblocking} once after: {@link
+ * #blocking}, its integrals held while it is blocked and restarted from 0 at the deblocking ({@link #freeze}).
  *
  * <p>Refused, until written: a PLL but the SRF and DDSRF ones, a protection, a chopper but the averaged one, a
  * chopper at an MMC's DC terminal; what {@link EmtpGridFormingControls} refuses.
@@ -169,7 +171,8 @@ final class EmtpVoltageSourceConverters {
         return reasons;
     }
 
-    /** Why {@code blocking} cannot be written yet - empty if it can: a two-level grid-following converter blocked once, for good. */
+    /** Why {@code blocking} cannot be written yet - empty if it can: a two-level grid-following converter blocked once, deblocked once
+     * after at most. */
     static List<String> unsupportedBlockingReasons(Network network, ConverterBlocking blocking, List<? extends EmtEvent> events) {
         List<String> reasons = new ArrayList<>();
         VoltageSourceConverter converter = network.getVoltageSourceConverter(blocking.converterId());
@@ -180,6 +183,10 @@ final class EmtpVoltageSourceConverters {
             reasons.add("converter '" + converter.getId() + "' is blocked but as a two-level grid-following one, which is not written yet");
         } else if (events.stream().filter(e -> e instanceof ConverterBlocking b && b.converterId().equals(converter.getId())).count() > 1) {
             reasons.add("converter '" + converter.getId() + "' is blocked more than once");
+        } else if (events.stream().filter(e -> e instanceof ConverterDeblocking d && d.converterId().equals(converter.getId())
+                && !(d.timeSeconds() > blocking.timeSeconds())).count() > 0
+                || events.stream().filter(e -> e instanceof ConverterDeblocking d && d.converterId().equals(converter.getId())).count() > 1) {
+            reasons.add("converter '" + converter.getId() + "' is deblocked but once after its blocking, which is not written yet");
         }
         return reasons;
     }
@@ -321,12 +328,13 @@ final class EmtpVoltageSourceConverters {
      * angle displaced by {@code offsetDegrees}, its bus's vector group's. */
     static List<EmtpSynchronousMachines.Device> converter(VoltageSourceConverter converter, String[] phaseNodes, double offsetDegrees,
                                                           EmtpSimulationSettings settings) {
-        return converter(converter, phaseNodes, offsetDegrees, settings, Double.NaN);
+        return converter(converter, phaseNodes, offsetDegrees, settings, Double.NaN, Double.NaN);
     }
 
-    /** The same, {@code converter} blocked at {@code blockingSeconds} - {@code NaN} for never ({@link #blocking}). */
+    /** The same, {@code converter} blocked at {@code blockingSeconds} and deblocked at {@code deblockingSeconds} - each {@code NaN} for
+     * never ({@link #blocking}). */
     static List<EmtpSynchronousMachines.Device> converter(VoltageSourceConverter converter, String[] phaseNodes, double offsetDegrees,
-                                                          EmtpSimulationSettings settings, double blockingSeconds) {
+                                                          EmtpSimulationSettings settings, double blockingSeconds, double deblockingSeconds) {
         AveragedConverterModel model = (AveragedConverterModel) converter.getExtension(VoltageSourceConverterModel.class);
         AveragedVscInitialState initial = AveragedVscInitialState.of(converter, model);
         double omega = 2.0 * Math.PI * settings.nominalFrequencyHz();
@@ -345,7 +353,7 @@ final class EmtpVoltageSourceConverters {
         String[] i = new String[3];
         powerStage(devices, converter, model, initial, phaseNodes, v, i, emfMagnitude, emfAngle, omega, settings);
         if (!Double.isNaN(blockingSeconds)) {
-            blocking(devices, converter, model, initial, blockingSeconds, settings);
+            blocking(devices, converter, model, initial, blockingSeconds, deblockingSeconds, settings);
         }
         String vPole = id + "_VDP";
         String vReturn = id + "_VDR";
@@ -514,7 +522,7 @@ final class EmtpVoltageSourceConverters {
         }
         emfsAndDcCurrent(devices, converter, initial, dualSequence, current, cos2, sin2, emfMagnitude, emfAngle, omega, settings);
         if (!Double.isNaN(blockingSeconds)) {
-            freeze(devices, id, List.of("_IDI", "_IQI", "_PREF", "_UDI", "_UQI", "_UDNI", "_UQNI"));
+            freeze(devices, id, List.of("_IDI", "_IQI", "_PREF", "_UDI", "_UQI", "_UDNI", "_UQNI"), !Double.isNaN(deblockingSeconds));
         }
         return devices;
     }
@@ -598,19 +606,30 @@ final class EmtpVoltageSourceConverters {
      * bus and its reactors - a controlled source held at 0 V, its current observed -, the bridge's with them once blocked, as PSCAD's and
      * ATP's. The running flag {@code <id>_RUN}, 1 then 0 from the order: its EMFs' alternating part, its DC current and its controls'
      * integrals - but the PLL's - stopped with it. (Cut at its currents' zeros instead, the EMFs gone at the order, the bus was shorted
-     * through the reactors for half a period: VSC1's power 0.9 pu off PSCAD's; 2026-11-15.)
+     * through the reactors for half a period: VSC1's power 0.9 pu off PSCAD's; 2026-11-15.) Deblocked at {@code deblockingSeconds}: the
+     * running flag back to 1 and the deblocked flag {@code <id>_DEB} up, the cut made again, the valves' switches opened whatever their
+     * current.
      */
     private static void blocking(List<EmtpSynchronousMachines.Device> devices, VoltageSourceConverter converter, AveragedConverterModel model,
-                                 AveragedVscInitialState initial, double blockingSeconds, EmtpSimulationSettings settings) {
+                                 AveragedVscInitialState initial, double blockingSeconds, double deblockingSeconds, EmtpSimulationSettings settings) {
         String id = sanitize(converter.getId());
         double order = NumericalAids.switchingInstant(blockingSeconds, settings.timeStepSeconds());
-        devices.add(function(id + "_RUN", id + "_RUN", List.of(id + "_ZERO"), 1.0, step("(" + number(order) + ")-t") + "+0*u[1]"));
+        // Deblocked, the flag {@code <id>_DEB}, 0 then 1 from the deblocking, and the running flag back to 1 with it.
+        boolean deblocked = !Double.isNaN(deblockingSeconds);
+        double release = deblocked ? NumericalAids.switchingInstant(deblockingSeconds, settings.timeStepSeconds()) : Double.NaN;
+        String deblockedFlag = deblocked ? "+" + step("t-(" + number(release) + ")") : "";
+        devices.add(function(id + "_RUN", id + "_RUN", List.of(id + "_ZERO"), 1.0, step("(" + number(order) + ")-t") + deblockedFlag + "+0*u[1]"));
+        if (deblocked) {
+            devices.add(function(id + "_DEB", id + "_DEB", List.of(id + "_ZERO"), 0.0, step("t-(" + number(release) + ")") + "+0*u[1]"));
+        }
         String pole = dcNode(converter.getDcTerminal1().getDcNode());
         String ret = dcNode(converter.getDcTerminal2().getDcNode());
         boolean poleHigher = converter.getDcTerminal1().getDcNode().getV() >= converter.getDcTerminal2().getDcNode().getV();
         String high = poleHigher ? pole : ret;
         String low = poleHigher ? ret : pole;
-        String atOrder = number(order) + ",1E15,0,0,0,,1,.1,.001,5,";
+        // The valves' switches closed at the order; opened at the deblocking whatever their current, as Xyce's and Kestrel's valves are
+        // behind switches their gate opens.
+        String atOrder = number(order) + "," + (deblocked ? number(release) + "," + number(ANY_CURRENT_AMPERES) : "1E15,0") + ",0,0,,1,.1,.001,5,";
         String[] meterBus = new String[3];
         for (char phase : "abc".toCharArray()) {
             String emfSide = id + "_K" + phase;
@@ -633,6 +652,10 @@ final class EmtpVoltageSourceConverters {
                 }
             }
             devices.add(element("_Sw0", id + "_CUT" + phase, List.of(emfSide, valveSide), "-1," + number(order) + "," + number(ANY_CURRENT_AMPERES) + ",0,0,,1,.1,.001,5,"));
+            if (deblocked) {
+                // The cut made again at the deblocking.
+                devices.add(element("_Sw0", id + "_MAKE" + phase, List.of(emfSide, valveSide), number(release) + ",1E15,0,0,0,,1,.1,.001,5,"));
+            }
             // The meter: a controlled source held at 0 V, its current - from the bus into the converter, through the bridge too once blocked -
             // observed, what the controls read (PSCAD's and ATP's meter).
             devices.add(element("_cV", id + "_MET" + phase, List.of(id + "_X" + phase, meterBus[phase - 'a'], id + "_ZERO", id + "_MV" + phase, id + "_IM" + phase,
@@ -657,8 +680,12 @@ final class EmtpVoltageSourceConverters {
         }
     }
 
-    /** A blocked converter's integrals {@code <id><suffix>} held while it is blocked: each integrator's input times the running flag. */
-    private static void freeze(List<EmtpSynchronousMachines.Device> devices, String id, List<String> suffixes) {
+    /**
+     * A blocked converter's integrals {@code <id><suffix>} held while it is blocked: each integrator's input times the running flag. Deblocked
+     * ({@code restarts}), each restarted from 0, as ATP's: the integral read {@code (1 - D) X + X'}, {@code X'} the integral from 0 of its
+     * input times {@code D}, the deblocked flag - the held integral renamed {@code <id><suffix>O}, the fresh one {@code <id><suffix>N}.
+     */
+    private static void freeze(List<EmtpSynchronousMachines.Device> devices, String id, List<String> suffixes, boolean restarts) {
         List<EmtpSynchronousMachines.Device> gates = new ArrayList<>();
         for (int k = 0; k < devices.size(); k++) {
             EmtpSynchronousMachines.Device device = devices.get(k);
@@ -667,10 +694,25 @@ final class EmtpVoltageSourceConverters {
                 String prefix = "_c_fs;" + id + suffix + ";2;2;" + id + suffix + ",";
                 if (header.startsWith(prefix)) {
                     String input = header.substring(prefix.length(), header.length() - 1);
+                    String integral = id + suffix;
                     List<String> lines = new ArrayList<>(device.lines());
-                    lines.set(0, prefix + input + "F,");
+                    if (!restarts) {
+                        lines.set(0, prefix + input + "F,");
+                        devices.set(k, new EmtpSynchronousMachines.Device(device.part(), lines));
+                        gates.add(function(input + "F", input + "F", List.of(input, id + "_RUN"), 0.0, "u[1]*u[2]"));
+                        continue;
+                    }
+                    lines.set(0, "_c_fs;" + integral + "O;2;2;" + integral + "O," + input + "F,");
                     devices.set(k, new EmtpSynchronousMachines.Device(device.part(), lines));
                     gates.add(function(input + "F", input + "F", List.of(input, id + "_RUN"), 0.0, "u[1]*u[2]"));
+                    List<String> fresh = new ArrayList<>(device.lines());
+                    String data = fresh.get(1);
+                    fresh.set(0, "_c_fs;" + integral + "N;2;2;" + integral + "N," + input + "D,");
+                    fresh.set(1, "0" + data.substring(data.indexOf(',')));
+                    gates.add(new EmtpSynchronousMachines.Device(device.part(), fresh));
+                    gates.add(function(input + "D", input + "D", List.of(input, id + "_DEB"), 0.0, "u[1]*u[2]"));
+                    double initialValue = Double.parseDouble(data.substring(0, data.indexOf(',')));
+                    gates.add(function(integral, integral, List.of(integral + "O", integral + "N", id + "_DEB"), initialValue, "(1-u[3])*u[1]+u[2]"));
                 }
             }
         }

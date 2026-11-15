@@ -7,6 +7,7 @@ package com.supergrid.simuemt.emtp;
 import com.powsybl.simuemt.extensions.circuit.NumericalAids;
 import com.powsybl.simuemt.extensions.event.BusFault;
 import com.powsybl.simuemt.extensions.event.ConverterBlocking;
+import com.powsybl.simuemt.extensions.event.ConverterDeblocking;
 import com.powsybl.simuemt.extensions.event.DcFault;
 import com.powsybl.simuemt.extensions.event.DcSwitchOperation;
 import com.powsybl.simuemt.extensions.event.EmtEvent;
@@ -157,6 +158,23 @@ class EmtpVscFaultAgainstPscadTest {
         }
         compare("vsc-three-terminal-all-droop", start -> List.of(new ConverterBlocking("VSC1", start)), channels, "vsc-blocking", 5.0e-3,
                 SETTLED_TOLERANCE, TRANSIENT_TOLERANCE, false);
+    }
+
+    /**
+     * The same, VSC1 deblocked 200 ms later: its EMFs made again onto its reactors, its valves' switches opened, its controls' integrals
+     * restarted from 0 - its current references from 0, its power back on its droop.
+     *
+     * <p>Run 2026-11-15, 44 s the two: VSC1's power from 2e-4 pu back to 0.40 within 50 ms in both; within 5.8e-3 pu of PSCAD's through
+     * the blocking and the deblocking (VSC1's power), the DC voltages 7e-4; settled within 1.8e-4.
+     */
+    @Test
+    void aDeblockedConverterRunsInEmtpAsInPscadProfessional() throws IOException {
+        List<Channel> channels = new ArrayList<>(converters("VSC1", "VSC2", "VSC3"));
+        for (String node : List.of("DC1P", "DC2P", "DC3P")) {
+            channels.add(new Channel(node, EmtpVoltageSourceConverters.dcVoltageScope(node), "V_" + node, 500.0e3));
+        }
+        compare("vsc-three-terminal-all-droop", start -> List.of(new ConverterBlocking("VSC1", start), new ConverterDeblocking("VSC1", start + 0.2)),
+                channels, "vsc-deblocking", 5.0e-3, SETTLED_TOLERANCE, TRANSIENT_TOLERANCE, false);
     }
 
     private static List<Channel> converters(String... ids) {
