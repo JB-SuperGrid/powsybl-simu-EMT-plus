@@ -27,6 +27,9 @@ import com.powsybl.iidm.network.extensions.TwoWindingsTransformerPhaseAngleClock
 import com.powsybl.iidm.network.extensions.WindingConnectionType;
 import com.powsybl.simuemt.extensions.GeneratorModel;
 import com.powsybl.simuemt.extensions.LoadModel;
+import com.powsybl.simuemt.extensions.arrester.ArresterPlacement;
+import com.powsybl.simuemt.extensions.arrester.SurgeArresters;
+import com.powsybl.simuemt.extensions.arrester.ZnOArresterModel;
 import com.powsybl.simuemt.extensions.circuit.ElectricalNodes;
 import com.powsybl.simuemt.extensions.circuit.LoadBranches;
 import com.powsybl.simuemt.extensions.circuit.ModalLineParameters;
@@ -108,7 +111,7 @@ import java.util.stream.Stream;
  *
  * <p>EMTP starts the run from its own steady-state solution, every source active from {@code -1} s. An element disconnected at every end
  * is out of service and not written. Anything else the network holds - another kind of generator or load, a line's shunt conductance,
- * a line model, zero-sequence data or an arrester on a line or a transformer, a generator on a bus the load flow left dead - or the run goes through is refused, said so,
+ * zero-sequence data on a lumped line, a generator on a bus the load flow left dead - or the run goes through is refused, said so,
  * until written.
  *
  * @author Jean-Baptiste Heyberger : jean-baptiste.heyberger@supergrid-institute.com
@@ -283,6 +286,16 @@ public final class EmtpNetlistWriter {
             for (EmtpSynchronousMachines.Device device : EmtpVoltageSourceConverters.converter(converter, phaseNodes(bus.getId()),
                     VectorGroupOffsets.of(network).degrees(bus), settings, blocking, deblocking)) {
                 devices.addBlock(device.part(), device.lines());
+            }
+        }
+        // Each surge arrester, per phase from its equipment's bus - an open end's own node - to earth; none on an equipment out of service,
+        // which is not written.
+        for (ArresterPlacement placement : SurgeArresters.placements(network).stream().filter(p -> inService(p.equipment())).toList()) {
+            String at = placement.busId() != null ? placement.busId() : openEnd(placement.equipment(), placement.side().getNum());
+            for (String phase : PHASES) {
+                EmtpSynchronousMachines.Device column = EmtpVoltageSourceConverters.zno(sanitize(placement.equipmentId()) + "_ZNO" + placement.side().getNum() + phase,
+                        List.of(node(at, phase.charAt(0))), placement.arrester());
+                devices.addBlock(column.part(), column.lines());
             }
         }
         int faultBranch = 0;
@@ -869,12 +882,13 @@ public final class EmtpNetlistWriter {
                 reasons.add("line '" + line.getId() + "' has a shunt conductance");
             }
         }
-        // What a line or a transformer carries beyond its circuit and its winding connections - a line model, zero-sequence data, an
-        // arrester - is not written yet: refused rather than left out.
+        // What a line or a transformer carries beyond its circuit, its winding connections, a Bergeron model and a ZnO arrester - a
+        // lumped line's zero-sequence data - is not written yet: refused rather than left out.
         Stream.of(network.getLineStream(), network.getTwoWindingsTransformerStream(), network.getThreeWindingsTransformerStream())
                 .flatMap(s -> s.map(c -> (Identifiable<?>) c))
                 .forEach(c -> c.getExtensions().stream()
-                        .filter(e -> !(e instanceof BergeronLineModel || e instanceof LineFortescue && c.getExtensions().stream().anyMatch(BergeronLineModel.class::isInstance)
+                        .filter(e -> !(e instanceof BergeronLineModel || e instanceof ZnOArresterModel<?>
+                                || e instanceof LineFortescue && c.getExtensions().stream().anyMatch(BergeronLineModel.class::isInstance)
                                 || e instanceof TwoWindingsTransformerFortescue || e instanceof ThreeWindingsTransformerFortescue
                                 || e instanceof TwoWindingsTransformerPhaseAngleClock || e instanceof ThreeWindingsTransformerPhaseAngleClock))
                         .forEach(e -> reasons.add("'" + c.getId() + "' has a " + e.getClass().getSimpleName().replace("Impl", "")
