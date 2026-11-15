@@ -5,6 +5,7 @@
 package com.supergrid.simuemt.emtp;
 
 import com.powsybl.commons.PowsyblException;
+import com.powsybl.iidm.network.Battery;
 import com.powsybl.iidm.network.Bus;
 import com.powsybl.iidm.network.Generator;
 import com.powsybl.iidm.network.Ground;
@@ -215,6 +216,15 @@ public final class EmtpNetlistWriter {
             if (inService(svc)) {
                 Bus bus = svc.getTerminal().getBusBreakerView().getBus();
                 for (EmtpSynchronousMachines.Device device : EmtpStaticVarCompensators.svc(svc, phaseNodes(bus.getId()), VectorGroupOffsets.of(network).degrees(bus),
+                        settings)) {
+                    devices.addBlock(device.part(), device.lines());
+                }
+            }
+        }
+        for (Battery battery : network.getBatteries()) {
+            if (inService(battery)) {
+                Bus bus = battery.getTerminal().getBusBreakerView().getBus();
+                for (EmtpSynchronousMachines.Device device : EmtpBatteries.battery(battery, phaseNodes(bus.getId()), VectorGroupOffsets.of(network).degrees(bus),
                         settings)) {
                     devices.addBlock(device.part(), device.lines());
                 }
@@ -824,8 +834,13 @@ public final class EmtpNetlistWriter {
                 reasons.add("static var compensator '" + svc.getId() + "': " + String.join(", ", svcReasons));
             }
         });
-        Stream.of(
-                        network.getSwitchStream(), network.getHvdcLineStream(), network.getBatteryStream())
+        network.getBatteryStream().filter(EmtpNetlistWriter::inService).forEach(battery -> {
+            List<String> batteryReasons = EmtpBatteries.unsupportedReasons(battery);
+            if (!batteryReasons.isEmpty()) {
+                reasons.add("battery '" + battery.getId() + "': " + String.join(", ", batteryReasons));
+            }
+        });
+        Stream.of(network.getSwitchStream(), network.getHvdcLineStream())
                 .flatMap(s -> s.map(Identifiable::getId))
                 .forEach(id -> reasons.add("'" + id + "' is of a kind not written yet"));
         return reasons;
