@@ -11,6 +11,7 @@ import com.powsybl.simuemt.extensions.GeneratorModel;
 import com.powsybl.simuemt.extensions.circuit.MachineInitialState;
 import com.powsybl.simuemt.extensions.circuit.MachineSequenceImpedances;
 import com.powsybl.simuemt.extensions.circuit.NumericalAids;
+import com.powsybl.simuemt.extensions.event.PowerReferenceStep;
 import com.powsybl.simuemt.extensions.excitation.Ac1AModel;
 import com.powsybl.simuemt.extensions.excitation.Ac6AInitialState;
 import com.powsybl.simuemt.extensions.excitation.Ac6AModel;
@@ -34,7 +35,6 @@ import com.powsybl.simuemt.extensions.excitation.limiter.PowerFactorVarControlle
 import com.powsybl.simuemt.extensions.excitation.limiter.StatorCurrentLimiterModel;
 import com.powsybl.simuemt.extensions.excitation.limiter.UnderexcitationLimiterModel;
 import com.powsybl.simuemt.extensions.excitation.limiter.VoltsPerHertzLimiterModel;
-import com.powsybl.simuemt.extensions.governor.Tgov1Model;
 import com.powsybl.simuemt.extensions.governor.TurbineGovernorModel;
 import com.powsybl.simuemt.extensions.machine.ClassicalDefinitions.RotorCircuit;
 import com.powsybl.simuemt.extensions.machine.ClassicalMachineEquivalent;
@@ -146,12 +146,11 @@ import static com.supergrid.simuemt.emtp.EmtpNetlistWriter.number;
  * {@code (1 + sT3) / (1 + sT4)}, each at rest at 0; and a limiter ({@code _c_lim}) holding the output within its limit - static, as
  * ATP's clamp after the second lead-lag. A stabilizer without an enabled regulator drives nothing, as in upstream's backends.
  *
- * <p>An enabled {@link Tgov1Model} drives the machine's mechanical power instead of holding it, per unit, through its one mass's power
- * control ({@code Pm_1}, 4 on the mass's row; its signal {@code GEN_Pm_1} before the field voltage's) - not the machine's total
- * power control, which EMTP reads a hundred times too large per unit, whatever the machine's rating (2026-11-14): from the same
- * speed deviation, its valve {@code 1 / (1 + sT1)} on {@code Pm0 - dw / R} held within its limits - its state with it, as TGOV1's
- * non-windup limit -, its turbine {@code (1 + sT2) / (1 + sT3)}, and {@code Pm = turbine - Dt dw}, every state at {@code Pm0}, the
- * load flow's mechanical power ({@link MachineInitialState#mechanicalPower()}), as ATP's TACS has it.
+ * <p>An enabled turbine-governor {@link EmtpTurbineGovernors} writes drives the machine's mechanical power instead of holding it, per
+ * unit, through its one mass's power control ({@code Pm_1}, 4 on the mass's row; its signal {@code GEN_Pm_1} before the field
+ * voltage's) - not the machine's total power control, which EMTP reads a hundred times too large per unit, whatever the machine's
+ * rating (2026-11-14) -, from the same speed deviation, every state at {@code Pm0}, the load flow's mechanical power ({@link
+ * MachineInitialState#mechanicalPower()}), as ATP's TACS has it.
  *
  * <p>Refused, until written: zero-sequence data ({@code GeneratorFortescue}), saturation, and any other enabled excitation system,
  * stabilizer, limiter or turbine-governor - one disabled holds what it would have regulated, as in upstream's backends.
@@ -223,7 +222,7 @@ final class EmtpSynchronousMachines {
                     && !(extension instanceof Ac1AModel) && !(extension instanceof Ac6AModel) && !(extension instanceof Ac8BModel)
                     && !(extension instanceof St4BModel) && !(extension instanceof St5BModel) && !(extension instanceof St6BModel)
                     && !(extension instanceof Pss1AModel)
-                    && !(extension instanceof Tgov1Model)) {
+                    && !(extension instanceof TurbineGovernorModel governor && EmtpTurbineGovernors.isWritten(governor))) {
                 reasons.add("its " + extension.getClass().getSimpleName() + " is not written yet");
             }
         }
@@ -353,28 +352,25 @@ final class EmtpSynchronousMachines {
      * error and lag.
      */
     static List<Device> controls(Generator generator, String name) {
+        return controls(generator, name, null, 0.0);
+    }
+
+    /** The same, the governor's reference stepped by {@code step}, if any, on the time step {@code timeStepSeconds}. */
+    static List<Device> controls(Generator generator, String name, PowerReferenceStep step, double timeStepSeconds) {
         MachineInitialState initial = MachineInitialState.subtransient(generator, subtransient(generator), 0.0);
         double efd = initial.efd();
         Pss1AModel pss = stabilizer(generator);
-        Tgov1Model tgov1 = governor(generator);
+        TurbineGovernorModel tgov1 = governor(generator);
         String deviation = signal(name, "DW");
         List<Device> devices = new ArrayList<>();
         if (pss != null || tgov1 != null) {
-            devices.add(new Device("_c_fu", List.of("_c_fu;" + name + "_DW;2;2;" + deviation + "," + signal(name, ROTOR_SPEED) + ",", "0,S1,", "u[1]-1")));
+            Device speedDeviation = new Device("_c_fu", List.of("_c_fu;" + name + "_DW;2;2;" + deviation + "," + signal(name, ROTOR_SPEED) + ",", "0,S1,", "u[1]-1"));
+            // Scoped under a governor ({@code control:<name>_DW}), as upstream's benches record the speed.
+            devices.add(tgov1 != null ? EmtpVoltageSourceConverters.scoped(speedDeviation) : speedDeviation);
         }
         if (tgov1 != null) {
-            double pm0 = initial.mechanicalPower();
-            String demand = signal(name, "GOV");
-            String valve = signal(name, "VALVE");
-            String turbine = signal(name, "TURB");
-            devices.add(new Device("_c_fu", List.of("_c_fu;" + name + "_GOV;2;2;" + demand + "," + deviation + ",", number(pm0) + ",S1,",
-                    number(pm0) + "-u[1]/" + number(tgov1.getDroop()))));
-            devices.add(new Device("_c_fslim", List.of("_c_fslim;" + name + "_VALVE;4;4;" + valve + "," + demand + ",0,0,",
-                    number(pm0) + "," + number(tgov1.getValveMax()) + "," + number(tgov1.getValveMin()) + ",1,1,2,1,S1,",
-                    "1", ";", "1 " + number(tgov1.getGovernorTimeConstant()))));
-            devices.add(firstOrder(name + "_TURB", turbine, valve, pm0, 1.0, 1.0, tgov1.getTurbineLeadTimeConstant(), tgov1.getTurbineLagTimeConstant()));
-            devices.add(new Device("_c_fu", List.of("_c_fu;" + name + "_PM;3;3;" + signal(name, MASS_POWER) + "," + turbine + "," + deviation + ",",
-                    number(pm0) + ",S1,", "u[1]-" + number(tgov1.getTurbineDamping()) + "*u[2]")));
+            devices.addAll(EmtpTurbineGovernors.devices(generator, tgov1, name, deviation, signal(name, MASS_POWER), initial.mechanicalPower(), step,
+                    timeStepSeconds));
         }
         ExcitationSystemModel excitation = regulator(generator);
         if (excitation == null) {
@@ -826,7 +822,7 @@ final class EmtpSynchronousMachines {
      * max]}, the integral at {@code integral0} with its input cut by ATP's limiter steps while the sum is past a limit and {@code u} pushes
      * it further. Its sum at rest on {@code output0}.
      */
-    private static List<Device> limitedPi(String device, String output, String input, double kp, double ki, double min, double max, double integral0,
+    static List<Device> limitedPi(String device, String output, String input, double kp, double ki, double min, double max, double integral0,
                                           double output0) {
         List<Device> devices = new ArrayList<>();
         String sum = output + "S";
@@ -1069,9 +1065,10 @@ final class EmtpSynchronousMachines {
                 number(n0) + " " + number(n1), ";", "1 " + number(d1)));
     }
 
-    /** The machine's enabled TGOV1, or {@code null}. */
-    private static Tgov1Model governor(Generator generator) {
-        return generator.getExtension(TurbineGovernorModel.class) instanceof Tgov1Model tgov1 && tgov1.isEnabled() ? tgov1 : null;
+    /** The machine's enabled governor, one {@link EmtpTurbineGovernors} writes, or {@code null}. */
+    static TurbineGovernorModel governor(Generator generator) {
+        return generator.getExtension(TurbineGovernorModel.class) instanceof TurbineGovernorModel governor && governor.isEnabled()
+                && EmtpTurbineGovernors.isWritten(governor) ? governor : null;
     }
 
     /** The machine's enabled PSS1A, if its regulator is written to take its output, or {@code null}. */

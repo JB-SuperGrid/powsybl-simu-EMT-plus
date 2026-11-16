@@ -67,6 +67,7 @@ public final class EmtpRunner {
             for (String output : List.of(name + ".out", name + "m.m", name + ".mda", name + "ss.xml", name + ".console")) {
                 Files.deleteIfExists(project.resolve(output));
             }
+            ensureInfoToolRunning(settings);
             Process process = new ProcessBuilder(command(file, settings)).directory(file.getParent().toFile()).redirectErrorStream(true)
                     .redirectOutput(console.toFile()).start();
             if (!process.waitFor(settings.timeout().toMillis(), TimeUnit.MILLISECONDS)) {
@@ -85,6 +86,28 @@ public final class EmtpRunner {
             throw new PowsyblException("SimuEmt Plus: EMTP did not run " + file + " through" + messages(project, name));
         }
         return new Run(name, project, printed);
+    }
+
+    /** EMTPWorks' info tool, which EMTP's licensing starts with elevation - Windows asking for administrator rights - when it is not
+     * running already. */
+    static final String INFO_TOOL = "EMTPInfoTool5.exe";
+
+    /**
+     * Starts EMTPWorks' info tool, {@code EMTPInfoTool5.exe} beside {@code EMTP\emtpopt.exe}'s folder, unless it runs: left to EMTP's
+     * licensing, which starts it at each run of the solver, it asks for administrator rights every time (2026-11-16), where started
+     * here, as an ordinary process - its manifest asks for none -, it asks for nothing, and the solver then starts nothing. EMTPWorks
+     * starts it too, and while it was open nothing was asked. Left running after the run, as EMTPWorks leaves it.
+     */
+    static void ensureInfoToolRunning(EmtpSettings settings) throws IOException {
+        if (ProcessHandle.allProcesses().anyMatch(p -> p.info().command().map(c -> c.toLowerCase(java.util.Locale.ROOT)
+                .endsWith(INFO_TOOL.toLowerCase(java.util.Locale.ROOT))).orElse(false))) {
+            return;
+        }
+        Path installation = settings.emtpopt().toAbsolutePath().getParent().getParent();
+        Path tool = installation.resolve(INFO_TOOL);
+        if (Files.isRegularFile(tool)) {
+            new ProcessBuilder(tool.toString()).directory(installation.toFile()).start();
+        }
     }
 
     /** Whether EMTP reported an error among {@code lines}. */
