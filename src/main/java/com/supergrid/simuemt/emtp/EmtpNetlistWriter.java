@@ -17,6 +17,7 @@ import com.powsybl.iidm.network.ShuntCompensator;
 import com.powsybl.iidm.network.StaticVarCompensator;
 import com.powsybl.iidm.network.Switch;
 import com.powsybl.iidm.network.ThreeWindingsTransformer;
+import com.powsybl.iidm.network.TwoSides;
 import com.powsybl.iidm.network.TwoWindingsTransformer;
 import com.powsybl.iidm.network.VoltageLevel;
 import com.powsybl.iidm.network.extensions.LineFortescue;
@@ -30,7 +31,9 @@ import com.powsybl.simuemt.extensions.LoadModel;
 import com.powsybl.simuemt.extensions.arrester.ArresterPlacement;
 import com.powsybl.simuemt.extensions.arrester.SurgeArresters;
 import com.powsybl.simuemt.extensions.arrester.ZnOArresterModel;
+import com.powsybl.simuemt.extensions.circuit.CoupledLineParameters;
 import com.powsybl.simuemt.extensions.circuit.ElectricalNodes;
+import com.powsybl.simuemt.extensions.circuit.LineEndShunt;
 import com.powsybl.simuemt.extensions.circuit.LoadBranches;
 import com.powsybl.simuemt.extensions.circuit.ModalLineParameters;
 import com.powsybl.simuemt.extensions.circuit.NumericalAids;
@@ -405,6 +408,10 @@ public final class EmtpNetlistWriter {
             writeBergeronLine(lines, line);
             return;
         }
+        if (line.getExtension(LineFortescue.class) != null) {
+            writeCoupledLine(lines, line, settings);
+            return;
+        }
         double inductance = line.getX() / omega(settings);
         for (String phase : PHASES) {
             String from = node(endId(line, line.getTerminal1(), 1), phase.charAt(0));
@@ -413,6 +420,95 @@ public final class EmtpNetlistWriter {
             damping(lines, id(line) + "_D" + phase, from, to, inductance, settings, "the series inductance");
             charging(lines, id(line) + "_C1" + phase, from, line.getB1(), settings);
             charging(lines, id(line) + "_C2" + phase, to, line.getB2(), settings);
+        }
+    }
+
+    /**
+     * A lumped line with zero-sequence data ({@link LineFortescue}) as EMTP's coupled R-L ({@code _PI}, its generic three-phase version,
+     * no capacitance): the self and mutual resistances and inductances of a transposed line ({@link CoupledLineParameters}), as ATP's
+     * sequence-value cards; {@code 16L/Dt} across each phase's self inductance. A conductor the line is not running on ({@link
+     * CoupledLineParameters#openPhases}) left in the group, dead-ended on nodes of its own, 1 Gohm to earth. Its shunt at each end {@link
+     * LineEndShunt}'s, from each connected phase to earth and, with zero-sequence shunt data, between each pair of phases, behind {@code
+     * Dt/16C} as a line's charging.
+     */
+    private static void writeCoupledLine(Devices lines, Line line, EmtpSimulationSettings settings) {
+        CoupledLineParameters coupled = CoupledLineParameters.of(line);
+        boolean[] open = CoupledLineParameters.openPhases(line);
+        String id = id(line);
+        String[] from = new String[3];
+        String[] to = new String[3];
+        for (int k = 0; k < 3; k++) {
+            char phase = PHASES[k].charAt(0);
+            if (open[k]) {
+                from[k] = id + "_OK" + PHASES[k];
+                to[k] = id + "_OM" + PHASES[k];
+                lines.add("_RLC", id + "_OKR" + PHASES[k], List.of(from[k]), number(NumericalAids.BUS_EARTH_REFERENCE_OHM) + ",0,0,0,0,");
+                lines.add("_RLC", id + "_OMR" + PHASES[k], List.of(to[k]), number(NumericalAids.BUS_EARTH_REFERENCE_OHM) + ",0,0,0,0,");
+            } else {
+                from[k] = node(endId(line, line.getTerminal1(), 1), phase);
+                to[k] = node(endId(line, line.getTerminal2(), 2), phase);
+            }
+        }
+        double selfL = coupled.xSelf() / omega(settings);
+        double mutualL = coupled.xMutual() / omega(settings);
+        List<String> data = new ArrayList<>();
+        data.add("_PI;" + id + ";6;6;" + String.join(",", from) + "," + String.join(",", to) + ",");
+        // Three phases, generic; R in ohms, L in henries, C, the initial current and voltages' units; no capacitance nor conductance.
+        data.add("-3,1,1,1,1,1,1,2,");
+        for (double[] values : new double[][] {{coupled.rSelf(), coupled.rMutual()}, {selfL, mutualL}}) {
+            for (int row = 0; row < 3; row++) {
+                List<String> cells = new ArrayList<>();
+                for (int column = 0; column < 3; column++) {
+                    cells.add(number(row == column ? values[0] : values[1]));
+                }
+                data.add(String.join(" ", cells));
+            }
+        }
+        // Its initial conditions, a row per phase - current, voltages at k and m -, left to EMTP's steady state.
+        for (int k = 0; k < 3; k++) {
+            data.add("0 0 0");
+        }
+        lines.addBlock("_PI", data);
+        LineEndShunt[] shunts = {LineEndShunt.of(line, TwoSides.ONE), LineEndShunt.of(line, TwoSides.TWO)};
+        String[][] ends = {from, to};
+        for (int k = 0; k < 3; k++) {
+            if (open[k]) {
+                continue;
+            }
+            damping(lines, id + "_D" + PHASES[k], from[k], to[k], selfL, settings, "the series self inductance");
+            for (int side = 0; side < 2; side++) {
+                shunt(lines, id + "_S" + (side + 1) + PHASES[k], ends[side][k], null, shunts[side].groundConductance(), shunts[side].groundSusceptance(), settings);
+            }
+        }
+        for (int side = 0; side < 2; side++) {
+            if (!shunts[side].hasPhaseToPhase()) {
+                continue;
+            }
+            for (int k = 0; k < 3; k++) {
+                int other = (k + 1) % 3;
+                if (open[k] && open[other]) {
+                    continue;
+                }
+                String node = ends[side][open[k] ? other : k];
+                String otherNode = open[k] || open[other] ? null : ends[side][other];
+                shunt(lines, id + "_P" + (side + 1) + PHASES[k], node, otherNode, shunts[side].phaseToPhaseConductance(), shunts[side].phaseToPhaseSusceptance(),
+                        settings);
+            }
+        }
+    }
+
+    /** A shunt {@code G + jB} from {@code node} to {@code other} - earth for {@code null} -: its conductance, and its capacitance behind
+     * {@code Dt/16C}, as a line's charging. */
+    private static void shunt(Devices lines, String name, String node, String other, double conductanceS, double susceptanceS, EmtpSimulationSettings settings) {
+        List<String> nodes = other == null ? List.of(node) : List.of(node, other);
+        if (conductanceS != 0.0) {
+            lines.add("_RLC", name + "G", nodes, number(1.0 / conductanceS) + ",0,0,0,0,");
+        }
+        if (susceptanceS != 0.0) {
+            double capacitance = susceptanceS / omega(settings);
+            lines.comment(NumericalAids.COMMENT_MARKER + ": the R, Dt/16C in series with the line charging");
+            lines.add("_RLC", name + "C", nodes, number(NumericalAids.shuntCapacitanceDampingOhm(capacitance, settings.timeStepSeconds())) + ",0,"
+                    + number(capacitance) + ",0,0,");
         }
     }
 
@@ -938,7 +1034,7 @@ public final class EmtpNetlistWriter {
     static List<String> unsupported(Network network) {
         List<String> reasons = new ArrayList<>();
         for (Line line : network.getLines()) {
-            if (line.getG1() != 0.0 || line.getG2() != 0.0) {
+            if ((line.getG1() != 0.0 || line.getG2() != 0.0) && line.getExtension(LineFortescue.class) == null) {
                 reasons.add("line '" + line.getId() + "' has a shunt conductance");
             }
         }
@@ -948,12 +1044,15 @@ public final class EmtpNetlistWriter {
                 .flatMap(s -> s.map(c -> (Identifiable<?>) c))
                 .forEach(c -> c.getExtensions().stream()
                         .filter(e -> !(e instanceof BergeronLineModel || e instanceof ZnOArresterModel<?>
-                                || e instanceof LineFortescue && c.getExtensions().stream().anyMatch(BergeronLineModel.class::isInstance)
+                                || e instanceof LineFortescue
                                 || e instanceof TwoWindingsTransformerFortescue || e instanceof ThreeWindingsTransformerFortescue
                                 || e instanceof TwoWindingsTransformerPhaseAngleClock || e instanceof ThreeWindingsTransformerPhaseAngleClock))
                         .forEach(e -> reasons.add("'" + c.getId() + "' has a " + e.getClass().getSimpleName().replace("Impl", "")
                                 + ", which is not written yet")));
         for (Line line : network.getLines()) {
+            if (line.getExtension(LineFortescue.class) != null && line.getExtension(BergeronLineModel.class) == null) {
+                CoupledLineParameters.unsupportedReasons(line).forEach(reason -> reasons.add("line '" + line.getId() + "': " + reason));
+            }
             if (line.getExtension(BergeronLineModel.class) != null) {
                 ModalLineParameters.unsupportedReasons(line).forEach(reason -> reasons.add("line '" + line.getId() + "': " + reason));
             }
