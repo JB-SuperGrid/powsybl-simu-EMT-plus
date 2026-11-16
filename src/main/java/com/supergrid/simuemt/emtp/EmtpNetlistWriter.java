@@ -219,6 +219,11 @@ public final class EmtpNetlistWriter {
         for (Load load : network.getLoads()) {
             if (inService(load) && load.getExtension(LoadModel.class) instanceof InfiniteBusLoadModel model) {
                 writeInfiniteBus(devices, load, model, settings);
+            } else if (inService(load) && EmtpInductionMotors.isMotor(load)) {
+                for (EmtpSynchronousMachines.Device device : EmtpInductionMotors.motor(load, id(load), phaseNodes(load.getTerminal().getBusBreakerView().getBus().getId()),
+                        settings.nominalFrequencyHz())) {
+                    devices.addBlock(device.part(), device.lines());
+                }
             } else if (inService(load)) {
                 writeLoad(devices, load, settings);
             }
@@ -902,7 +907,7 @@ public final class EmtpNetlistWriter {
             }
         }
         for (Load load : network.getLoads()) {
-            if (load.getExtension(LoadModel.class) instanceof InfiniteBusLoadModel) {
+            if (load.getExtension(LoadModel.class) instanceof InfiniteBusLoadModel || EmtpInductionMotors.isMotor(load)) {
                 continue;
             }
             if (load.getExtension(LoadModel.class) != null) {
@@ -960,7 +965,7 @@ public final class EmtpNetlistWriter {
         });
         // What starts from its bus's load-flow operating point cannot on a bus the load flow left de-energized - behind an open switch.
         Stream.of(network.getGeneratorStream(), network.getStaticVarCompensatorStream(), network.getBatteryStream(),
-                        network.getLoadStream().filter(l -> l.getExtension(LoadModel.class) instanceof InfiniteBusLoadModel))
+                        network.getLoadStream().filter(l -> l.getExtension(LoadModel.class) instanceof InfiniteBusLoadModel || EmtpInductionMotors.isMotor(l)))
                 .flatMap(st -> st.map(c -> (com.powsybl.iidm.network.Injection<?>) c))
                 .filter(c -> c.getTerminal().getBusBreakerView().getBus() != null && Double.isNaN(c.getTerminal().getBusBreakerView().getBus().getV()))
                 .forEach(c -> reasons.add("'" + c.getId() + "' is on bus '" + c.getTerminal().getBusBreakerView().getBus().getId()
