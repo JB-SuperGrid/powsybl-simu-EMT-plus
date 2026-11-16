@@ -165,7 +165,7 @@ import static com.supergrid.simuemt.emtp.EmtpNetlistWriter.number;
  * rating (2026-11-14) -, from the same speed deviation, every state at {@code Pm0}, the load flow's mechanical power ({@link
  * MachineInitialState#mechanicalPower()}), as ATP's TACS has it.
  *
- * <p>Refused, until written: zero-sequence data ({@code GeneratorFortescue}), saturation, and any other enabled excitation system,
+ * <p>Refused, until written: zero-sequence data ({@code GeneratorFortescue}), and any other enabled excitation system,
  * stabilizer, limiter or turbine-governor - one disabled holds what it would have regulated, as in upstream's backends.
  *
  * @author Jean-Baptiste Heyberger : jean-baptiste.heyberger@supergrid-institute.com
@@ -202,6 +202,10 @@ final class EmtpSynchronousMachines {
     record Device(String part, List<String> lines) {
     }
 
+    /** The open-circuit characteristic's points, every {@link #SATURATION_STEP_PU} up to 1.6 per unit. */
+    private static final int SATURATION_POINTS = 16;
+    private static final double SATURATION_STEP_PU = 0.1;
+
     private EmtpSynchronousMachines() {
     }
 
@@ -221,9 +225,6 @@ final class EmtpSynchronousMachines {
             reasons.add("its zero-sequence data are not written yet");
         }
         SubtransientMachineModel machine = subtransient(generator);
-        if (MachineSaturation.of(machine) != null) {
-            reasons.add("its saturation is not written yet");
-        }
         try {
             rotor(machine, true);
             rotor(machine, false);
@@ -322,8 +323,21 @@ final class EmtpSynchronousMachines {
         lines.add("f=" + number(frequency) + " " + machine.getNumberOfPoles() + " 0 0 " + number(frequency) + ",");
         // Rated voltage and power, air-gap-line field current; no permanent magnet.
         lines.add("R=" + number(nominalKv) + " " + number(ratedMva) + " " + number(machine.getFieldCurrentAirGapLine()) + " 0 0 0,");
-        // One machine on its bus, no saturation.
-        lines.add("S=0 1 1 0 0 0 0 0,");
+        MachineSaturation saturation = MachineSaturation.of(machine);
+        if (saturation == null) {
+            // One machine on its bus, no saturation.
+            lines.add("S=0 1 1 0 0 0 0 0,");
+        } else {
+            // One machine on its bus, saturated on the resultant air-gap flux (total saturation), as ATP and Xyce are: the open-circuit
+            // characteristic, the field current in amperes at each armature voltage per unit (MachineSaturation#fieldCurrentAt), from
+            // (0, 0), which EMTP assumes.
+            lines.add("S=0 1 1 1 1 0 " + SATURATION_POINTS + " 0,");
+            for (int k = 1; k <= SATURATION_POINTS; k++) {
+                double v = k * SATURATION_STEP_PU;
+                lines.add(number(saturation.fieldCurrentAt(v, machine.getFieldCurrentAirGapLine())) + " " + number(v));
+            }
+            lines.add(";");
+        }
         lines.add("Ra=" + number(machine.getStatorResistance()) + " " + number(machine.getStatorLeakageReactance()) + " "
                 + number(MachineSequenceImpedances.statorBranchReactance(machine)));
         double xad = d.magnetizingReactance();
@@ -413,6 +427,11 @@ final class EmtpSynchronousMachines {
         if (excitation == null) {
             devices.add(new Device("_c_cst", List.of("_c_cst;" + name + "_VF;1;1;" + fieldVoltageSignal(name) + ",", number(efd) + ",S1,")));
             return devices;
+        }
+        if (MachineSaturation.of(subtransient(generator)) != null) {
+            // A saturated machine's field voltage scoped (control:<name>_EFV): its field current per unit at rest, a point of its open-circuit
+            // characteristic on the open-circuit test.
+            devices.add(EmtpVoltageSourceConverters.scoped(function(name + "_EFV", name + "_EFV", List.of(fieldVoltageSignal(name)), efd, "u[1]")));
         }
         // The stabilizer's output on VS, or, through a discontinuous excitation control, on VSPS, which that control takes VS from.
         DiscontinuousExcitationControlModel dec = regulator(generator) != null ? EmtpStabilizers.dec(generator) : null;

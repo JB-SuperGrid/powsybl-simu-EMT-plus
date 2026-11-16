@@ -38,7 +38,8 @@ import static org.assertj.core.api.Assertions.within;
  *
  * <p>2026-11-15, upstream's {@code 6346a20c}: 71 of its 132 examples written - since the shunts, the grounds, the open ends, the SVC, the battery, the WT4B - CIGRE DCS2 with it -, the switches
  * the infinite buses on a load, the Bergeron lines and the ZnO arresters; 2026-11-16, {@code 6f83d62b}: 73 of 134, its two rigid
- * bipoles; 78 with the induction motors, 91 with the governors, 95 with OEL1B and V/Hz, 102 with every excitation limiter, 106 with the DECs and PSS2A. Its
+ * bipoles; 78 with the induction motors, 91 with the governors, 95 with OEL1B and V/Hz, 102 with every excitation limiter, 106 with the DECs and PSS2A, 110 with the coupled lines,
+ * 111 with machine saturation. Its
  * refusals, the most frequent first: power electronics (VSCs, MMCs, their DC sides), load models
  * (induction motors, constant power), zero-sequence data of lumped lines, excitation limiters,
  * governors but TGOV1, PSS2A.
@@ -52,6 +53,10 @@ class EmtpExampleCoverageTest {
 
     /** The examples the writer writes whole, 2026-11-14: 26 at first, the shunts', the ground's and the open ends' since. */
     private static final List<String> WRITTEN = List.of(
+            "createCoupledLineBench(false)",
+            "createCoupledLineBench(true)",
+            "createCoupledLineShuntBench(false, true)",
+            "createCoupledLineShuntBench(true, true)",
             "createThreeBusNetworkWithTransformerAndEmtExtensions",
             "createThreeBusNetworkWithTransformerMagnetizingBranchAndTap",
             "createTwoBusNetworkWithAc1A",
@@ -63,6 +68,7 @@ class EmtpExampleCoverageTest {
             "createTwoBusNetworkWithDec2A",
             "createTwoBusNetworkWithDec3A",
             "createTwoBusNetworkWithEmtExtensions",
+            "createTwoBusNetworkWithSaturatedMachine",
             "createTwoBusNetworkWithIdealInfiniteBusGenerator",
             "createTwoBusNetworkWithDelayedGovCt2",
             "createTwoBusNetworkWithFanMotor",
@@ -187,8 +193,10 @@ class EmtpExampleCoverageTest {
                 SETTINGS)).hasMessageContaining("has a load model, ConstantPowerLoadModel");
     }
 
+    /** The examples written, run live on their load flow - but a coupled line's bench with a conductor open, which the balanced load flow
+     * knows nothing of: {@code EmtpCoupledLineTest} holds those to their closed form. */
     static List<String> written() {
-        return WRITTEN;
+        return WRITTEN.stream().filter(name -> !(name.startsWith("createCoupledLine") && name.contains("(true"))).toList();
     }
 
     /** The one example held looser: its magnetizing admittance 1.6 times rated (G 3.3e-4 S, B -1e-3 S), which the writer hangs mid-T as
@@ -227,9 +235,12 @@ class EmtpExampleCoverageTest {
         SoftAssertions softly = new SoftAssertions();
         double worstPu = 0.0;
         double worstDegrees = 0.0;
+        // The saturated machine's field started on the exponential curve, EMTP reading it piecewise-linearly: 1.0e-4 off through its
+        // proportional regulator.
         // The OEL1B examples' limit (2.1) under the load flow's field current (2.67): their limiter picks up by design, its smooth steps
         // drawing the machine 1.5e-4 pu off within 0.2 s, as in the other backends.
-        double pu = MAGNETIZED_AND_TAPPED.equals(name) ? 1.5e-2 : name.startsWith("createTwoBusNetworkWithOel1B") ? 3.0e-4 : 1.0e-4;
+        double pu = MAGNETIZED_AND_TAPPED.equals(name) ? 1.5e-2 : name.startsWith("createTwoBusNetworkWithOel1B") ? 3.0e-4
+                : "createTwoBusNetworkWithSaturatedMachine".equals(name) ? 2.0e-4 : 1.0e-4;
         double degrees = MAGNETIZED_AND_TAPPED.equals(name) ? 0.1 : 0.01;
         for (Bus bus : network.getBusBreakerView().getBuses()) {
             if (Double.isNaN(bus.getV())) {
