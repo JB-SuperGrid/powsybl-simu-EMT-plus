@@ -110,7 +110,7 @@ import static com.supergrid.simuemt.emtp.EmtpSynchronousMachines.function;
  * <p>A {@link GridFormingControl}: {@link EmtpGridFormingControls}'s angle and EMF, the EMFs and the DC current as here.
  *
  * <p>A {@link ConverterBlocking} of a grid-following converter - an MMC's equivalent capacitor then behind its diode ({@link
- * #capacitorBehindDiode}), unless earthed at its midpoint -, and its {@link ConverterDeblocking} once after: {@link
+ * #capacitorBehindDiode}), on both sides earthed at its midpoint -, and its {@link ConverterDeblocking} once after: {@link
  * #blocking}, its integrals held while it is blocked and restarted from 0 at the deblocking ({@link #freeze}). An {@link
  * OvercurrentProtection}: blocked as by an event when its worst arm current passes its threshold, its delay on ({@link #runningFlag}),
  * its DC current read on a meter at its DC terminal, every switch of its blocking on its running flag; restarted by its {@link
@@ -156,8 +156,10 @@ final class EmtpVoltageSourceConverters {
         }
         if (converter.getExtension(VscProtectionModel.class) != null && (!(converter.getExtension(VscProtectionModel.class) instanceof OvercurrentProtection protection)
                 || converter.getExtension(VscControlModel.class) instanceof GridFormingControl
-                || converter.getExtension(VoltageSourceConverterModel.class) instanceof AveragedMmcModel && converter.getExtension(DcEarthingModel.class) != null)) {
-            reasons.add("its protection but an overcurrent one on a grid-following converter not earthed at its midpoint is not written yet");
+                || converter.getExtension(VoltageSourceConverterModel.class) instanceof AveragedMmcModel && converter.getExtension(DcEarthingModel.class) != null
+                && !DcMidpointEarthing.valveWindingEarthed(converter))) {
+            reasons.add("its protection but an overcurrent one on a grid-following converter - an MMC earthed at its midpoint with its valve winding"
+                    + " earthed - is not written yet");
         }
         if (converter.getExtension(DcEarthingModel.class) != null && !(converter.getExtension(DcEarthingModel.class) instanceof DcMidpointEarthing)) {
             reasons.add("its DC earthing but the midpoint one is not written yet");
@@ -187,8 +189,10 @@ final class EmtpVoltageSourceConverters {
         VoltageSourceConverter converter = network.getVoltageSourceConverter(blocking.converterId());
         if (converter == null) {
             reasons.add("converter '" + blocking.converterId() + "' is blocked, which the network has not");
-        } else if (converter.getExtension(VoltageSourceConverterModel.class) instanceof AveragedMmcModel && converter.getExtension(DcEarthingModel.class) != null) {
-            reasons.add("converter '" + converter.getId() + "' is blocked but as a converter not an MMC earthed at its midpoint, which is not written yet");
+        } else if (converter.getExtension(VoltageSourceConverterModel.class) instanceof AveragedMmcModel && converter.getExtension(DcEarthingModel.class) != null
+                && !DcMidpointEarthing.valveWindingEarthed(converter)) {
+            reasons.add("converter '" + converter.getId() + "' is blocked but it is an MMC earthed at its midpoint with its valve winding unearthed,"
+                    + " which nothing then holds to earth");
         } else if (events.stream().filter(e -> e instanceof ConverterBlocking b && b.converterId().equals(converter.getId())).count() > 1) {
             reasons.add("converter '" + converter.getId() + "' is blocked more than once");
         } else if (events.stream().filter(e -> e instanceof ConverterDeblocking d && d.converterId().equals(converter.getId())
@@ -666,7 +670,7 @@ final class EmtpVoltageSourceConverters {
         String ret = dcNode(converter.getDcTerminal2().getDcNode());
         boolean poleHigher = converter.getDcTerminal1().getDcNode().getV() >= converter.getDcTerminal2().getDcNode().getV();
         if (model.blocksCapacitorDischarge()) {
-            capacitorBehindDiode(devices, id, pole, ret);
+            capacitorBehindDiode(devices, id, pole, ret, converter.getExtension(DcEarthingModel.class) instanceof DcMidpointEarthing);
         }
         // The bridge inductance, if any, from the pole to the bridge's rail, 16L/Dt across it, as ATP's.
         if (model.hasBridgeInductance()) {
@@ -733,19 +737,42 @@ final class EmtpVoltageSourceConverters {
      * as ATP's: blocked half-bridge submodules charge, never discharge. Bypassed while it runs - a switch on its running flag, closed in the
      * steady state, through {@link NumericalAids#FAULT_ON_RESISTANCE_OHM} -; the diode through the same resistance, its snubber and grading
      * resistor switched across it once blocked; the blocked pole's RC to its return, {@link NumericalAids#MMC_POLE_SNUBBER_F}.
+     *
+     * <p>Earthing its midpoint, a symmetric monopole's ({@code midpoint}): its return-side plate {@code <id>_CE} behind a diode of its own
+     * too, into the return, with its bypass, snubber and grading resistor, as upstream's backends since 9f5e6ac0. Behind the pole's diode
+     * alone, its return-side half held the negative pole on the midpoint's earth while the other floated; cut off on both sides, as a
+     * blocked MMC's submodules charge through both arms, it holds neither, and the valve winding's earthed star point, through the
+     * bridge's diodes, holds the DC side to earth ({@link DcMidpointEarthing#valveWindingEarthed}).
      */
-    private static void capacitorBehindDiode(List<EmtpSynchronousMachines.Device> devices, String id, String pole, String ret) {
+    private static void capacitorBehindDiode(List<EmtpSynchronousMachines.Device> devices, String id, String pole, String ret, boolean midpoint) {
         String capacitor = id + "_CQ";
+        String capacitorReturn = midpoint ? id + "_CE" : ret;
         for (int k = 0; k < devices.size(); k++) {
             List<String> lines = devices.get(k).lines();
             String header = lines.get(0);
             if (("_RLC;" + id + "_CDC;2;2;" + pole + "," + ret + ",").equals(header)) {
                 devices.set(k, new EmtpSynchronousMachines.Device("_RLC", List.of("_RLC;" + id + "_CDC;2;2;" + capacitor + "," + ret + ",", lines.get(1))));
+            } else if (("_RLC;" + id + "_CDC1;2;2;" + pole + "," + id + "_MID,").equals(header)) {
+                devices.set(k, new EmtpSynchronousMachines.Device("_RLC", List.of("_RLC;" + id + "_CDC1;2;2;" + capacitor + "," + id + "_MID,", lines.get(1))));
+            } else if (("_RLC;" + id + "_CDC2;2;2;" + id + "_MID," + ret + ",").equals(header)) {
+                devices.set(k, new EmtpSynchronousMachines.Device("_RLC", List.of("_RLC;" + id + "_CDC2;2;2;" + id + "_MID," + capacitorReturn + ",", lines.get(1))));
             } else if (("_RLC;" + id + "_TP;2;2;" + id + "_DCP," + pole + ",").equals(header)) {
                 devices.set(k, new EmtpSynchronousMachines.Device("_RLC", List.of("_RLC;" + id + "_TP;2;2;" + id + "_DCP," + capacitor + ",", lines.get(1))));
+            } else if (midpoint && ("_RLC;" + id + "_TR;2;2;" + id + "_DCR," + ret + ",").equals(header)) {
+                devices.set(k, new EmtpSynchronousMachines.Device("_RLC", List.of("_RLC;" + id + "_TR;2;2;" + id + "_DCR," + capacitorReturn + ",", lines.get(1))));
             }
         }
         String fault = number(NumericalAids.FAULT_ON_RESISTANCE_OHM) + ",0,0,0,0,";
+        if (midpoint) {
+            devices.add(element("_cSw", id + "_BYPE", List.of(ret, id + "_CEW", id + "_RUN"), "1,0,0,0,0,1e6,0,"));
+            devices.add(element("_RLC", id + "_BYRE", List.of(id + "_CEW", capacitorReturn), fault));
+            devices.add(element("_D0", id + "_CDIE", List.of(id + "_CL", ret), "0.001,0,0,"));
+            devices.add(element("_RLC", id + "_CDRE", List.of(capacitorReturn, id + "_CL"), fault));
+            devices.add(element("_cSw", id + "_CSSE", List.of(ret, id + "_CS", id + "_GATE"), "0,0,0,0,0,1e6,0,"));
+            devices.add(element("_RLC", id + "_CSRE", List.of(id + "_CS", capacitorReturn), number(NumericalAids.VALVE_SNUBBER_OHM) + ",0,"
+                    + number(NumericalAids.VALVE_SNUBBER_F) + ",0,0,"));
+            devices.add(element("_RLC", id + "_CSGE", List.of(id + "_CS", capacitorReturn), number(NumericalAids.VALVE_GRADING_OHM) + ",0,0,0,0,"));
+        }
         devices.add(element("_cSw", id + "_BYP", List.of(pole, id + "_CW", id + "_RUN"), "1,0,0,0,0,1e6,0,"));
         devices.add(element("_RLC", id + "_BYR", List.of(id + "_CW", capacitor), fault));
         devices.add(element("_D0", id + "_CDIO", List.of(pole, id + "_CY"), "0.001,0,0,"));
