@@ -48,6 +48,7 @@ import com.powsybl.simuemt.extensions.event.ConverterDeblocking;
 import com.powsybl.simuemt.extensions.event.DcFault;
 import com.powsybl.simuemt.extensions.event.DcSwitchOperation;
 import com.powsybl.simuemt.extensions.event.EmtEvent;
+import com.powsybl.simuemt.extensions.event.ExcitationBoost;
 import com.powsybl.simuemt.extensions.event.FastValving;
 import com.powsybl.simuemt.extensions.event.FaultClearing;
 import com.powsybl.simuemt.extensions.event.PowerReferenceStep;
@@ -55,6 +56,7 @@ import com.powsybl.simuemt.extensions.event.SwitchOperation;
 import com.powsybl.simuemt.extensions.event.VoltageReferenceStep;
 import com.powsybl.simuemt.extensions.excitation.Dc1AModel;
 import com.powsybl.simuemt.extensions.excitation.ExcitationSystemModel;
+import com.powsybl.simuemt.extensions.excitation.limiter.Dec2AModel;
 import com.powsybl.simuemt.extensions.governor.TGov3Model;
 import com.powsybl.simuemt.extensions.infinitebus.InfiniteBusEmf;
 import com.powsybl.simuemt.extensions.infinitebus.InfiniteBusGeneratorModel;
@@ -189,6 +191,13 @@ public final class EmtpNetlistWriter {
                 }
                 continue;
             }
+            if (event instanceof ExcitationBoost boost) {
+                Generator boosted = network.getGenerator(boost.generatorId());
+                if (boosted == null || !EmtpSynchronousMachines.isMachine(boosted) || !(EmtpStabilizers.dec(boosted) instanceof Dec2AModel)) {
+                    refused.add("generator '" + boost.generatorId() + "''s excitation is boosted, but it is no machine under a DEC2A");
+                }
+                continue;
+            }
             if (event instanceof VoltageReferenceStep voltageStep) {
                 Generator stepped = network.getGenerator(voltageStep.generatorId());
                 if (stepped == null || !EmtpSynchronousMachines.isMachine(stepped) || !(stepped.getExtension(ExcitationSystemModel.class) instanceof Dc1AModel dc1a)
@@ -293,8 +302,10 @@ public final class EmtpNetlistWriter {
                         .map(FastValving.class::cast).findFirst().orElse(null);
                 VoltageReferenceStep voltageStep = events.stream().filter(e -> e instanceof VoltageReferenceStep v && v.generatorId().equals(generator.getId()))
                         .map(VoltageReferenceStep.class::cast).findFirst().orElse(null);
+                ExcitationBoost boost = events.stream().filter(e -> e instanceof ExcitationBoost b && b.generatorId().equals(generator.getId()))
+                        .map(ExcitationBoost.class::cast).findFirst().orElse(null);
                 for (EmtpSynchronousMachines.Device control : EmtpSynchronousMachines.controls(generator, id(generator), step, fastValving, voltageStep,
-                        settings.nominalFrequencyHz(), settings.timeStepSeconds())) {
+                        boost, settings.nominalFrequencyHz(), settings.timeStepSeconds())) {
                     devices.addBlock(control.part(), control.lines());
                 }
             } else {

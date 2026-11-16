@@ -11,6 +11,7 @@ import com.powsybl.simuemt.extensions.GeneratorModel;
 import com.powsybl.simuemt.extensions.circuit.MachineInitialState;
 import com.powsybl.simuemt.extensions.circuit.MachineSequenceImpedances;
 import com.powsybl.simuemt.extensions.circuit.NumericalAids;
+import com.powsybl.simuemt.extensions.event.ExcitationBoost;
 import com.powsybl.simuemt.extensions.event.FastValving;
 import com.powsybl.simuemt.extensions.event.PowerReferenceStep;
 import com.powsybl.simuemt.extensions.event.VoltageReferenceStep;
@@ -31,6 +32,9 @@ import com.powsybl.simuemt.extensions.excitation.St5BInitialState;
 import com.powsybl.simuemt.extensions.excitation.St5BModel;
 import com.powsybl.simuemt.extensions.excitation.St6BInitialState;
 import com.powsybl.simuemt.extensions.excitation.St6BModel;
+import com.powsybl.simuemt.extensions.excitation.limiter.Dec1AModel;
+import com.powsybl.simuemt.extensions.excitation.limiter.Dec2AModel;
+import com.powsybl.simuemt.extensions.excitation.limiter.Dec3AModel;
 import com.powsybl.simuemt.extensions.excitation.limiter.DiscontinuousExcitationControlModel;
 import com.powsybl.simuemt.extensions.excitation.limiter.KundurVoltsPerHertzLimiterModel;
 import com.powsybl.simuemt.extensions.excitation.limiter.Oel1BModel;
@@ -50,6 +54,7 @@ import com.powsybl.simuemt.extensions.machine.ClassicalMachineModel;
 import com.powsybl.simuemt.extensions.machine.MachineSaturation;
 import com.powsybl.simuemt.extensions.machine.SubtransientMachineModel;
 import com.powsybl.simuemt.extensions.pss.Pss1AModel;
+import com.powsybl.simuemt.extensions.pss.Pss2AModel;
 import com.powsybl.simuemt.extensions.pss.PssModel;
 
 import java.util.ArrayList;
@@ -230,7 +235,9 @@ final class EmtpSynchronousMachines {
             if (isEnabled(extension) && !(extension instanceof SimplifiedAvrModel) && !(extension instanceof St1AModel) && !(extension instanceof Dc1AModel)
                     && !(extension instanceof Ac1AModel) && !(extension instanceof Ac6AModel) && !(extension instanceof Ac8BModel)
                     && !(extension instanceof St4BModel) && !(extension instanceof St5BModel) && !(extension instanceof St6BModel)
-                    && !(extension instanceof Pss1AModel)
+                    && !(extension instanceof Pss1AModel) && !(extension instanceof Pss2AModel)
+                    && !(extension instanceof Dec1AModel && regulator(generator) instanceof St1AModel) && !(extension instanceof Dec2AModel)
+                    && !(extension instanceof Dec3AModel)
                     && !(extension instanceof TurbineGovernorModel governor && EmtpTurbineGovernors.isWritten(governor))
                     && !((extension instanceof Oel1BModel || extension instanceof KundurVoltsPerHertzLimiterModel || extension instanceof Uel2CModel
                     || extension instanceof Scl1CModel || extension instanceof PfVarType2Model) && regulator(generator) instanceof Dc1AModel)) {
@@ -272,7 +279,7 @@ final class EmtpSynchronousMachines {
         double speedDeviationDamping = machine.getDamping() * ratedMva * 1.0e6 / (mechanicalSpeed * mechanicalSpeed);
 
         boolean regulated = regulator(generator) != null;
-        boolean stabilized = stabilizer(generator) != null;
+        boolean stabilized = stabilizer(generator) != null || speedStabilized(generator);
         boolean governed = governor(generator) != null;
         List<String> controls = new ArrayList<>();
         if (governed) {
@@ -285,7 +292,7 @@ final class EmtpSynchronousMachines {
         }
         // In the order of the observe requests: vd, the field current, vq - and id and iq for the terminal's powers.
         if (regulated || readsPower(generator)) {
-            boolean powers = regulator(generator) instanceof St4BModel || readsPower(generator) || limitersReadPowers(generator);
+            boolean powers = regulator(generator) instanceof St4BModel || readsPower(generator) || limitersReadPowers(generator) || pss2APower(generator);
             observed.add(signal(name, "vd"));
             if (powers) {
                 observed.add(signal(name, "id"));
@@ -347,7 +354,7 @@ final class EmtpSynchronousMachines {
             if (readsFieldCurrent(generator)) {
                 observe.set(OBSERVE_IF, OBSERVED);
             }
-            if (regulator(generator) instanceof St4BModel || readsPower(generator) || limitersReadPowers(generator)) {
+            if (regulator(generator) instanceof St4BModel || readsPower(generator) || limitersReadPowers(generator) || pss2APower(generator)) {
                 observe.set(OBSERVE_ID, OBSERVED);
                 observe.set(OBSERVE_IQ, OBSERVED);
             }
@@ -373,22 +380,23 @@ final class EmtpSynchronousMachines {
 
     /** The same, {@code fastValving}, if any, closing its TGOV3's intercept valve, at {@code frequencyHz}. */
     static List<Device> controls(Generator generator, String name, PowerReferenceStep step, FastValving fastValving, double frequencyHz, double timeStepSeconds) {
-        return controls(generator, name, step, fastValving, null, frequencyHz, timeStepSeconds);
+        return controls(generator, name, step, fastValving, null, null, frequencyHz, timeStepSeconds);
     }
 
     /** The same, {@code voltageStep}, if any, stepping its DC1A's voltage reference at its instant, on the time step. */
     static List<Device> controls(Generator generator, String name, PowerReferenceStep step, FastValving fastValving, VoltageReferenceStep voltageStep,
-                                 double frequencyHz, double timeStepSeconds) {
+                                 ExcitationBoost boost, double frequencyHz, double timeStepSeconds) {
         MachineInitialState initial = MachineInitialState.subtransient(generator, subtransient(generator), 0.0);
         double efd = initial.efd();
         Pss1AModel pss = stabilizer(generator);
         TurbineGovernorModel tgov1 = governor(generator);
         String deviation = signal(name, "DW");
         List<Device> devices = new ArrayList<>();
-        if (pss != null || tgov1 != null || EmtpExcitationLimiters.voltsPerHertz(generator) != null) {
+        boolean stabilized = pss != null || stabilizedThroughDec(generator);
+        if (pss != null || speedStabilized(generator) || tgov1 != null || EmtpExcitationLimiters.voltsPerHertz(generator) != null) {
             Device speedDeviation = new Device("_c_fu", List.of("_c_fu;" + name + "_DW;2;2;" + deviation + "," + signal(name, ROTOR_SPEED) + ",", "0,S1,", "u[1]-1"));
-            // Scoped under a governor ({@code control:<name>_DW}), as upstream's benches record the speed.
-            devices.add(tgov1 != null ? EmtpVoltageSourceConverters.scoped(speedDeviation) : speedDeviation);
+            // Scoped ({@code control:<name>_DW}), as upstream's benches record the speed.
+            devices.add(EmtpVoltageSourceConverters.scoped(speedDeviation));
         }
         if (tgov1 != null) {
             String electricalPower = null;
@@ -406,6 +414,20 @@ final class EmtpSynchronousMachines {
             devices.add(new Device("_c_cst", List.of("_c_cst;" + name + "_VF;1;1;" + fieldVoltageSignal(name) + ",", number(efd) + ",S1,")));
             return devices;
         }
+        // The stabilizer's output on VS, or, through a discontinuous excitation control, on VSPS, which that control takes VS from.
+        DiscontinuousExcitationControlModel dec = regulator(generator) != null ? EmtpStabilizers.dec(generator) : null;
+        String stabilizerOutput = dec != null ? signal(name, "VSPS") : signal(name, "VS");
+        Pss2AModel pss2a = regulator(generator) != null ? EmtpStabilizers.pss2A(generator) : null;
+        if (pss2a != null) {
+            String power = signal(name, "PE2");
+            devices.add(function(name + "_PE2", power, List.of(signal(name, "vd"), signal(name, "vq"), signal(name, "id"), signal(name, "iq")),
+                    GovCt2Model.loadFlowElectricalPower(generator), "u[1]*u[3]+u[2]*u[4]"));
+            devices.addAll(EmtpStabilizers.pss2A(pss2a, name, deviation, power, GovCt2Model.loadFlowElectricalPower(generator), stabilizerOutput));
+        }
+        if (dec != null) {
+            devices.addAll(EmtpStabilizers.dec(dec, generator, name, initial, pss != null || pss2a != null ? stabilizerOutput : null, signal(name, "vd"),
+                    signal(name, "vq"), deviation, signal(name, "VA"), boost, timeStepSeconds, signal(name, "VS")));
+        }
         if (pss != null) {
             String washout = signal(name, "XW");
             String firstLeadLag = signal(name, "Y1");
@@ -413,41 +435,42 @@ final class EmtpSynchronousMachines {
             devices.add(firstOrder(name + "_XW", washout, deviation, 0.0, pss.getGain(), 0.0, pss.getWashoutTimeConstant(), pss.getWashoutTimeConstant()));
             devices.add(firstOrder(name + "_Y1", firstLeadLag, washout, 0.0, 1.0, 1.0, pss.getLeadTimeConstant(), pss.getLagTimeConstant()));
             devices.add(firstOrder(name + "_VSP", unlimited, firstLeadLag, 0.0, 1.0, 1.0, pss.getLeadTimeConstant2(), pss.getLagTimeConstant2()));
-            devices.add(new Device("_c_lim", List.of("_c_lim;" + name + "_VSL;2;2;" + signal(name, "VS") + "," + unlimited + ",",
+            devices.add(new Device("_c_lim", List.of("_c_lim;" + name + "_VSL;2;2;" + stabilizerOutput + "," + unlimited + ",",
                     number(pss.getOutputLimit()) + "," + number(-pss.getOutputLimit()) + ",1,S1,")));
+            devices.add(EmtpVoltageSourceConverters.scoped(function(name + "_P1VS", name + "_P1VS", List.of(stabilizerOutput), 0.0, "u[1]")));
         }
         if (excitation instanceof St1AModel st1a) {
-            devices.addAll(st1a(st1a, name, initial, pss != null));
+            devices.addAll(st1a(st1a, name, initial, stabilized));
             return devices;
         }
         if (excitation instanceof Dc1AModel dc1a) {
-            devices.addAll(dc1a(dc1a, generator, name, initial, pss != null, voltageStep == null ? ""
+            devices.addAll(dc1a(dc1a, generator, name, initial, stabilized, voltageStep == null ? ""
                     : "+" + number(voltageStep.deltaPu()) + "*" + EmtpVoltageSourceConverters.step("t-(" + number(NumericalAids.switchingInstant(voltageStep.timeSeconds(),
                     timeStepSeconds)) + ")")));
             return devices;
         }
         if (excitation instanceof Ac1AModel ac1a) {
-            devices.addAll(ac1a(ac1a, name, initial, pss != null));
+            devices.addAll(ac1a(ac1a, name, initial, stabilized));
             return devices;
         }
         if (excitation instanceof Ac6AModel ac6a) {
-            devices.addAll(ac6a(ac6a, generator, name, initial, pss != null));
+            devices.addAll(ac6a(ac6a, generator, name, initial, stabilized));
             return devices;
         }
         if (excitation instanceof Ac8BModel ac8b) {
-            devices.addAll(ac8b(ac8b, generator, name, initial, pss != null));
+            devices.addAll(ac8b(ac8b, generator, name, initial, stabilized));
             return devices;
         }
         if (excitation instanceof St4BModel st4b) {
-            devices.addAll(st4b(st4b, generator, name, initial, pss != null));
+            devices.addAll(st4b(st4b, generator, name, initial, stabilized));
             return devices;
         }
         if (excitation instanceof St5BModel st5b) {
-            devices.addAll(st5b(st5b, generator, name, initial, pss != null));
+            devices.addAll(st5b(st5b, generator, name, initial, stabilized));
             return devices;
         }
         if (excitation instanceof St6BModel st6b) {
-            devices.addAll(st6b(st6b, generator, name, initial, pss != null));
+            devices.addAll(st6b(st6b, generator, name, initial, stabilized));
             return devices;
         }
         SimplifiedAvrModel avr = (SimplifiedAvrModel) excitation;
@@ -459,10 +482,10 @@ final class EmtpSynchronousMachines {
                 new Device("_c_fslim", List.of("_c_fslim;" + name + "_AVR;4;4;" + fieldVoltageSignal(name) + "," + error + ",0,0,",
                         number(efd) + "," + number(avr.getMaxOutput()) + "," + number(avr.getMinOutput()) + ",1,1,2," + number(ka) + ",S1,",
                         "1", ";", "1 " + number(avr.getTimeConstant()))),
-                new Device("_c_fu", List.of("_c_fu;" + name + "_VERR;" + (pss == null ? "3;3;" : "4;4;") + error + "," + signal(name, "vd") + ","
-                        + signal(name, "vq") + "," + (pss == null ? "" : signal(name, "VS") + ","),
+                new Device("_c_fu", List.of("_c_fu;" + name + "_VERR;" + (!stabilized ? "3;3;" : "4;4;") + error + "," + signal(name, "vd") + ","
+                        + signal(name, "vq") + "," + (!stabilized ? "" : signal(name, "VS") + ","),
                         number(efd / ka) + ",S1,",
-                        number(initial.terminalVoltage() + efd / ka) + (pss == null ? "" : "+u[3]") + "-SQRT(u[1]*u[1]+u[2]*u[2])"))));
+                        number(initial.terminalVoltage() + efd / ka) + (!stabilized ? "" : "+u[3]") + "-SQRT(u[1]*u[1]+u[2]*u[2])"))));
         return devices;
     }
 
@@ -1170,6 +1193,21 @@ final class EmtpSynchronousMachines {
     static TurbineGovernorModel governor(Generator generator) {
         return generator.getExtension(TurbineGovernorModel.class) instanceof TurbineGovernorModel governor && governor.isEnabled()
                 && EmtpTurbineGovernors.isWritten(governor) ? governor : null;
+    }
+
+    /** Whether the machine's stabilizing signal reaches its regulator through a discontinuous excitation control, a PSS2A's or none. */
+    private static boolean stabilizedThroughDec(Generator generator) {
+        return regulator(generator) != null && (EmtpStabilizers.dec(generator) != null || EmtpStabilizers.pss2A(generator) != null);
+    }
+
+    /** Whether the machine's speed is read by a PSS2A or a discontinuous excitation control, recorded under the latter. */
+    private static boolean speedStabilized(Generator generator) {
+        return regulator(generator) != null && (EmtpStabilizers.pss2A(generator) != null || EmtpStabilizers.dec(generator) != null);
+    }
+
+    /** Whether the machine's PSS2A reads its electrical power. */
+    private static boolean pss2APower(Generator generator) {
+        return regulator(generator) != null && EmtpStabilizers.pss2A(generator) != null;
     }
 
     /** The machine's enabled PSS1A, if its regulator is written to take its output, or {@code null}. */
