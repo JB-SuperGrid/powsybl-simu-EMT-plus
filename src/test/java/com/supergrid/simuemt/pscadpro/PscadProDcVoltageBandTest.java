@@ -139,6 +139,43 @@ class PscadProDcVoltageBandTest {
         softly.assertAll();
     }
 
+    /**
+     * Upstream's {@code b0f48a99} asks the Professional repository to run a protected MMC with its return solidly earthed, on a DC
+     * voltage band, restarting by itself: {@code vsc-three-terminal-all-droop-mmc}, every station protected at 2 pu, on a band of 0.8 to
+     * 1.05 pu, {@code AutomaticRestart(0.5, 0.02, 0.1, 2)}, one station blocked at 0.3 s, run 1.5 s. The inverter VSC2 lost: VSC1 and
+     * VSC3 trip on their overvoltage; their DC terminals bleed back through the band - within it from 0.4 to 0.7 s, long enough for a
+     * restart on the terminal alone - but their capacitors, behind their diodes, stay at the limit they tripped on: none restarts, the DC
+     * voltage some 0.63 pu at the end. The rectifier VSC1 lost: VSC2 and VSC3 trip on their undervoltage, the terminals never back
+     * within the band, some 0.48 pu at the end. No ATP here: the instants and the ends are PSCAD's, held for EMTP's to be compared.
+     *
+     * <p>Run 2026-11-16, 160 s the two: VSC2 lost, VSC1 and VSC3 blocked at 0.31696 and 0.31698 s, 0.6343 pu over the last 0.1 s;
+     * VSC1 lost, VSC2 and VSC3 at 0.30640 and 0.30968 s, 0.4837 pu.
+     */
+    @ParameterizedTest(name = "{0} blocked")
+    @CsvSource({"VSC2, VSC1, VSC3, true, 0.60, 0.65", "VSC1, VSC2, VSC3, false, 0.45, 0.52"})
+    void anMmcRestartsOnlyWithItsCapacitorWithinItsBand(String lost, String first, String second, boolean overvoltage, double endMin, double endMax,
+                                                        @TempDir Path tempDir) {
+        Network network = bench("vsc-three-terminal-all-droop-mmc");
+        network.getVoltageSourceConverters().forEach(converter -> converter.addExtension(VscProtectionModel.class,
+                new OvercurrentProtection(2.0, 0.0, new AutomaticRestart(0.5, 0.02, 0.1, 2), 0.8, 1.05)));
+        EmtNetworkPreprocessor.preprocess(network, LocalComputationManager.getDefault());
+        PscadOutput out = run(network, List.of(new ConverterBlocking(lost, SHIFT + 0.3)), 1.5, tempDir);
+        double runEnd = SHIFT + 1.5;
+        SoftAssertions softly = new SoftAssertions();
+        for (String id : List.of(first, second)) {
+            double blocked = out.firstTimeBelow(id + "_RUN", 0.5, SHIFT + 0.1) - SHIFT;
+            System.out.printf(Locale.ROOT, "%s blocked at %.5f s%n", id, blocked);
+            softly.assertThat(blocked).as("%s blocked at, s: on its band", id).isBetween(0.3, 0.32);
+            softly.assertThat(out.firstTimeAbove(id + "_RUN", 0.5, SHIFT + blocked)).as("%s restarted: never", id).isNaN();
+            if (overvoltage) {
+                double within = out.mean(id + "_VDC", SHIFT + 0.4, SHIFT + 0.7);
+                softly.assertThat(within).as("%s's DC terminal from 0.4 to 0.7 s, pu: back within its band", id).isBetween(0.85, 1.0);
+            }
+            end(softly, out, id + "_VDC", runEnd, endMin, endMax);
+        }
+        softly.assertAll();
+    }
+
     /** The symmetric monopole, both stations protected at 2 pu and on a band of 0.8 to 1.05 pu. */
     private static Network monopole() {
         return monopole(null);
