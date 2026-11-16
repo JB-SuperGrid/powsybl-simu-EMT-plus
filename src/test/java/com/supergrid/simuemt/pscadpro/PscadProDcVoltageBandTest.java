@@ -38,7 +38,8 @@ import static org.assertj.core.api.Assertions.within;
  * (the rigid bipole), and the ends within {@code AtpSolverIntegrationTest}'s bounds.
  *
  * <p>Run 2026-11-16, 110 s the three, on upstream's PSCAD backend blocking a converter on a return not solidly earthed and earthing a
- * capacitor's midpoint: VSC2 blocked at 0.33832 s (ATP 0.33824, 80 us), its DC voltage 0.776 pu at the end; VSC1 at 0.31394 s, ATP's,
+ * capacitor's midpoint: VSC2 blocked at 0.33832 s (ATP 0.33824, 80 us; 0.33838 s, 140 us, since upstream holds a blocked
+ * bridge's open rails), its DC voltage 0.776 pu at the end; VSC1 at 0.31394 s, ATP's,
  * 1.049 pu; VSC2P at 0.33060 s, ATP's, VSC1P 5.4e-4 pu at the end, the DC voltages 0.766 to 1.098 pu; the stations idle within 2.3e-4.
  *
  * <p>Tagged {@code pscad}: run with {@code mvn test -Ppscad}.
@@ -145,13 +146,9 @@ class PscadProDcVoltageBandTest {
      * 1.05 pu, {@code AutomaticRestart(0.5, 0.02, 0.1, 2)}, one station blocked at 0.3 s, run 1.5 s. The inverter VSC2 lost: VSC1 and
      * VSC3 trip on their overvoltage; their DC terminals bleed back through the band - within it from 0.4 to 0.7 s, long enough for a
      * restart on the terminal alone - but their capacitors, behind their diodes, stay at the limit they tripped on: none restarts, the DC
-     * voltage some 0.63 pu at the end. No ATP here: EMTP's ({@code EmtpDcVoltageBandTest}) is on PSCAD's within 60 us and 7e-3 pu.
+     * voltage some 0.63 pu at the end. No ATP here: EMTP's ({@code EmtpDcVoltageBandTest}) is on PSCAD's within 20 us and 8e-3 pu.
      *
-     * <p>Run 2026-11-16, 80 s: VSC1 and VSC3 blocked at 0.31696 and 0.31698 s, 0.6343 pu over the last 0.1 s.
-     *
-     * <p>Not the rectifier VSC1 lost: there PSCAD's blocked VSC1 draws 4 pu from the DC grid at once, its terminal down to 0.65 pu within
-     * 2 ms, its AC power nil - its capacitor behind its diode discharged by something -, and the others trip on their undervoltage;
-     * EMTP's holds its charge, the grid dipping 2% under the others' droop. To be investigated in upstream's PSCAD backend.
+     * <p>Run 2026-11-16, 80 s: VSC1 and VSC3 blocked at 0.31692 and 0.31694 s, 0.6353 pu over the last 0.1 s.
      */
     @ParameterizedTest(name = "{0} blocked")
     @CsvSource({"VSC2, VSC1, VSC3, true, 0.60, 0.65"})
@@ -174,6 +171,32 @@ class PscadProDcVoltageBandTest {
                 softly.assertThat(within).as("%s's DC terminal from 0.4 to 0.7 s, pu: back within its band", id).isBetween(0.85, 1.0);
             }
             end(softly, out, id + "_VDC", runEnd, endMin, endMax);
+        }
+        softly.assertAll();
+    }
+
+    /**
+     * The same grid, the rectifier VSC1 lost: blocked, it holds its capacitor's charge, the others take its place on their droops, the DC
+     * voltage dipping 2% - nothing trips, VSC2's and VSC3's DC voltages at the end on EMTP's 0.9803 and 0.9831 pu within 2e-3
+     * ({@code EmtpDcVoltageBandTest}). Run 2026-11-16: 0.9803 and 0.9831 - before upstream held a blocked bridge's open rails, its rails'
+     * breakers closed onto diodes left conducting, the pole shorted to earth for a step, the capacitor 500 to 295 kV at once, and both
+     * others tripped on their undervoltage.
+     */
+    @Test
+    void anMmcBlockedHoldsItsCapacitorsCharge(@TempDir Path tempDir) {
+        Network network = bench("vsc-three-terminal-all-droop-mmc");
+        network.getVoltageSourceConverters().forEach(converter -> converter.addExtension(VscProtectionModel.class,
+                new OvercurrentProtection(2.0, 0.0, new AutomaticRestart(0.5, 0.02, 0.1, 2), 0.8, 1.05)));
+        EmtNetworkPreprocessor.preprocess(network, LocalComputationManager.getDefault());
+        PscadOutput out = run(network, List.of(new ConverterBlocking("VSC1", SHIFT + 0.3)), 1.5, tempDir);
+        SoftAssertions softly = new SoftAssertions();
+        String[] ids = {"VSC2", "VSC3"};
+        double[] emtp = {0.9803, 0.9831};
+        for (int k = 0; k < 2; k++) {
+            softly.assertThat(out.firstTimeBelow(ids[k] + "_RUN", 0.5, SHIFT + 0.1)).as("%s blocked: never", ids[k]).isNaN();
+            double end = out.mean(ids[k] + "_VDC", SHIFT + 1.4, SHIFT + 1.5);
+            System.out.printf(Locale.ROOT, "%s_VDC %.4f at the end (EMTP %.4f)%n", ids[k], end, emtp[k]);
+            softly.assertThat(end).as("%s's DC voltage at the end, pu, against EMTP's", ids[k]).isCloseTo(emtp[k], within(0.002));
         }
         softly.assertAll();
     }
