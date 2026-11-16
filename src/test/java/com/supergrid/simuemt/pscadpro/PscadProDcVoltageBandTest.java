@@ -8,6 +8,7 @@ import com.powsybl.computation.local.LocalComputationManager;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.simuemt.extensions.event.ConverterBlocking;
 import com.powsybl.simuemt.extensions.event.EmtEvent;
+import com.powsybl.simuemt.extensions.hvdc.AutomaticRestart;
 import com.powsybl.simuemt.extensions.hvdc.OvercurrentProtection;
 import com.powsybl.simuemt.extensions.hvdc.VscProtectionModel;
 import com.powsybl.simuemt.preprocessing.EmtNetworkPreprocessor;
@@ -18,6 +19,8 @@ import org.assertj.core.api.SoftAssertions;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.nio.file.Path;
 import java.util.List;
@@ -105,11 +108,47 @@ class PscadProDcVoltageBandTest {
         softly.assertAll();
     }
 
+    /**
+     * {@code BackendComparisonTest#allThreeBackendsRestartAStationOnlyWithinItsDcVoltageBandAlike} (upstream's {@code 4730e880}): the
+     * same, both stations restarting by themselves ({@code AutomaticRestart(0.5, 0.02, 0.1, 2)}), run 1.5 s: a station restarts only
+     * once its DC voltage is back within its band. VSC1 blocked: VSC2 blocked, never restarted, its DC voltage at the end on ATP's 0.768
+     * pu within 2e-3. VSC2 blocked: VSC1 blocked, restarted once at ATP's 0.88728 s within 50 ms, never blocked again, its DC voltage at
+     * the end on ATP's 1.000 pu within 2e-3. Run 2026-11-16 once upstream's PSCAD backend no longer zeroes a restarting converter's integrals
+     * before its release: VSC2 blocked at 0.33832 s, never restarted, 0.7692 pu at the end; VSC1 blocked at 0.31396 s, restarted at
+     * 0.91010 s, 1.0000 pu at the end.
+     */
+    @ParameterizedTest(name = "{0} blocked")
+    @CsvSource({"VSC1, VSC2, false, 0.768", "VSC2, VSC1, true, 1.000"})
+    void aStationRestartsOnlyWithinItsDcVoltageBand(String lost, String tripped, boolean restarts, double atpEnd, @TempDir Path tempDir) {
+        PscadOutput out = run(monopole(new AutomaticRestart(0.5, 0.02, 0.1, 2)), List.of(new ConverterBlocking(lost, SHIFT + 0.3)), 1.5, tempDir);
+        double runEnd = SHIFT + 1.5;
+        SoftAssertions softly = new SoftAssertions();
+        double blocked = out.firstTimeBelow(tripped + "_RUN", 0.5, SHIFT + 0.1) - SHIFT;
+        double restarted = out.firstTimeAbove(tripped + "_RUN", 0.5, SHIFT + blocked) - SHIFT;
+        System.out.printf(Locale.ROOT, "%s blocked at %.5f s, restarted at %.5f s%n", tripped, blocked, restarted);
+        softly.assertThat(blocked).as("%s blocked at, s: on its DC voltage", tripped).isBetween(0.305, 0.345);
+        if (restarts) {
+            softly.assertThat(restarted).as("%s restarted at, s, against ATP's", tripped).isCloseTo(0.88728, within(0.05));
+            softly.assertThat(out.firstTimeBelow(tripped + "_RUN", 0.5, SHIFT + restarted)).as("%s blocked again: never", tripped).isNaN();
+        } else {
+            softly.assertThat(restarted).as("%s restarted: never, under its band", tripped).isNaN();
+        }
+        double end = out.mean(tripped + "_VDC", runEnd - 0.2, runEnd);
+        System.out.printf(Locale.ROOT, "%s_VDC %.4f at the end (ATP %.3f)%n", tripped, end, atpEnd);
+        softly.assertThat(end).as("%s's DC voltage at the end, pu, against ATP's", tripped).isCloseTo(atpEnd, within(0.002));
+        softly.assertAll();
+    }
+
     /** The symmetric monopole, both stations protected at 2 pu and on a band of 0.8 to 1.05 pu. */
     private static Network monopole() {
+        return monopole(null);
+    }
+
+    /** The same, each station restarting by itself on {@code restart}, if any. */
+    private static Network monopole(AutomaticRestart restart) {
         Network network = bench(MONOPOLE);
         network.getVoltageSourceConverters().forEach(converter -> converter.addExtension(VscProtectionModel.class,
-                new OvercurrentProtection(2.0, 0.0, null, 0.8, 1.05)));
+                new OvercurrentProtection(2.0, 0.0, restart, 0.8, 1.05)));
         EmtNetworkPreprocessor.preprocess(network, LocalComputationManager.getDefault());
         return network;
     }
