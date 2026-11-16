@@ -296,8 +296,15 @@ final class EmtpGridFormingControls {
             rate = "u[3]*(" + rate + ")";
         }
         List<String> rateInputs = blockable ? List.of(speed, pllDeviation, id + "_RUN", internal) : List.of(speed, pllDeviation);
-        devices.add(function(id + "_GLDR", id + "_GLDR", rateInputs, 0.0, rate));
-        limitedIntegrator(devices, id + "_GLD", List.of(id + "_GLDR", lower, upper), "u[1]", "u[2]", "u[3]", delta);
+        // Not blockable, the rate inline, in the limited integrator's own functions: on a function of its own, EMTP took it a step late -
+        // VSC2's power 0.15 pu off PSCAD's through a fault (vsc-grid-forming-fault, run 2026-11-15), within 1.2e-2 inline. Blockable, its four
+        // inputs and the bounds would pass EMTP's line: a function of its own, as its scenarios were measured against ATP's.
+        if (blockable) {
+            devices.add(function(id + "_GLDR", id + "_GLDR", rateInputs, 0.0, rate));
+            limitedIntegrator(devices, id + "_GLD", List.of(id + "_GLDR", lower, upper), "u[1]", "u[2]", "u[3]", delta);
+        } else {
+            limitedIntegrator(devices, id + "_GLD", List.of(speed, pllDeviation, lower, upper), rate, "u[3]", "u[4]", delta);
+        }
         int output = devices.size() - 3;
         devices.set(output, EmtpVoltageSourceConverters.scoped(devices.get(output)));
         devices.add(function(id + "_GTD", id + "_GTD", List.of(pllDeviation, id + "_GLDE"), 0.0, "u[1]+u[2]"));

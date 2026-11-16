@@ -621,7 +621,10 @@ final class EmtpVoltageSourceConverters {
         // was computed in.
         String emfPower = emfPower(devices, id, initial, dualSequence, current, cos2, sin2);
         String chopper = "";
-        List<String> dcInputs = new ArrayList<>(List.of(emfPower, vPole, vReturn));
+        // Over its capacitor's voltage, where the power is exchanged - not over its DC terminal's, which an MMC's controls read beyond its
+        // arms: there, the drop across them would be power the AC side has not given (upstream's 4cb857ab, every backend alike).
+        String capacitorSide = ((AveragedConverterModel) converter.getExtension(VoltageSourceConverterModel.class)).measuresDcVoltageAtTerminal() ? id + "_VDK" : vPole;
+        List<String> dcInputs = new ArrayList<>(List.of(emfPower, capacitorSide, vReturn));
         String running = "";
         if (blockable) {
             dcInputs.add(id + "_RUN");
@@ -1015,6 +1018,9 @@ final class EmtpVoltageSourceConverters {
         String vReturn = id + "_VDR";
         devices.add(element("_cI", id + "_PRDP", List.of(measured, "", zero, vPole, id + "_PRDPI", id + "_PRDPP"), "-1,1E15,0,0,0,0,>v,0,0,"));
         devices.add(element("_cI", id + "_PRDR", List.of(ret, "", zero, vReturn, id + "_PRDRI", id + "_PRDRP"), "-1,1E15,0,0,0,0,>v,0,0,"));
+        if (!measured.equals(pole)) {
+            devices.add(element("_cI", id + "_PRDK", List.of(pole, "", zero, id + "_VDK", id + "_PRDKI", id + "_PRDKP"), "-1,1E15,0,0,0,0,>v,0,0,"));
+        }
         String standInNode = id + "_DCS";
         // Across the converter's terminals, its DC voltage from the load flow - a negative pole's converter has its neutral on terminal 1 -,
         // and the drop of its DC current across the series resistance.
