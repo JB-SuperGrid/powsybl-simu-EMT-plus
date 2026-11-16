@@ -37,7 +37,8 @@ import static org.assertj.core.api.Assertions.within;
  * the writer gains or loses shows; and - tagged {@code emtp} - each is run live, every bus on the load flow.
  *
  * <p>2026-11-15, upstream's {@code 6346a20c}: 71 of its 132 examples written - since the shunts, the grounds, the open ends, the SVC, the battery, the WT4B - CIGRE DCS2 with it -, the switches
- * the infinite buses on a load, the Bergeron lines and the ZnO arresters; 2026-11-16, {@code 6f83d62b}: 73 of 134, its two rigid bipoles; 78 with the induction motors, 91 with the governors. Its
+ * the infinite buses on a load, the Bergeron lines and the ZnO arresters; 2026-11-16, {@code 6f83d62b}: 73 of 134, its two rigid
+ * bipoles; 78 with the induction motors, 91 with the governors, 95 with OEL1B and V/Hz. Its
  * refusals, the most frequent first: power electronics (VSCs, MMCs, their DC sides), load models
  * (induction motors, constant power), zero-sequence data of lumped lines, excitation limiters,
  * governors but TGOV1, PSS2A.
@@ -73,7 +74,11 @@ class EmtpExampleCoverageTest {
             "createTwoBusNetworkWithHygov",
             "createTwoBusNetworkWithIeeeG1",
             "createTwoBusNetworkWithIeeeG2",
+            "createTwoBusNetworkWithOel1BSumming",
+            "createTwoBusNetworkWithOel1BTakeover",
             "createTwoBusNetworkWithTGov3",
+            "createTwoBusNetworkWithVoltsPerHertzLimiter(false)",
+            "createTwoBusNetworkWithVoltsPerHertzLimiter(true)",
             "createTwoBusNetworkWithInductionMotor",
             "createTwoBusNetworkWithInfiniteBusAndDampedMotor",
             "createTwoBusNetworkWithInfiniteBusAndFanMotor",
@@ -211,7 +216,9 @@ class EmtpExampleCoverageTest {
         SoftAssertions softly = new SoftAssertions();
         double worstPu = 0.0;
         double worstDegrees = 0.0;
-        double pu = MAGNETIZED_AND_TAPPED.equals(name) ? 1.5e-2 : 1.0e-4;
+        // The OEL1B examples' limit (2.1) under the load flow's field current (2.67): their limiter picks up by design, its smooth steps
+        // drawing the machine 1.5e-4 pu off within 0.2 s, as in the other backends.
+        double pu = MAGNETIZED_AND_TAPPED.equals(name) ? 1.5e-2 : name.startsWith("createTwoBusNetworkWithOel1B") ? 3.0e-4 : 1.0e-4;
         double degrees = MAGNETIZED_AND_TAPPED.equals(name) ? 0.1 : 0.01;
         for (Bus bus : network.getBusBreakerView().getBuses()) {
             if (Double.isNaN(bus.getV())) {
