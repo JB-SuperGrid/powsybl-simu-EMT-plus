@@ -37,7 +37,7 @@ import static org.assertj.core.api.Assertions.within;
  * the writer gains or loses shows; and - tagged {@code emtp} - each is run live, every bus on the load flow.
  *
  * <p>2026-11-15, upstream's {@code 6346a20c}: 71 of its 132 examples written - since the shunts, the grounds, the open ends, the SVC, the battery, the WT4B - CIGRE DCS2 with it -, the switches
- * the infinite buses on a load, the Bergeron lines and the ZnO arresters; 2026-11-16, {@code 6f83d62b}: 73 of 134, its two rigid bipoles. Its
+ * the infinite buses on a load, the Bergeron lines and the ZnO arresters; 2026-11-16, {@code 6f83d62b}: 73 of 134, its two rigid bipoles; 78 with the induction motors. Its
  * refusals, the most frequent first: power electronics (VSCs, MMCs, their DC sides), load models
  * (induction motors, constant power), zero-sequence data of lumped lines, excitation limiters,
  * governors but TGOV1, PSS2A.
@@ -60,6 +60,11 @@ class EmtpExampleCoverageTest {
             "createTwoBusNetworkWithDc1A",
             "createTwoBusNetworkWithEmtExtensions",
             "createTwoBusNetworkWithIdealInfiniteBusGenerator",
+            "createTwoBusNetworkWithFanMotor",
+            "createTwoBusNetworkWithInductionMotor",
+            "createTwoBusNetworkWithInfiniteBusAndDampedMotor",
+            "createTwoBusNetworkWithInfiniteBusAndFanMotor",
+            "createTwoBusNetworkWithInfiniteBusAndInductionMotor",
             "createTwoBusNetworkWithInfiniteBusGenerator",
             "createTwoBusNetworkWithInfiniteBusLoad",
             "createTwoBusNetworkWithBergeronLine",
@@ -149,8 +154,8 @@ class EmtpExampleCoverageTest {
         System.out.printf(Locale.ROOT, "%d of %d examples written%n", written.size(), ExampleCatalogue.examples().size());
         softly.assertThat(written).as("the examples written").containsExactlyInAnyOrderElementsOf(WRITTEN);
         softly.assertAll();
-        assertThatThrownBy(() -> EmtpNetlistWriter.write(ready(example("createTwoBusNetworkWithInductionMotor")), tempDir.resolve("motor"),
-                SETTINGS)).hasMessageContaining("has a load model, InductionMotorModel");
+        assertThatThrownBy(() -> EmtpNetlistWriter.write(ready(example("createTwoBusNetworkWithConstantPowerLoad")), tempDir.resolve("constant-power"),
+                SETTINGS)).hasMessageContaining("has a load model, ConstantPowerLoadModel");
     }
 
     static List<String> written() {
