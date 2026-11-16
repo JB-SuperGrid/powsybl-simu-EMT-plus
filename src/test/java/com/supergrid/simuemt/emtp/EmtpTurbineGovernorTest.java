@@ -11,8 +11,10 @@ import com.powsybl.simuemt.extensions.circuit.MachineInitialState;
 import com.powsybl.simuemt.extensions.event.PowerReferenceStep;
 import com.powsybl.simuemt.extensions.governor.HygovInitialState;
 import com.powsybl.simuemt.extensions.governor.HygovModel;
+import com.powsybl.simuemt.extensions.governor.IeeeG1Model;
 import com.powsybl.simuemt.extensions.governor.TurbineGovernorModel;
 import com.powsybl.simuemt.extensions.machine.SubtransientMachineModel;
+import com.powsybl.simuemt.preprocessing.EmtEventsXml;
 import com.powsybl.simuemt.testresources.ExampleNetworks;
 import org.assertj.core.api.SoftAssertions;
 import org.junit.jupiter.api.Tag;
@@ -35,7 +37,7 @@ import static org.assertj.core.api.Assertions.within;
  * its example's machine islanded on its load: held to upstream's Xyce checks ({@code XyceSolverIntegrationTest}), which ATP and
  * Kestrel are held to as well. The step at 0.5 s, run 12 s; each kept in {@code target/emtp/governor-<name>}.
  *
- * <p>Run 2026-11-16: every value within 1.1e-5 of Xyce's - HYGOV's 27 within 3.8e-6, IEEEG2's power at 3 s 4.9e-5 under the check's
+ * <p>Run 2026-11-16: every value within 6.3e-5 of Xyce's (GovSteam1's valve as it crosses its gap), lot 1's within 1.1e-5 - HYGOV's 27 within 3.8e-6, IEEEG2's power at 3 s 4.9e-5 under the check's
  * rounded 1.0172, Xyce's own 1.017155 within 4e-6; before the step, every bus on its load flow within 8.3e-6 pu.
  *
  * @author Jean-Baptiste Heyberger : jean-baptiste.heyberger@supergrid-institute.com
@@ -166,6 +168,110 @@ class EmtpTurbineGovernorTest {
         Network network = ExampleNetworks.withLoadFlow(bench.get());
         return EmtpRunner.run(EmtpNetlistWriter.write(network, Path.of("target", "emtp", "governor-" + name), new EmtpSimulationSettings(TIME_STEP, RUN_END,
                 FREQUENCY), List.of(new PowerReferenceStep("GEN", STEP, delta))), EmtpSettings.defaults()).output();
+    }
+
+    /**
+     * {@code XyceSolverIntegrationTest#anIeeeG1AnswersAPowerStepThroughItsReheater}: the valve at rest before, nearly the whole step open
+     * 0.3 s after it (Xyce 1.01521), back within 2e-3 at the end; the power then held back by the reheater, between {@code Pm0 + 5e-4}
+     * and {@code + 3e-3} (Xyce 1.00731); the speed between 4e-4 and 5.5e-4 pu at the end (Xyce 4.6e-4).
+     */
+    @Test
+    @Tag("emtp")
+    void anIeeeG1AnswersAPowerStepThroughItsReheater() {
+        Network network = ExampleNetworks.withLoadFlow(ExampleNetworks.createTwoBusNetworkWithIeeeG1());
+        double pm0 = pm0(network);
+        double valve0 = ((IeeeG1Model) network.getGenerator("GEN").getExtension(TurbineGovernorModel.class)).initialReference(network.getGenerator("GEN"), pm0);
+        EmtpOutput output = run("ieeeg1", ExampleNetworks::createTwoBusNetworkWithIeeeG1, 0.01);
+        String valve = "control:GEN_IEV";
+        SoftAssertions softly = new SoftAssertions();
+        before(softly, output);
+        softly.assertThat(output.mean(valve, 0.3, 0.5)).as("the valve before the step").isCloseTo(valve0, within(1.0e-4));
+        check(softly, output, valve, 0.8, 1.01521, 1.0e-4);
+        check(softly, output, POWER, 0.8, 1.00731, 1.0e-4);
+        softly.assertThat(output.mean(POWER, 0.8, 0.82)).as("the power held back by the reheater").isBetween(pm0 + 0.0005, pm0 + 0.003);
+        softly.assertThat(output.mean(SPEED, 11.5, 12.0)).as("the speed at the end").isBetween(0.0004, 0.00055);
+        softly.assertThat(output.mean(valve, 11.5, 12.0)).as("the valve at the end").isCloseTo(valve0, within(0.002));
+        softly.assertAll();
+    }
+
+    /**
+     * {@code XyceSolverIntegrationTest#aGovSteam1TakesAPowerStepThroughItsDeadbandAndBacklash}: the backlash 0.002 behind the valve as it
+     * opens; at 2 s the valve 1.023622 and the backlash 1.021622, moved by the step; at 2.5 s the valve 1.021423, the backlash held
+     * while the valve crosses the gap; at 4 s 0.002 ahead of it as it closes; the speed 5.40e-4 pu at 11.5 s.
+     */
+    @Test
+    @Tag("emtp")
+    void aGovSteam1TakesAPowerStepThroughItsDeadbandAndBacklash() {
+        EmtpOutput output = run("govsteam1", ExampleNetworks::createTwoBusNetworkWithGovSteam1, 0.01);
+        String valve = "control:GEN_GSV";
+        String backlash = "control:GEN_GSBS";
+        SoftAssertions softly = new SoftAssertions();
+        before(softly, output);
+        softly.assertThat(output.mean(valve, 1.0, 1.02) - output.mean(backlash, 1.0, 1.02)).as("the backlash behind the valve").isCloseTo(0.002, within(2.0e-5));
+        check(softly, output, valve, 2.0, 1.023622, 1.0e-4);
+        check(softly, output, backlash, 2.0, 1.021622, 1.0e-4);
+        check(softly, output, valve, 2.5, 1.021423, 1.0e-4);
+        softly.assertThat(output.mean(backlash, 2.5, 2.52)).as("the backlash held").isCloseTo(output.mean(backlash, 2.0, 2.02), within(2.0e-5));
+        softly.assertThat(output.mean(backlash, 4.0, 4.02) - output.mean(valve, 4.0, 4.02)).as("the backlash ahead").isCloseTo(0.002, within(2.0e-5));
+        check(softly, output, SPEED, 11.5, 5.40e-4, 2.0e-5);
+        softly.assertAll();
+    }
+
+    /**
+     * {@code XyceSolverIntegrationTest#aGovHydro4AnswersAPowerStepTheWrongWayFirst}: at 1 s the power 0.997560 and the gate 0.648227, the
+     * backlash 0.002 behind; at 4 s the power 1.045510, the gate 0.667375, the backlash 0.665443, still there at 5 s; at 8 s the
+     * backlash 0.002 ahead of the gate; the speed 9.90e-3 pu at 11.5 s.
+     */
+    @Test
+    @Tag("emtp")
+    void aGovHydro4AnswersAPowerStepTheWrongWayFirst() {
+        EmtpOutput output = run("govhydro4", ExampleNetworks::createTwoBusNetworkWithGovHydro4, 0.01);
+        String gate = "control:GEN_GHV";
+        String backlash = "control:GEN_GHBS";
+        SoftAssertions softly = new SoftAssertions();
+        before(softly, output);
+        check(softly, output, POWER, 1.0, 0.997560, 2.0e-4);
+        check(softly, output, gate, 1.0, 0.648227, 1.0e-4);
+        softly.assertThat(output.mean(gate, 1.0, 1.02) - output.mean(backlash, 1.0, 1.02)).as("the backlash behind the gate").isCloseTo(0.002, within(2.0e-5));
+        check(softly, output, POWER, 4.0, 1.045510, 1.0e-3);
+        check(softly, output, gate, 4.0, 0.667375, 1.0e-4);
+        check(softly, output, backlash, 4.0, 0.665443, 1.0e-4);
+        softly.assertThat(output.mean(backlash, 5.0, 5.02)).as("the backlash held").isCloseTo(output.mean(backlash, 4.0, 4.02), within(2.0e-5));
+        softly.assertThat(output.mean(backlash, 8.0, 8.02) - output.mean(gate, 8.0, 8.02)).as("the backlash ahead").isCloseTo(0.002, within(2.0e-5));
+        check(softly, output, SPEED, 11.5, 9.90e-3, 2.0e-4);
+        softly.assertAll();
+    }
+
+    /**
+     * {@code XyceSolverIntegrationTest#aTGov3FastValvesThroughAFault}: a three-phase fault on B2 from 0.5 to 0.6 s, the TGOV3's fast
+     * valving from 0.5 s ({@code fault-b2-abc-0.5-0.6-fast-valving-gen-0.5}): at 1 s the power 0.434488, the pressure 1.078509; at 3 s
+     * the pressure 1.250504, the integral 1.977864 behind the valve at 1.2, the speed -4.757e-2 pu; at 6 s the integral 3.402563; at 10
+     * s 1.431215, the speed 3.028e-2; at 11.5 s the valve 0.681215, the speed 3.624e-2 pu.
+     */
+    @Test
+    @Tag("emtp")
+    void aTGov3FastValvesThroughAFault() {
+        Network network = ExampleNetworks.withLoadFlow(ExampleNetworks.createTwoBusNetworkWithTGov3());
+        EmtpOutput output = EmtpRunner.run(EmtpNetlistWriter.write(network, Path.of("target", "emtp", "governor-tgov3"), new EmtpSimulationSettings(TIME_STEP,
+                RUN_END, FREQUENCY), EmtEventsXml.read(ExampleNetworks.resource("/events/fault-b2-abc-0.5-0.6-fast-valving-gen-0.5.xml"))),
+                EmtpSettings.defaults()).output();
+        String pressure = "control:GEN_TGPR";
+        String integral = "control:GEN_TGI";
+        String valve = "control:GEN_TGG";
+        SoftAssertions softly = new SoftAssertions();
+        softly.assertThat(output.mean(SPEED, 0.3, 0.5)).as("the speed before the fault").isCloseTo(0.0, within(1.0e-5));
+        check(softly, output, POWER, 1.0, 0.434488, 2.0e-3);
+        check(softly, output, pressure, 1.0, 1.078509, 2.0e-3);
+        check(softly, output, pressure, 3.0, 1.250504, 2.0e-3);
+        check(softly, output, integral, 3.0, 1.977864, 5.0e-3);
+        softly.assertThat(output.mean(valve, 3.0, 3.02)).as("the valve at its limit").isCloseTo(1.2, within(1.0e-6));
+        check(softly, output, SPEED, 3.0, -4.757e-2, 1.0e-3);
+        check(softly, output, integral, 6.0, 3.402563, 1.0e-2);
+        check(softly, output, integral, 10.0, 1.431215, 1.0e-2);
+        check(softly, output, SPEED, 10.0, 3.028e-2, 1.0e-3);
+        check(softly, output, valve, 11.5, 0.681215, 1.0e-2);
+        check(softly, output, SPEED, 11.5, 3.624e-2, 1.0e-3);
+        softly.assertAll();
     }
 
     /** The power before the step, on the load flow's mechanical power within 1e-4, as upstream's checks have it. */
