@@ -38,7 +38,7 @@ import static org.assertj.core.api.Assertions.within;
  *
  * <p>2026-11-15, upstream's {@code 6346a20c}: 71 of its 132 examples written - since the shunts, the grounds, the open ends, the SVC, the battery, the WT4B - CIGRE DCS2 with it -, the switches
  * the infinite buses on a load, the Bergeron lines and the ZnO arresters; 2026-11-16, {@code 6f83d62b}: 73 of 134, its two rigid
- * bipoles; 78 with the induction motors, 91 with the governors, 95 with OEL1B and V/Hz. Its
+ * bipoles; 78 with the induction motors, 91 with the governors, 95 with OEL1B and V/Hz, 102 with every excitation limiter. Its
  * refusals, the most frequent first: power electronics (VSCs, MMCs, their DC sides), load models
  * (induction motors, constant power), zero-sequence data of lumped lines, excitation limiters,
  * governors but TGOV1, PSS2A.
@@ -76,7 +76,14 @@ class EmtpExampleCoverageTest {
             "createTwoBusNetworkWithIeeeG2",
             "createTwoBusNetworkWithOel1BSumming",
             "createTwoBusNetworkWithOel1BTakeover",
+            "createTwoBusNetworkWithPfVarController(POWER_FACTOR)",
+            "createTwoBusNetworkWithPfVarController(REACTIVE_POWER)",
+            "createTwoBusNetworkWithPfVarControllerAndScl1C",
+            "createTwoBusNetworkWithScl1C(false)",
+            "createTwoBusNetworkWithScl1C(true)",
             "createTwoBusNetworkWithTGov3",
+            "createTwoBusNetworkWithUel2C(false)",
+            "createTwoBusNetworkWithUel2C(true)",
             "createTwoBusNetworkWithVoltsPerHertzLimiter(false)",
             "createTwoBusNetworkWithVoltsPerHertzLimiter(true)",
             "createTwoBusNetworkWithInductionMotor",
