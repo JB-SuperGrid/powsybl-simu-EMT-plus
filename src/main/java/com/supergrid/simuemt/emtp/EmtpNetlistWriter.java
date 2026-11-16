@@ -270,6 +270,11 @@ public final class EmtpNetlistWriter {
                         settings.nominalFrequencyHz())) {
                     devices.addBlock(device.part(), device.lines());
                 }
+            } else if (inService(load) && EmtpConstantPowerLoads.isConstantPower(load)) {
+                for (EmtpSynchronousMachines.Device device : EmtpConstantPowerLoads.load(load, id(load), load.getTerminal().getBusBreakerView().getBus().getId(),
+                        settings)) {
+                    devices.addBlock(device.part(), device.lines());
+                }
             } else if (inService(load)) {
                 writeLoad(devices, load, settings);
             }
@@ -1061,13 +1066,17 @@ public final class EmtpNetlistWriter {
             if (load.getExtension(LoadModel.class) instanceof InfiniteBusLoadModel || EmtpInductionMotors.isMotor(load)) {
                 continue;
             }
-            if (load.getExtension(LoadModel.class) != null) {
+            if (EmtpConstantPowerLoads.isConstantPower(load)) {
+                if (inService(load)) {
+                    EmtpConstantPowerLoads.unsupportedReasons(load).forEach(reason -> reasons.add("load '" + load.getId() + "': " + reason));
+                }
+            } else if (load.getExtension(LoadModel.class) != null) {
                 reasons.add("load '" + load.getId() + "' has a load model, " + load.getExtension(LoadModel.class).getClass().getSimpleName());
             } else if (LoadBranches.isDelta(load) || load.getQ0() < 0.0) {
                 reasons.add("load '" + load.getId() + "' is delta-connected or capacitive");
             }
         }
-        for (Generator generator : network.getGenerators()) {
+        for (Generator generator : network.getGeneratorStream().filter(EmtpNetlistWriter::inService).toList()) {
             if (EmtpWindTurbines.isWindTurbine(generator)) {
                 List<String> turbineReasons = EmtpWindTurbines.unsupportedReasons(generator);
                 if (!turbineReasons.isEmpty()) {
