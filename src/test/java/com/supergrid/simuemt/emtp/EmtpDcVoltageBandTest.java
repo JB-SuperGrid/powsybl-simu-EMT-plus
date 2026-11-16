@@ -120,15 +120,13 @@ class EmtpDcVoltageBandTest {
     /**
      * {@code PscadProDcVoltageBandTest#anMmcRestartsOnlyWithItsCapacitorWithinItsBand}: the three-terminal all-droop MMC grid, its returns
      * solidly earthed, every station protected and restarting as above, one blocked at 0.3 s, run 1.5 s - no ATP run of it: PSCAD
-     * Professional's. VSC2 lost: VSC1 and VSC3 on their overvoltage at PSCAD's 0.31696 and 0.31698 s, never restarted though their terminals
-     * are back within the band from 0.4 to 0.7 s, 0.6343 pu at the end. The instants within 2 ms, the ends within 0.02 pu of PSCAD's.
+     * Professional's. VSC2 lost: VSC1 and VSC3 on their overvoltage at PSCAD's 0.31692 and 0.31694 s, never restarted though their terminals
+     * are back within the band from 0.4 to 0.7 s, 0.6353 pu at the end. The instants within 2 ms, the ends within 0.02 pu of PSCAD's.
      *
-     * <p>Run 2026-11-16: blocked at 0.31692 s both, 40 and 60 us before PSCAD's, 0.6276 pu at the end. Not the rectifier VSC1 lost: there
-     * EMTP's blocked VSC1 holds its capacitor's charge, the grid dipping 2% under the others' droop, nothing tripped, where PSCAD's draws 4
-     * pu from the DC grid at once and the others trip on their undervoltage - left out until upstream's PSCAD backend is looked into.
+     * <p>Run 2026-11-16: blocked at 0.31692 s both, PSCAD's within 20 us, 0.6276 pu at the end.
      */
     @ParameterizedTest(name = "{0} blocked")
-    @CsvSource({"vsc2, VSC1, 0.31696, VSC3, 0.31698, 0.6343, true"})
+    @CsvSource({"vsc2, VSC1, 0.31692, VSC3, 0.31694, 0.6353, true"})
     @Tag("emtp")
     void aSolidlyEarthedMmcRestartsOnlyWithItsCapacitorWithinItsBand(String lost, String first, double firstAt, String second, double secondAt, double pscadEnd,
                                                                     boolean backWithin) {
@@ -147,6 +145,28 @@ class EmtpDcVoltageBandTest {
             double end = output.mean(vdc(ids[k]), 1.4, 1.5);
             System.out.printf(Locale.ROOT, "%s DC voltage %.4f at the end (PSCAD %.4f)%n", ids[k], end, pscadEnd);
             softly.assertThat(end).as("%s DC voltage at the end, pu, against PSCAD's", ids[k]).isCloseTo(pscadEnd, within(0.02));
+        }
+        softly.assertAll();
+    }
+
+    /**
+     * The same grid, the rectifier VSC1 lost: blocked, it holds its capacitor's charge, the others take its place on their droops -
+     * nothing trips, VSC2's and VSC3's DC voltages at the end on PSCAD Professional's 0.9803 and 0.9831 pu within 2e-3 ({@code
+     * PscadProDcVoltageBandTest#anMmcBlockedHoldsItsCapacitorsCharge}). Run 2026-11-16: 0.9803 and 0.9831.
+     */
+    @Test
+    @Tag("emtp")
+    void aSolidlyEarthedMmcBlockedHoldsItsCapacitorsCharge() {
+        EmtpOutput output = run(protectedBench("vsc-three-terminal-all-droop-mmc", new AutomaticRestart(0.5, 0.02, 0.1, 2)), "band-mmc3-vsc1",
+                "converter-blocking-vsc1-0.3", 1.5);
+        SoftAssertions softly = new SoftAssertions();
+        String[] ids = {"VSC2", "VSC3"};
+        double[] pscad = {0.9803, 0.9831};
+        for (int k = 0; k < 2; k++) {
+            softly.assertThat(output.firstTimeBelow(run(ids[k]), 0.5, 0.1)).as("%s blocked: never", ids[k]).isNaN();
+            double end = output.mean(vdc(ids[k]), 1.4, 1.5);
+            System.out.printf(Locale.ROOT, "%s DC voltage %.4f at the end (PSCAD %.4f)%n", ids[k], end, pscad[k]);
+            softly.assertThat(end).as("%s DC voltage at the end, pu, against PSCAD's", ids[k]).isCloseTo(pscad[k], within(0.002));
         }
         softly.assertAll();
     }
