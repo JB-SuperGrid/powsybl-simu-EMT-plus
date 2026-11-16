@@ -145,14 +145,16 @@ class PscadProDcVoltageBandTest {
      * 1.05 pu, {@code AutomaticRestart(0.5, 0.02, 0.1, 2)}, one station blocked at 0.3 s, run 1.5 s. The inverter VSC2 lost: VSC1 and
      * VSC3 trip on their overvoltage; their DC terminals bleed back through the band - within it from 0.4 to 0.7 s, long enough for a
      * restart on the terminal alone - but their capacitors, behind their diodes, stay at the limit they tripped on: none restarts, the DC
-     * voltage some 0.63 pu at the end. The rectifier VSC1 lost: VSC2 and VSC3 trip on their undervoltage, the terminals never back
-     * within the band, some 0.48 pu at the end. No ATP here: the instants and the ends are PSCAD's, held for EMTP's to be compared.
+     * voltage some 0.63 pu at the end. No ATP here: EMTP's ({@code EmtpDcVoltageBandTest}) is on PSCAD's within 60 us and 7e-3 pu.
      *
-     * <p>Run 2026-11-16, 160 s the two: VSC2 lost, VSC1 and VSC3 blocked at 0.31696 and 0.31698 s, 0.6343 pu over the last 0.1 s;
-     * VSC1 lost, VSC2 and VSC3 at 0.30640 and 0.30968 s, 0.4837 pu.
+     * <p>Run 2026-11-16, 80 s: VSC1 and VSC3 blocked at 0.31696 and 0.31698 s, 0.6343 pu over the last 0.1 s.
+     *
+     * <p>Not the rectifier VSC1 lost: there PSCAD's blocked VSC1 draws 4 pu from the DC grid at once, its terminal down to 0.65 pu within
+     * 2 ms, its AC power nil - its capacitor behind its diode discharged by something -, and the others trip on their undervoltage;
+     * EMTP's holds its charge, the grid dipping 2% under the others' droop. To be investigated in upstream's PSCAD backend.
      */
     @ParameterizedTest(name = "{0} blocked")
-    @CsvSource({"VSC2, VSC1, VSC3, true, 0.60, 0.65", "VSC1, VSC2, VSC3, false, 0.45, 0.52"})
+    @CsvSource({"VSC2, VSC1, VSC3, true, 0.60, 0.65"})
     void anMmcRestartsOnlyWithItsCapacitorWithinItsBand(String lost, String first, String second, boolean overvoltage, double endMin, double endMax,
                                                         @TempDir Path tempDir) {
         Network network = bench("vsc-three-terminal-all-droop-mmc");
