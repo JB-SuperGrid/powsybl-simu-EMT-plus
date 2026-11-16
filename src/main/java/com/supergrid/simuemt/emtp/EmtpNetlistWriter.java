@@ -49,6 +49,7 @@ import com.powsybl.simuemt.extensions.event.DcFault;
 import com.powsybl.simuemt.extensions.event.DcSwitchOperation;
 import com.powsybl.simuemt.extensions.event.EmtEvent;
 import com.powsybl.simuemt.extensions.event.FaultClearing;
+import com.powsybl.simuemt.extensions.event.PowerReferenceStep;
 import com.powsybl.simuemt.extensions.event.SwitchOperation;
 import com.powsybl.simuemt.extensions.infinitebus.InfiniteBusEmf;
 import com.powsybl.simuemt.extensions.infinitebus.InfiniteBusGeneratorModel;
@@ -174,6 +175,15 @@ public final class EmtpNetlistWriter {
                 }
                 continue;
             }
+            if (event instanceof PowerReferenceStep step) {
+                Generator stepped = network.getGenerator(step.generatorId());
+                if (stepped == null || !EmtpSynchronousMachines.isMachine(stepped) || EmtpSynchronousMachines.governor(stepped) == null) {
+                    refused.add("generator '" + step.generatorId() + "''s power reference is stepped, but it is no machine under a governor written");
+                } else if (events.stream().filter(e -> e instanceof PowerReferenceStep p && p.generatorId().equals(step.generatorId())).count() > 1) {
+                    refused.add("generator '" + step.generatorId() + "''s power reference is stepped more than once");
+                }
+                continue;
+            }
             if (!(event instanceof BusFault fault)) {
                 refused.add("event " + event.getClass().getSimpleName() + " is of a kind not written yet");
             } else if (network.getBusBreakerView().getBus(fault.busId()) == null) {
@@ -253,7 +263,9 @@ public final class EmtpNetlistWriter {
                 Bus bus = generator.getTerminal().getBusBreakerView().getBus();
                 devices.addBlock("_SM", EmtpSynchronousMachines.lines(generator, id(generator), phaseNodes(bus.getId()),
                         VectorGroupOffsets.of(network).degrees(bus), settings));
-                for (EmtpSynchronousMachines.Device control : EmtpSynchronousMachines.controls(generator, id(generator))) {
+                PowerReferenceStep step = events.stream().filter(e -> e instanceof PowerReferenceStep p && p.generatorId().equals(generator.getId()))
+                        .map(PowerReferenceStep.class::cast).findFirst().orElse(null);
+                for (EmtpSynchronousMachines.Device control : EmtpSynchronousMachines.controls(generator, id(generator), step, settings.timeStepSeconds())) {
                     devices.addBlock(control.part(), control.lines());
                 }
             } else {
