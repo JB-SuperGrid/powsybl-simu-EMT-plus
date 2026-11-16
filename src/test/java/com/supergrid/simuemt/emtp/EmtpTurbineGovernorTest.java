@@ -37,7 +37,7 @@ import static org.assertj.core.api.Assertions.within;
  * its example's machine islanded on its load: held to upstream's Xyce checks ({@code XyceSolverIntegrationTest}), which ATP and
  * Kestrel are held to as well. The step at 0.5 s, run 12 s; each kept in {@code target/emtp/governor-<name>}.
  *
- * <p>Run 2026-11-16: every value within 6.3e-5 of Xyce's (GovSteam1's valve as it crosses its gap), lot 1's within 1.1e-5 - HYGOV's 27 within 3.8e-6, IEEEG2's power at 3 s 4.9e-5 under the check's
+ * <p>Run 2026-11-16: lot 3 (GoverNordic, GovSteamEU, GovCT2 with and without its engine's delay) within 2.1e-5 of Xyce's; lot 2 every value within 6.3e-5 of Xyce's (GovSteam1's valve as it crosses its gap), lot 1's within 1.1e-5 - HYGOV's 27 within 3.8e-6, IEEEG2's power at 3 s 4.9e-5 under the check's
  * rounded 1.0172, Xyce's own 1.017155 within 4e-6; before the step, every bus on its load flow within 8.3e-6 pu.
  *
  * @author Jean-Baptiste Heyberger : jean-baptiste.heyberger@supergrid-institute.com
@@ -271,6 +271,88 @@ class EmtpTurbineGovernorTest {
         check(softly, output, SPEED, 10.0, 3.028e-2, 1.0e-3);
         check(softly, output, valve, 11.5, 0.681215, 1.0e-2);
         check(softly, output, SPEED, 11.5, 3.624e-2, 1.0e-3);
+        softly.assertAll();
+    }
+
+    /**
+     * {@code XyceSolverIntegrationTest#aGoverNordicAnswersAPowerStepTheWrongWayFirst}, run 20 s: the gate at rest before on the load flow's
+     * 0.838 of the turbine; the power 1.00505 at 0.8 s, down first, and 1.00702 at 3 s; the gate 0.83918 at 2 s; the speed 4.0704e-4 pu
+     * at 10 s and 4.151e-4 at 19.5 s.
+     */
+    @Test
+    @Tag("emtp")
+    void aGoverNordicAnswersAPowerStepTheWrongWayFirst() {
+        Network network = ExampleNetworks.withLoadFlow(ExampleNetworks.createTwoBusNetworkWithGoverNordic());
+        EmtpOutput output = EmtpRunner.run(EmtpNetlistWriter.write(network, Path.of("target", "emtp", "governor-governordic"), new EmtpSimulationSettings(TIME_STEP,
+                20.0, FREQUENCY), List.of(new PowerReferenceStep("GEN", STEP, 0.01))), EmtpSettings.defaults()).output();
+        String gate = "control:GEN_GNV";
+        SoftAssertions softly = new SoftAssertions();
+        before(softly, output);
+        softly.assertThat(output.mean(gate, 0.3, 0.5)).as("the gate before the step").isCloseTo(pm0(network) / 1.2, within(2.0e-5));
+        check(softly, output, POWER, 0.8, 1.00505, 1.5e-4);
+        check(softly, output, POWER, 3.0, 1.00702, 3.0e-4);
+        check(softly, output, gate, 2.0, 0.83918, 1.0e-4);
+        check(softly, output, SPEED, 10.0, 4.0704e-4, 2.0e-5);
+        check(softly, output, SPEED, 19.5, 4.151e-4, 2.0e-5);
+        softly.assertAll();
+    }
+
+    /**
+     * {@code XyceSolverIntegrationTest#aGovSteamEuAnswersAPowerStep}: the control valves at rest before on {@code Pm0 / 1.2}; 0.845873
+     * at 1 s; the power 1.009831 at 3 s; the speed 4.97e-4 pu at 11.5 s.
+     */
+    @Test
+    @Tag("emtp")
+    void aGovSteamEuAnswersAPowerStep() {
+        Network network = ExampleNetworks.withLoadFlow(ExampleNetworks.createTwoBusNetworkWithGovSteamEu());
+        EmtpOutput output = run("govsteameu", ExampleNetworks::createTwoBusNetworkWithGovSteamEu, 0.01);
+        String valves = "control:GEN_EUCV";
+        SoftAssertions softly = new SoftAssertions();
+        before(softly, output);
+        softly.assertThat(output.mean(valves, 0.3, 0.5)).as("the control valves before the step").isCloseTo(pm0(network) / 1.2, within(2.0e-4));
+        check(softly, output, valves, 1.0, 0.845873, 5.0e-4);
+        check(softly, output, POWER, 3.0, 1.009831, 5.0e-4);
+        check(softly, output, SPEED, 11.5, 4.97e-4, 2.0e-5);
+        softly.assertAll();
+    }
+
+    /**
+     * {@code XyceSolverIntegrationTest#aGovCt2AnswersAPowerStepThroughItsSpeedGovernor}, a step of 0.001: the valve, the exhaust temperature
+     * and the filtered power at rest before; 0.5 s after the step the valve 0.720044 and the power 1.011063; at 11.5 s the valve 0.718008,
+     * the exhaust temperature 0.717172, the speed 1.026e-3 pu.
+     */
+    @Test
+    @Tag("emtp")
+    void aGovCt2AnswersAPowerStepThroughItsSpeedGovernor() {
+        EmtpOutput output = run("govct2", ExampleNetworks::createTwoBusNetworkWithGovCt2, 0.001);
+        String valve = "control:GEN_GCVO";
+        SoftAssertions softly = new SoftAssertions();
+        before(softly, output);
+        check(softly, output, valve, 1.0, 0.720044, 1.0e-4);
+        check(softly, output, POWER, 1.0, 1.011063, 2.0e-4);
+        check(softly, output, valve, 11.5, 0.718008, 1.0e-4);
+        check(softly, output, "control:GEN_GCTEX", 11.5, 0.717172, 1.0e-4);
+        check(softly, output, SPEED, 11.5, 1.026e-3, 2.0e-5);
+        softly.assertAll();
+    }
+
+    /**
+     * {@code XyceSolverIntegrationTest#aGovCt2EngineDelaysTheTurbinesAnswer}: the engine delaying the fuel by 0.25 s - the valve 0.71803
+     * 0.1 s after the step, the power not moving until the delay has gone by, then 1.0073 at 0.9 s, 1.01256 at 1.5 s, 1.01276 at 2 s; the
+     * speed 1.027e-3 pu at 11.5 s.
+     */
+    @Test
+    @Tag("emtp")
+    void aGovCt2EngineDelaysTheTurbinesAnswer() {
+        EmtpOutput output = run("govct2-delayed", ExampleNetworks::createTwoBusNetworkWithDelayedGovCt2, 0.001);
+        SoftAssertions softly = new SoftAssertions();
+        before(softly, output);
+        check(softly, output, "control:GEN_GCVO", 0.6, 0.71803, 1.0e-4);
+        softly.assertThat(output.mean(POWER, 0.5, 0.745)).as("the power until the delay has gone by").isCloseTo(output.mean(POWER, 0.3, 0.5), within(2.0e-5));
+        check(softly, output, POWER, 0.9, 1.0073, 2.0e-4);
+        check(softly, output, POWER, 1.5, 1.01256, 2.0e-4);
+        check(softly, output, POWER, 2.0, 1.01276, 2.0e-4);
+        check(softly, output, SPEED, 11.5, 1.027e-3, 2.0e-5);
         softly.assertAll();
     }
 

@@ -9,9 +9,12 @@ import com.powsybl.simuemt.extensions.circuit.NumericalAids;
 import com.powsybl.simuemt.extensions.event.FastValving;
 import com.powsybl.simuemt.extensions.event.PowerReferenceStep;
 import com.powsybl.simuemt.extensions.governor.GastModel;
+import com.powsybl.simuemt.extensions.governor.GovCt2Model;
 import com.powsybl.simuemt.extensions.governor.GovHydro4Model;
 import com.powsybl.simuemt.extensions.governor.GovSteam1Model;
+import com.powsybl.simuemt.extensions.governor.GovSteamEuModel;
 import com.powsybl.simuemt.extensions.governor.GoverDtrI8Model;
+import com.powsybl.simuemt.extensions.governor.GoverNordicModel;
 import com.powsybl.simuemt.extensions.governor.GoverProportionalModel;
 import com.powsybl.simuemt.extensions.governor.HygovInitialState;
 import com.powsybl.simuemt.extensions.governor.HygovModel;
@@ -59,15 +62,22 @@ final class EmtpTurbineGovernors {
     static boolean isWritten(TurbineGovernorModel governor) {
         return governor instanceof Tgov1Model || governor instanceof GastModel || governor instanceof IeeeG2Model || governor instanceof GoverDtrI8Model
                 || governor instanceof GoverProportionalModel || governor instanceof HygovModel || governor instanceof IeeeG1Model
-                || governor instanceof GovSteam1Model || governor instanceof GovHydro4Model || governor instanceof TGov3Model;
+                || governor instanceof GovSteam1Model || governor instanceof GovHydro4Model || governor instanceof TGov3Model
+                || readsElectricalPower(governor);
+    }
+
+    /** Whether {@code governor} reads the machine's electrical power: GoverNordic, GovSteamEU and GovCT2. */
+    static boolean readsElectricalPower(TurbineGovernorModel governor) {
+        return governor instanceof GoverNordicModel || governor instanceof GovSteamEuModel || governor instanceof GovCt2Model;
     }
 
     /**
      * The governor's devices, from {@code deviation} - the machine's speed deviation - to {@code massPower}, the machine's mass's power
-     * control signal; {@code step}, if any, stepping its reference; {@code fastValving}, if any, closing a TGOV3's intercept valve.
+     * control signal; {@code electricalPower} the machine's, per unit, for one that reads it; {@code step}, if any, stepping its
+     * reference; {@code fastValving}, if any, closing a TGOV3's intercept valve.
      */
-    static List<Device> devices(Generator generator, TurbineGovernorModel governor, String name, String deviation, String massPower, double pm0,
-                                PowerReferenceStep step, FastValving fastValving, double timeStepSeconds) {
+    static List<Device> devices(Generator generator, TurbineGovernorModel governor, String name, String deviation, String electricalPower, String massPower,
+                                double pm0, PowerReferenceStep step, FastValving fastValving, double frequencyHz, double timeStepSeconds) {
         String stepped = step == null ? "" : "+" + number(step.deltaPu()) + "*" + EmtpVoltageSourceConverters.step("t-("
                 + number(NumericalAids.switchingInstant(step.timeSeconds(), timeStepSeconds)) + ")");
         List<Device> devices = new ArrayList<>();
@@ -136,6 +146,12 @@ final class EmtpTurbineGovernors {
             devices.addAll(govHydro4(generator, govHydro4, name, deviation, massPower, pm0, stepped));
         } else if (governor instanceof TGov3Model tgov3) {
             devices.addAll(tgov3(generator, tgov3, name, deviation, massPower, pm0, stepped, fastValving, timeStepSeconds));
+        } else if (governor instanceof GoverNordicModel nordic) {
+            devices.addAll(goverNordic(generator, nordic, name, deviation, electricalPower, massPower, pm0, stepped));
+        } else if (governor instanceof GovSteamEuModel eu) {
+            devices.addAll(govSteamEu(generator, eu, name, deviation, electricalPower, massPower, pm0, stepped));
+        } else if (governor instanceof GovCt2Model ct2) {
+            devices.addAll(govCt2(generator, ct2, name, deviation, electricalPower, massPower, pm0, stepped, frequencyHz, timeStepSeconds));
         }
         return devices;
     }
@@ -322,6 +338,272 @@ final class EmtpTurbineGovernors {
         devices.add(EmtpVoltageSourceConverters.scoped(function(name + "_PM", massPower, List.of(steamBowl, outflow, crossover), pm0,
                 number(tgov3.getSteamBowlFraction()) + "*u[1]+" + number(tgov3.getReheaterFraction()) + "*u[2]+" + number(tgov3.getCrossoverFraction()) + "*u[3]")));
         return devices;
+    }
+
+    /**
+     * GoverNordic, on the turbine's rating: the terminal's power through its lag; the PI's integral on {@code -dw + droop (Pe0 - Pe)};
+     * the gate the integral of its rate, {@code (Kp e + I - g) / Tservo} within the gate's rate, stopped at its limits; HYGOV's water
+     * column at a head of 1; {@code Pm = q (q / g)^2} back on the machine's rating.
+     */
+    private static List<Device> goverNordic(Generator generator, GoverNordicModel nordic, String name, String deviation, String electricalPower, String massPower,
+                                            double pm0, String stepped) {
+        double toTurbine = nordic.toTurbineRating(generator);
+        double turbine0 = nordic.initialTurbinePower(generator, pm0);
+        double pe0 = toTurbine * GovCt2Model.loadFlowElectricalPower(generator);
+        List<Device> devices = new ArrayList<>();
+        String power = name + "_GNPE";
+        devices.add(firstOrder(name + "_GNPE", power, electricalPower, pe0, toTurbine, 1.0, 0.0, GoverNordicModel.POWER_TIME_CONSTANT));
+        String error = name + "_GNE";
+        devices.add(function(name + "_GNE", error, List.of(deviation, power), 0.0, "-u[1]+" + number(nordic.getDroop()) + "*(" + number(pe0) + stepped + "-u[2])"));
+        String integral = name + "_GNI";
+        devices.add(integrator(name + "_GNI", integral, error, turbine0, nordic.getIntegralGain()));
+        String gate = name + "_GNGO";
+        devices.add(function(name + "_GNRE", name + "_GNRE", List.of(error, integral, gate), 0.0, "(" + number(nordic.getProportionalGain()) + "*u[1]+u[2]-u[3])/"
+                + number(GoverNordicModel.SERVO_TIME_CONSTANT)));
+        devices.add(clamp(name + "_GNRR", name + "_GNRR", name + "_GNRE", -GoverNordicModel.GATE_RATE_MAX, GoverNordicModel.GATE_RATE_MAX));
+        devices.addAll(EmtpSynchronousMachines.limitedPi(name + "_GNG", gate, name + "_GNRR", 0.0, 1.0, GoverNordicModel.GATE_MIN, GoverNordicModel.GATE_MAX,
+                turbine0, turbine0));
+        devices.add(EmtpVoltageSourceConverters.scoped(function(name + "_GNV", name + "_GNV", List.of(gate), turbine0, "u[1]")));
+        String flow = name + "_GNQ";
+        String ratio = name + "_GNH";
+        String floor = number(HygovModel.GATE_FLOOR);
+        devices.add(function(name + "_GNH", ratio, List.of(flow, gate), 1.0, "u[1]/(0.5*(u[2]+" + floor + "+ABS(u[2]-" + floor + ")))"));
+        devices.add(function(name + "_GNW", name + "_GNW", List.of(ratio), 0.0, "1-u[1]*u[1]"));
+        devices.add(EmtpVoltageSourceConverters.scoped(integrator(name + "_GNQ", flow, name + "_GNW", turbine0, 1.0)));
+        devices.add(EmtpVoltageSourceConverters.scoped(function(name + "_PM", massPower, List.of(flow, ratio), pm0, "u[1]*u[2]*u[2]/" + number(toTurbine))));
+        return devices;
+    }
+
+    /**
+     * GovSteamEU, on the turbine's rating: the frequency's and the speed's lags and dead zones, their corrections within their limits;
+     * the setpoint {@code Pe0 + correction}; the power controller's PID on the terminal's lagged power - its integral stopped at its
+     * limits, its derivative a lag's difference - through the transducer's lag; the demand within {@code [0, PMax]} and under the
+     * emergency control; the control and intercept valves the integrals of their rate-limited errors, stopped at their limits; the boiler
+     * a plain integral, its demand carrying the load flow's losses; the high-pressure stage's lag, the reheater's integral, the
+     * low-pressure stage's lag ({@link GovSteamEuModel#initialState}).
+     */
+    private static List<Device> govSteamEu(Generator generator, GovSteamEuModel eu, String name, String deviation, String electricalPower, String massPower,
+                                           double pm0, String stepped) {
+        double toTurbine = eu.toTurbineRating(generator);
+        GovSteamEuModel.InitialState initial = eu.initialState(generator, pm0, GovCt2Model.loadFlowElectricalPower(generator));
+        double steam0 = initial.mechanicalPower();
+        List<Device> devices = new ArrayList<>();
+        String speed = name + "_EUSP";
+        devices.add(function(name + "_EUSP", speed, List.of(deviation), 1.0, "1+u[1]"));
+        String frequency = name + "_EUF";
+        devices.add(firstOrder(name + "_EUF", frequency, speed, 1.0, 1.0, 1.0, 0.0, eu.simulatedFrequencyTimeConstant()));
+        String correction = name + "_EUFC";
+        devices.add(function(name + "_EUFG", name + "_EUFG", List.of(frequency), 0.0, number(eu.getFrequencyCorrectionGain()) + "*(" + deadZone("1-u[1]",
+                eu.getFrequencyDeadband()) + ")"));
+        devices.add(clamp(name + "_EUFC", correction, name + "_EUFG", eu.getFrequencyCorrectionMin(), eu.getFrequencyCorrectionMax()));
+        String setpoint = name + "_EUPS";
+        devices.add(function(name + "_EUPS", setpoint, List.of(correction), initial.electricalPower(), number(initial.electricalPower()) + stepped + "+u[1]"));
+        String power = name + "_EUPE";
+        devices.add(firstOrder(name + "_EUPE", power, electricalPower, initial.electricalPower(), toTurbine, 1.0, 0.0, eu.getPowerTimeConstant()));
+        String error = name + "_EUE";
+        devices.add(function(name + "_EUE", error, List.of(setpoint, power), 0.0, "u[1]-u[2]"));
+        String integral = name + "_EUIO";
+        devices.addAll(EmtpSynchronousMachines.limitedPi(name + "_EUI", integral, error, 0.0, 1.0 / eu.getIntegralTimeConstant(), 0.0, eu.getPowerMax(), steam0,
+                steam0));
+        List<String> controllerInputs = new ArrayList<>(List.of(error, integral));
+        String controller = number(eu.getProportionalGain()) + "*u[1]+u[2]";
+        if (eu.getDerivativeGain() > 0.0) {
+            devices.add(firstOrder(name + "_EUD", name + "_EUD", error, 0.0, 1.0, 1.0, 0.0, eu.simulatedDerivativeTimeConstant()));
+            controllerInputs.add(name + "_EUD");
+            controller += "+" + number(eu.getDerivativeGain() / eu.simulatedDerivativeTimeConstant()) + "*(u[1]-u[3])";
+        }
+        devices.add(function(name + "_EUPU", name + "_EUPU", controllerInputs, steam0, controller));
+        String powerControl = name + "_EUPC";
+        devices.add(firstOrder(name + "_EUPC", powerControl, name + "_EUPU", steam0, 1.0, 1.0, 0.0, eu.getTransducerTimeConstant()));
+        String filteredSpeed = name + "_EUW";
+        devices.add(firstOrder(name + "_EUW", filteredSpeed, speed, 1.0, 1.0, 1.0, 0.0, eu.getSpeedTimeConstant()));
+        devices.add(function(name + "_EUWG", name + "_EUWG", List.of(filteredSpeed), 0.0, number(eu.getSpeedCorrectionGain()) + "*(" + deadZone("1-u[1]",
+                eu.getSpeedDeadband()) + ")"));
+        String speedCorrection = name + "_EUWC";
+        devices.add(clamp(name + "_EUWC", speedCorrection, name + "_EUWG", eu.getSpeedCorrectionMin(), eu.getSpeedCorrectionMax()));
+        devices.add(function(name + "_EUEMR", name + "_EUEMR", List.of(filteredSpeed), 1.0, "1-(u[1]-" + number(eu.getEmergencySpeedLow()) + ")/"
+                + number(eu.getEmergencySpeedHigh() - eu.getEmergencySpeedLow())));
+        String emergency = name + "_EUEM";
+        devices.add(clamp(name + "_EUEM", emergency, name + "_EUEMR", 0.0, 1.0));
+        devices.add(function(name + "_EUYS", name + "_EUYS", List.of(powerControl, speedCorrection), steam0, "u[1]+u[2]"));
+        devices.add(clamp(name + "_EUYO", name + "_EUYO", name + "_EUYS", 0.0, eu.getPowerMax()));
+        devices.add(function(name + "_EUYE", name + "_EUYE", List.of(name + "_EUYO", emergency), steam0, min("u[1]", "u[2]")));
+        String demand = name + "_EUY";
+        devices.add(clamp(name + "_EUY", demand, name + "_EUYE", 0.0, eu.getPowerMax()));
+        String controlValves = name + "_EUCO";
+        devices.add(function(name + "_EUCE", name + "_EUCE", List.of(demand, controlValves), 0.0, "(u[1]-u[2])/" + number(eu.getControlValveTimeConstant())));
+        devices.add(clamp(name + "_EUCR", name + "_EUCR", name + "_EUCE", eu.getControlValveClosingRate(), eu.getControlValveOpeningRate()));
+        devices.addAll(EmtpSynchronousMachines.limitedPi(name + "_EUC", controlValves, name + "_EUCR", 0.0, 1.0, 0.0, eu.getControlValveMax(), steam0, steam0));
+        devices.add(EmtpVoltageSourceConverters.scoped(function(name + "_EUCV", name + "_EUCV", List.of(controlValves), steam0, "u[1]")));
+        String interceptValves = name + "_EUVO";
+        devices.add(function(name + "_EUVE", name + "_EUVE", List.of(demand, interceptValves), 0.0, "(" + min("u[1]/" + number(eu.getInterceptValveTransfer()), "1")
+                + "-u[2])/" + number(eu.getInterceptValveTimeConstant())));
+        devices.add(clamp(name + "_EUVR", name + "_EUVR", name + "_EUVE", eu.getInterceptValveClosingRate(), eu.getInterceptValveOpeningRate()));
+        devices.addAll(EmtpSynchronousMachines.limitedPi(name + "_EUV", interceptValves, name + "_EUVR", 0.0, 1.0, 0.0, 1.0, initial.interceptValve(),
+                initial.interceptValve()));
+        String boiler = name + "_EUB";
+        String steam = name + "_EUST";
+        devices.add(function(name + "_EUST", steam, List.of(boiler, controlValves), steam0, "u[1]*u[2]"));
+        devices.add(function(name + "_EUBU", name + "_EUBU", List.of(setpoint, emergency, steam), 0.0, min("u[1]+" + number(steam0 - initial.electricalPower()),
+                "u[2]") + "-u[3]"));
+        devices.add(integrator(name + "_EUB", boiler, name + "_EUBU", 1.0, 1.0 / eu.getBoilerTimeConstant()));
+        String highPressure = name + "_EUHP";
+        devices.add(firstOrder(name + "_EUHP", highPressure, steam, steam0, 1.0, 1.0, 0.0, eu.getHighPressureTimeConstant()));
+        String reheater = name + "_EURO";
+        String reheaterFlow = name + "_EURF";
+        devices.add(function(name + "_EURU", name + "_EURU", List.of(highPressure, reheaterFlow), 0.0, "u[1]-u[2]"));
+        devices.addAll(EmtpSynchronousMachines.limitedPi(name + "_EUR", reheater, name + "_EURU", 0.0, 1.0 / eu.getReheaterTimeConstant(), 0.0, eu.getReheaterMax(),
+                initial.reheater(), initial.reheater()));
+        devices.add(function(name + "_EURF", reheaterFlow, List.of(reheater, interceptValves), steam0, "u[1]*u[2]"));
+        String lowPressure = name + "_EULP";
+        devices.add(firstOrder(name + "_EULP", lowPressure, reheaterFlow, eu.getLowPressureFraction() * steam0, eu.getLowPressureFraction(), 1.0, 0.0,
+                eu.getLowPressureTimeConstant()));
+        devices.add(EmtpVoltageSourceConverters.scoped(function(name + "_PM", massPower, List.of(highPressure, lowPressure), pm0, "(" + number(eu.getHighPressureFraction())
+                + "*u[1]+u[2])/" + number(toTurbine))));
+        return devices;
+    }
+
+    /**
+     * GovCT2: the terminal's power through its lag; the power controller's integral; the speed error {@code -dw + PRef + controller - R
+     * droop signal} through its dead zone and limits; the PID, its derivative a lag's difference; the acceleration limiter on the speed's
+     * filtered derivative; the exhaust temperature's lead-lag and lag, the load limiter's PI and its slew rate; the least of the three,
+     * held between {@code ValveMin} and the frequency's power limit and its slew rate; the last value's lag; the actuator's slew rate; the
+     * engine's transport delay ({@code _c_dlydis}, its history the load flow's fuel) and the turbine's lead-lag; {@code Pm} less the speed
+     * sensitivity ({@link GovCt2Model#initialState}).
+     */
+    private static List<Device> govCt2(Generator generator, GovCt2Model ct2, String name, String deviation, String electricalPower, String massPower,
+                                       double pm0, String stepped, double frequencyHz, double timeStepSeconds) {
+        double pe0 = GovCt2Model.loadFlowElectricalPower(generator);
+        GovCt2Model.InitialState initial = ct2.initialState(generator, pm0, pe0, frequencyHz);
+        List<Device> devices = new ArrayList<>();
+        String pef = name + "_GCF";
+        devices.add(EmtpVoltageSourceConverters.scoped(firstOrder(name + "_GCF", pef, electricalPower, pe0, 1.0, 1.0, 0.0, ct2.getElectricalPowerTimeConstant())));
+        String valve = name + "_GCVO";
+        String last = name + "_GCL";
+        List<String> errorInputs = new ArrayList<>(List.of(deviation));
+        StringBuilder error = new StringBuilder("-u[1]+" + number(initial.reference()) + stepped);
+        if (ct2.getPowerControllerGain() != 0.0) {
+            devices.add(function(name + "_GCME", name + "_GCME", List.of(pef), 0.0, number(pe0) + "-u[1]"));
+            double limit = GovCt2Model.POWER_CONTROLLER_LIMIT * ct2.getDroop();
+            devices.addAll(EmtpSynchronousMachines.limitedPi(name + "_GCM", name + "_GCMO", name + "_GCME", 0.0, ct2.getPowerControllerGain(), -limit, limit, 0.0, 0.0));
+            errorInputs.add(name + "_GCMO");
+            error.append("+u[").append(errorInputs.size()).append(']');
+        }
+        String selected = switch (ct2.getDroopSignal()) {
+            case ISOCHRONOUS -> null;
+            case ELECTRICAL_POWER -> pef;
+            case VALVE_STROKE -> valve;
+            case GOVERNOR_OUTPUT -> last;
+        };
+        if (selected != null) {
+            errorInputs.add(selected);
+            error.append("-").append(number(ct2.getDroop())).append("*u[").append(errorInputs.size()).append(']');
+        }
+        devices.add(function(name + "_GCE", name + "_GCE", errorInputs, 0.0, error.toString()));
+        String banded = name + "_GCE";
+        if (ct2.getSpeedDeadband() > 0.0) {
+            banded = name + "_GCDZ";
+            devices.add(function(name + "_GCDZ", banded, List.of(name + "_GCE"), 0.0, deadZone("u[1]", ct2.getSpeedDeadband())));
+        }
+        String limitedError = name + "_GCEE";
+        devices.add(clamp(name + "_GCEE", limitedError, banded, ct2.getSpeedErrorMin(), ct2.getSpeedErrorMax()));
+        String integral = name + "_GCI";
+        devices.add(integrator(name + "_GCI", integral, limitedError, initial.valve(), ct2.getIntegralGain()));
+        List<String> pidInputs = new ArrayList<>(List.of(limitedError, integral));
+        String pid = number(ct2.getProportionalGain()) + "*u[1]+u[2]";
+        if (ct2.getDerivativeGain() != 0.0) {
+            devices.add(firstOrder(name + "_GCKD", name + "_GCKD", limitedError, 0.0, 1.0, 1.0, 0.0, ct2.getDerivativeTimeConstant()));
+            pidInputs.add(name + "_GCKD");
+            pid += "+" + number(ct2.getDerivativeGain() / ct2.getDerivativeTimeConstant()) + "*(u[1]-u[3])";
+        }
+        String governor = name + "_GCN";
+        devices.add(function(name + "_GCN", governor, pidInputs, initial.valve(), pid));
+        devices.add(firstOrder(name + "_GCAL", name + "_GCAL", deviation, 0.0, 1.0, 1.0, 0.0, ct2.getAccelerationTimeConstant()));
+        String acceleration = name + "_GCA";
+        devices.add(function(name + "_GCA", acceleration, List.of(deviation, name + "_GCAL", last), 0.0, number(ct2.getAccelerationGain() * ct2.getAccelerationGainTime())
+                + "*(" + number(ct2.getAccelerationSetpoint()) + "-(u[1]-u[2])/" + number(ct2.getAccelerationTimeConstant()) + ")+u[3]"));
+        String exhaust = valve;
+        if (ct2.isSpeedDependentFuel() || ct2.getSpeedSensitivity() < 0.0) {
+            exhaust = name + "_GCU";
+            String speed = "(1+u[2])";
+            devices.add(function(name + "_GCU", exhaust, List.of(valve, deviation), initial.exhaustTemperature(), "u[1]" + (ct2.isSpeedDependentFuel() ? "*" + speed : "")
+                    + (ct2.getSpeedSensitivity() < 0.0 ? "*EXP(" + number(ct2.getSpeedSensitivity()) + "*LOG(" + speed + "))" : "")));
+        }
+        devices.add(firstOrder(name + "_GCTS", name + "_GCTS", exhaust, initial.exhaustTemperature(), 1.0, 1.0, ct2.getTemperatureLeadTimeConstant(),
+                ct2.getTemperatureLagTimeConstant()));
+        String temperature = name + "_GCTEX";
+        devices.add(EmtpVoltageSourceConverters.scoped(firstOrder(name + "_GCTEX", temperature, name + "_GCTS", initial.exhaustTemperature(), 1.0, 1.0, 0.0,
+                ct2.getLoadLimitTimeConstant())));
+        double temperatureLimit = ct2.getNoLoadFuelFlow() + ct2.getLoadLimitReference() / ct2.getTurbineGain();
+        double excess0 = temperatureLimit - initial.exhaustTemperature();
+        devices.add(function(name + "_GCX", name + "_GCX", List.of(temperature), excess0, number(temperatureLimit) + "-u[1]"));
+        devices.add(integrator(name + "_GCLI", name + "_GCLI", name + "_GCX", GovCt2Model.LOAD_LIMITER_INTEGRAL0, ct2.getLoadLimitIntegralGain()));
+        double loadRaw0 = ct2.getLoadLimitProportionalGain() * excess0 + GovCt2Model.LOAD_LIMITER_INTEGRAL0;
+        devices.add(function(name + "_GCLR", name + "_GCLR", List.of(name + "_GCX", name + "_GCLI"), loadRaw0, number(ct2.getLoadLimitProportionalGain())
+                + "*u[1]+u[2]"));
+        String loadLimit = slewRate(devices, name + "_GCLS", name + "_GCLR", loadRaw0, ct2.getRateLimitTimeConstant(), ct2.getLoadLimitRateDown(),
+                ct2.getLoadLimitRateUp(), initial.loadLimit());
+        String lowValue = name + "_GCR";
+        devices.add(function(name + "_GCR", lowValue, List.of(loadLimit, acceleration, governor), initial.valve(), min(min(min("u[1]",
+                number(GovCt2Model.LOAD_LIMIT_MAX)), "u[2]"), "u[3]")));
+        List<GovCt2Model.PowerLimitPoint> points = ct2.powerLimitTable();
+        double[] frequencies = points.stream().mapToDouble(GovCt2Model.PowerLimitPoint::frequencyHz).toArray();
+        double[] slopes = new double[points.size() - 1];
+        for (int k = 0; k < slopes.length; k++) {
+            slopes[k] = ct2.powerLimitSlope(k);
+        }
+        devices.add(function(name + "_GCHZ", name + "_GCHZ", List.of(deviation), frequencyHz, number(frequencyHz) + "*(1+u[1])"));
+        devices.add(characteristic(name + "_GCP", name + "_GCP", name + "_GCHZ", points.get(0).power(), frequencies, slopes, ct2.powerLimit(frequencyHz)));
+        double powerLimit0 = (initial.valveLimit() - ct2.getNoLoadFuelFlow()) * ct2.getTurbineGain();
+        String powerLimit = slewRate(devices, name + "_GCPS", name + "_GCP", ct2.powerLimit(frequencyHz), ct2.getRateLimitTimeConstant(), -ct2.getPowerLimitRate(),
+                ct2.getPowerLimitRate(), powerLimit0);
+        String command = name + "_GCC";
+        devices.add(function(name + "_GCC", command, List.of(lowValue, powerLimit), initial.valve(), min(max("u[1]", number(ct2.getValveMin())),
+                number(ct2.getNoLoadFuelFlow()) + "+u[2]/" + number(ct2.getTurbineGain()))));
+        devices.add(firstOrder(name + "_GCL", last, command, initial.valve(), 1.0, 1.0, 0.0, Math.max(ct2.getLastValueTimeConstant(),
+                NumericalAids.LAST_VALUE_MIN_TIME_CONSTANT)));
+        String actuator = slewRate(devices, name + "_GCV", command, initial.valve(), ct2.getActuatorTimeConstant(), ct2.getValveClosingRate(), ct2.getValveOpeningRate(),
+                initial.valve());
+        devices.add(EmtpVoltageSourceConverters.scoped(function(name + "_GCVO", valve, List.of(actuator), initial.valve(), "u[1]")));
+        String fuel = name + "_GCW";
+        devices.add(function(name + "_GCW", fuel, List.of(valve, deviation), initial.turbinePower(), number(ct2.getTurbineGain()) + "*(u[1]"
+                + (ct2.isSpeedDependentFuel() ? "*(1+u[2])" : "+0*u[2]") + "-" + number(ct2.getNoLoadFuelFlow()) + ")"));
+        if (ct2.getEngineDelay() > 0.0) {
+            // EMTP's discrete delay, its output its input's that many steps before, the load flow's fuel until then.
+            long steps = Math.round(ct2.getEngineDelay() / timeStepSeconds);
+            devices.add(new Device("_c_dlydis", List.of("_c_dlydis;" + name + "_GCWD;2;2;" + name + "_GCWD," + fuel + ",", number(initial.turbinePower()) + ","
+                    + steps + ",S1,")));
+            fuel = name + "_GCWD";
+        }
+        String turbine = name + "_GCB";
+        devices.add(firstOrder(name + "_GCB", turbine, fuel, initial.turbinePower(), 1.0, 1.0, ct2.getTurbineLeadTimeConstant(), ct2.getTurbineLagTimeConstant()));
+        devices.add(EmtpVoltageSourceConverters.scoped(function(name + "_PM", massPower, List.of(turbine, deviation), pm0, "u[1]-"
+                + number(Math.max(ct2.getSpeedSensitivity(), 0.0)) + "*(1+u[2])")));
+        return devices;
+    }
+
+    /** A lag of {@code timeConstant} whose rate stays within {@code [falling, rising]}: the integral of its clamped rate, at {@code initial},
+     * its input at {@code input0}; the signal it gives. */
+    private static String slewRate(List<Device> devices, String device, String input, double input0, double timeConstant, double falling, double rising,
+                                   double initial) {
+        devices.add(function(device + "D", device + "D", List.of(input, device), (input0 - initial) / timeConstant, "(u[1]-u[2])/" + number(timeConstant)));
+        devices.add(clamp(device + "R", device + "R", device + "D", falling, rising));
+        devices.add(integrator(device, device, device + "R", initial, 1.0));
+        return device;
+    }
+
+    /** Modelica's {@code DeadZone} of half-width {@code band} on the expression {@code x}: {@code max(x - band, 0) + min(x + band, 0)}. */
+    private static String deadZone(String x, double band) {
+        String b = number(band);
+        return max("(" + x + ")-" + b, "0") + "+" + min("(" + x + ")+" + b, "0");
+    }
+
+    private static String min(String a, String b) {
+        return "0.5*((" + a + ")+(" + b + ")-ABS((" + a + ")-(" + b + ")))";
+    }
+
+    private static String max(String a, String b) {
+        return "0.5*((" + a + ")+(" + b + ")+ABS((" + a + ")-(" + b + ")))";
     }
 
     /** {@code clamp(x, 0, 1)}: {@code min(max(x, 0), 1)} of the expression {@code x}. */

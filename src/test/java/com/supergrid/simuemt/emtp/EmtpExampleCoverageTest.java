@@ -37,7 +37,7 @@ import static org.assertj.core.api.Assertions.within;
  * the writer gains or loses shows; and - tagged {@code emtp} - each is run live, every bus on the load flow.
  *
  * <p>2026-11-15, upstream's {@code 6346a20c}: 71 of its 132 examples written - since the shunts, the grounds, the open ends, the SVC, the battery, the WT4B - CIGRE DCS2 with it -, the switches
- * the infinite buses on a load, the Bergeron lines and the ZnO arresters; 2026-11-16, {@code 6f83d62b}: 73 of 134, its two rigid bipoles; 78 with the induction motors, 87 with the governors. Its
+ * the infinite buses on a load, the Bergeron lines and the ZnO arresters; 2026-11-16, {@code 6f83d62b}: 73 of 134, its two rigid bipoles; 78 with the induction motors, 91 with the governors. Its
  * refusals, the most frequent first: power electronics (VSCs, MMCs, their DC sides), load models
  * (induction motors, constant power), zero-sequence data of lumped lines, excitation limiters,
  * governors but TGOV1, PSS2A.
@@ -60,11 +60,15 @@ class EmtpExampleCoverageTest {
             "createTwoBusNetworkWithDc1A",
             "createTwoBusNetworkWithEmtExtensions",
             "createTwoBusNetworkWithIdealInfiniteBusGenerator",
+            "createTwoBusNetworkWithDelayedGovCt2",
             "createTwoBusNetworkWithFanMotor",
             "createTwoBusNetworkWithGast",
             "createTwoBusNetworkWithGoverDtrI8",
+            "createTwoBusNetworkWithGovCt2",
             "createTwoBusNetworkWithGovHydro4",
             "createTwoBusNetworkWithGovSteam1",
+            "createTwoBusNetworkWithGovSteamEu",
+            "createTwoBusNetworkWithGoverNordic",
             "createTwoBusNetworkWithGoverProportional",
             "createTwoBusNetworkWithHygov",
             "createTwoBusNetworkWithIeeeG1",

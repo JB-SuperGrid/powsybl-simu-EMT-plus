@@ -36,6 +36,7 @@ import com.powsybl.simuemt.extensions.excitation.limiter.PowerFactorVarControlle
 import com.powsybl.simuemt.extensions.excitation.limiter.StatorCurrentLimiterModel;
 import com.powsybl.simuemt.extensions.excitation.limiter.UnderexcitationLimiterModel;
 import com.powsybl.simuemt.extensions.excitation.limiter.VoltsPerHertzLimiterModel;
+import com.powsybl.simuemt.extensions.governor.GovCt2Model;
 import com.powsybl.simuemt.extensions.governor.TurbineGovernorModel;
 import com.powsybl.simuemt.extensions.machine.ClassicalDefinitions.RotorCircuit;
 import com.powsybl.simuemt.extensions.machine.ClassicalMachineEquivalent;
@@ -273,9 +274,9 @@ final class EmtpSynchronousMachines {
         if (stabilized || governed) {
             observed.add(signal(name, ROTOR_SPEED));
         }
-        // In the order of the observe requests: vd, the field current, vq.
-        if (regulated) {
-            boolean powers = regulator(generator) instanceof St4BModel;
+        // In the order of the observe requests: vd, the field current, vq - and id and iq for the terminal's powers.
+        if (regulated || readsPower(generator)) {
+            boolean powers = regulator(generator) instanceof St4BModel || readsPower(generator);
             observed.add(signal(name, "vd"));
             if (powers) {
                 observed.add(signal(name, "id"));
@@ -332,12 +333,12 @@ final class EmtpSynchronousMachines {
         // The scopes in SI, the observed signals per unit.
         lines.add("OBSu=0 1,");
         List<String> observe = new ArrayList<>(Collections.nCopies(OBSERVABLES, "0"));
-        if (regulated) {
+        if (regulated || readsPower(generator)) {
             observe.set(OBSERVE_VD, OBSERVED);
             if (readsFieldCurrent(generator)) {
                 observe.set(OBSERVE_IF, OBSERVED);
             }
-            if (regulator(generator) instanceof St4BModel) {
+            if (regulator(generator) instanceof St4BModel || readsPower(generator)) {
                 observe.set(OBSERVE_ID, OBSERVED);
                 observe.set(OBSERVE_IQ, OBSERVED);
             }
@@ -358,11 +359,11 @@ final class EmtpSynchronousMachines {
 
     /** The same, the governor's reference stepped by {@code step}, if any, on the time step {@code timeStepSeconds}. */
     static List<Device> controls(Generator generator, String name, PowerReferenceStep step, double timeStepSeconds) {
-        return controls(generator, name, step, null, timeStepSeconds);
+        return controls(generator, name, step, null, 50.0, timeStepSeconds);
     }
 
-    /** The same, {@code fastValving}, if any, closing its TGOV3's intercept valve. */
-    static List<Device> controls(Generator generator, String name, PowerReferenceStep step, FastValving fastValving, double timeStepSeconds) {
+    /** The same, {@code fastValving}, if any, closing its TGOV3's intercept valve, at {@code frequencyHz}. */
+    static List<Device> controls(Generator generator, String name, PowerReferenceStep step, FastValving fastValving, double frequencyHz, double timeStepSeconds) {
         MachineInitialState initial = MachineInitialState.subtransient(generator, subtransient(generator), 0.0);
         double efd = initial.efd();
         Pss1AModel pss = stabilizer(generator);
@@ -375,8 +376,15 @@ final class EmtpSynchronousMachines {
             devices.add(tgov1 != null ? EmtpVoltageSourceConverters.scoped(speedDeviation) : speedDeviation);
         }
         if (tgov1 != null) {
-            devices.addAll(EmtpTurbineGovernors.devices(generator, tgov1, name, deviation, signal(name, MASS_POWER), initial.mechanicalPower(), step,
-                    fastValving, timeStepSeconds));
+            String electricalPower = null;
+            if (readsPower(generator)) {
+                // The terminal's power P = vd id + vq iq, per unit, as the ST4B reads it.
+                electricalPower = signal(name, "PEG");
+                devices.add(function(name + "_PEG", electricalPower, List.of(signal(name, "vd"), signal(name, "vq"), signal(name, "id"), signal(name, "iq")),
+                        GovCt2Model.loadFlowElectricalPower(generator), "u[1]*u[3]+u[2]*u[4]"));
+            }
+            devices.addAll(EmtpTurbineGovernors.devices(generator, tgov1, name, deviation, electricalPower, signal(name, MASS_POWER), initial.mechanicalPower(),
+                    step, fastValving, frequencyHz, timeStepSeconds));
         }
         ExcitationSystemModel excitation = regulator(generator);
         if (excitation == null) {
@@ -1069,6 +1077,11 @@ final class EmtpSynchronousMachines {
     static Device firstOrder(String device, String output, String input, double rest, double gain, double n0, double n1, double d1) {
         return new Device("_c_fs", List.of("_c_fs;" + device + ";2;2;" + output + "," + input + ",", number(rest) + ",1,2,2," + number(gain) + ",S1,",
                 number(n0) + " " + number(n1), ";", "1 " + number(d1)));
+    }
+
+    /** Whether the machine's governor reads its electrical power. */
+    private static boolean readsPower(Generator generator) {
+        return governor(generator) != null && EmtpTurbineGovernors.readsElectricalPower(governor(generator));
     }
 
     /** The machine's enabled governor, one {@link EmtpTurbineGovernors} writes, or {@code null}. */
