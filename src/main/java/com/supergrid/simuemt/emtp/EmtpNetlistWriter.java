@@ -48,9 +48,11 @@ import com.powsybl.simuemt.extensions.event.ConverterDeblocking;
 import com.powsybl.simuemt.extensions.event.DcFault;
 import com.powsybl.simuemt.extensions.event.DcSwitchOperation;
 import com.powsybl.simuemt.extensions.event.EmtEvent;
+import com.powsybl.simuemt.extensions.event.FastValving;
 import com.powsybl.simuemt.extensions.event.FaultClearing;
 import com.powsybl.simuemt.extensions.event.PowerReferenceStep;
 import com.powsybl.simuemt.extensions.event.SwitchOperation;
+import com.powsybl.simuemt.extensions.governor.TGov3Model;
 import com.powsybl.simuemt.extensions.infinitebus.InfiniteBusEmf;
 import com.powsybl.simuemt.extensions.infinitebus.InfiniteBusGeneratorModel;
 import com.powsybl.simuemt.extensions.infinitebus.InfiniteBusLoadModel;
@@ -184,6 +186,15 @@ public final class EmtpNetlistWriter {
                 }
                 continue;
             }
+            if (event instanceof FastValving valving) {
+                Generator valved = network.getGenerator(valving.generatorId());
+                if (valved == null || !EmtpSynchronousMachines.isMachine(valved) || !(EmtpSynchronousMachines.governor(valved) instanceof TGov3Model)) {
+                    refused.add("generator '" + valving.generatorId() + "' is fast valved, but it is no machine under a TGOV3");
+                } else if (events.stream().filter(e -> e instanceof FastValving f && f.generatorId().equals(valving.generatorId())).count() > 1) {
+                    refused.add("generator '" + valving.generatorId() + "' is fast valved more than once");
+                }
+                continue;
+            }
             if (!(event instanceof BusFault fault)) {
                 refused.add("event " + event.getClass().getSimpleName() + " is of a kind not written yet");
             } else if (network.getBusBreakerView().getBus(fault.busId()) == null) {
@@ -265,7 +276,10 @@ public final class EmtpNetlistWriter {
                         VectorGroupOffsets.of(network).degrees(bus), settings));
                 PowerReferenceStep step = events.stream().filter(e -> e instanceof PowerReferenceStep p && p.generatorId().equals(generator.getId()))
                         .map(PowerReferenceStep.class::cast).findFirst().orElse(null);
-                for (EmtpSynchronousMachines.Device control : EmtpSynchronousMachines.controls(generator, id(generator), step, settings.timeStepSeconds())) {
+                FastValving fastValving = events.stream().filter(e -> e instanceof FastValving f && f.generatorId().equals(generator.getId()))
+                        .map(FastValving.class::cast).findFirst().orElse(null);
+                for (EmtpSynchronousMachines.Device control : EmtpSynchronousMachines.controls(generator, id(generator), step, fastValving,
+                        settings.timeStepSeconds())) {
                     devices.addBlock(control.part(), control.lines());
                 }
             } else {

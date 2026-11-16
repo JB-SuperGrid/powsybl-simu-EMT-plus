@@ -11,6 +11,7 @@ import com.powsybl.simuemt.extensions.GeneratorModel;
 import com.powsybl.simuemt.extensions.circuit.MachineInitialState;
 import com.powsybl.simuemt.extensions.circuit.MachineSequenceImpedances;
 import com.powsybl.simuemt.extensions.circuit.NumericalAids;
+import com.powsybl.simuemt.extensions.event.FastValving;
 import com.powsybl.simuemt.extensions.event.PowerReferenceStep;
 import com.powsybl.simuemt.extensions.excitation.Ac1AModel;
 import com.powsybl.simuemt.extensions.excitation.Ac6AInitialState;
@@ -357,6 +358,11 @@ final class EmtpSynchronousMachines {
 
     /** The same, the governor's reference stepped by {@code step}, if any, on the time step {@code timeStepSeconds}. */
     static List<Device> controls(Generator generator, String name, PowerReferenceStep step, double timeStepSeconds) {
+        return controls(generator, name, step, null, timeStepSeconds);
+    }
+
+    /** The same, {@code fastValving}, if any, closing its TGOV3's intercept valve. */
+    static List<Device> controls(Generator generator, String name, PowerReferenceStep step, FastValving fastValving, double timeStepSeconds) {
         MachineInitialState initial = MachineInitialState.subtransient(generator, subtransient(generator), 0.0);
         double efd = initial.efd();
         Pss1AModel pss = stabilizer(generator);
@@ -370,7 +376,7 @@ final class EmtpSynchronousMachines {
         }
         if (tgov1 != null) {
             devices.addAll(EmtpTurbineGovernors.devices(generator, tgov1, name, deviation, signal(name, MASS_POWER), initial.mechanicalPower(), step,
-                    timeStepSeconds));
+                    fastValving, timeStepSeconds));
         }
         ExcitationSystemModel excitation = regulator(generator);
         if (excitation == null) {
@@ -982,7 +988,7 @@ final class EmtpSynchronousMachines {
     }
 
     /** ATP's limiter step {@code 0.5 (1 + x / sqrt(x^2 + eps))} on the expression {@code x} ({@link NumericalAids#LIMITER_STEP_EPSILON}). */
-    private static String limiterStep(String x) {
+    static String limiterStep(String x) {
         return "0.5*(1+" + x + "/SQRT(" + x + "*" + x + "+" + number(NumericalAids.LIMITER_STEP_EPSILON) + "))";
     }
 
