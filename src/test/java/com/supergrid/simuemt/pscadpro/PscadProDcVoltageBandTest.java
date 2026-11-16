@@ -38,7 +38,8 @@ import static org.assertj.core.api.Assertions.within;
  * (the rigid bipole), and the ends within {@code AtpSolverIntegrationTest}'s bounds.
  *
  * <p>Run 2026-11-16, 110 s the three, on upstream's PSCAD backend blocking a converter on a return not solidly earthed and earthing a
- * capacitor's midpoint: VSC2 blocked at 0.33832 s (ATP 0.33824, 80 us; 0.33838 s, 140 us, since upstream holds a blocked bridge's open rails), its DC voltage 0.776 pu at the end; VSC1 at 0.31394 s, ATP's,
+ * capacitor's midpoint: VSC2 blocked at 0.33832 s (ATP 0.33824, 80 us; 0.33838 s, 140 us, since upstream holds a blocked
+ * bridge's open rails), its DC voltage 0.776 pu at the end; VSC1 at 0.31394 s, ATP's,
  * 1.049 pu; VSC2P at 0.33060 s, ATP's, VSC1P 5.4e-4 pu at the end, the DC voltages 0.766 to 1.098 pu; the stations idle within 2.3e-4.
  *
  * <p>Tagged {@code pscad}: run with {@code mvn test -Ppscad}.
