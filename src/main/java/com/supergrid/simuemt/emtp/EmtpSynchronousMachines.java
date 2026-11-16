@@ -35,8 +35,11 @@ import com.powsybl.simuemt.extensions.excitation.limiter.DiscontinuousExcitation
 import com.powsybl.simuemt.extensions.excitation.limiter.KundurVoltsPerHertzLimiterModel;
 import com.powsybl.simuemt.extensions.excitation.limiter.Oel1BModel;
 import com.powsybl.simuemt.extensions.excitation.limiter.OverexcitationLimiterModel;
+import com.powsybl.simuemt.extensions.excitation.limiter.PfVarType2Model;
 import com.powsybl.simuemt.extensions.excitation.limiter.PowerFactorVarControllerModel;
+import com.powsybl.simuemt.extensions.excitation.limiter.Scl1CModel;
 import com.powsybl.simuemt.extensions.excitation.limiter.StatorCurrentLimiterModel;
+import com.powsybl.simuemt.extensions.excitation.limiter.Uel2CModel;
 import com.powsybl.simuemt.extensions.excitation.limiter.UnderexcitationLimiterModel;
 import com.powsybl.simuemt.extensions.excitation.limiter.VoltsPerHertzLimiterModel;
 import com.powsybl.simuemt.extensions.governor.GovCt2Model;
@@ -222,13 +225,15 @@ final class EmtpSynchronousMachines {
         } catch (IllegalArgumentException e) {
             reasons.add(e.getMessage());
         }
+        reasons.addAll(EmtpExcitationLimiters.unsupportedReasons(generator));
         for (Object extension : generator.getExtensions()) {
             if (isEnabled(extension) && !(extension instanceof SimplifiedAvrModel) && !(extension instanceof St1AModel) && !(extension instanceof Dc1AModel)
                     && !(extension instanceof Ac1AModel) && !(extension instanceof Ac6AModel) && !(extension instanceof Ac8BModel)
                     && !(extension instanceof St4BModel) && !(extension instanceof St5BModel) && !(extension instanceof St6BModel)
                     && !(extension instanceof Pss1AModel)
                     && !(extension instanceof TurbineGovernorModel governor && EmtpTurbineGovernors.isWritten(governor))
-                    && !((extension instanceof Oel1BModel || extension instanceof KundurVoltsPerHertzLimiterModel) && regulator(generator) instanceof Dc1AModel)) {
+                    && !((extension instanceof Oel1BModel || extension instanceof KundurVoltsPerHertzLimiterModel || extension instanceof Uel2CModel
+                    || extension instanceof Scl1CModel || extension instanceof PfVarType2Model) && regulator(generator) instanceof Dc1AModel)) {
                 reasons.add("its " + extension.getClass().getSimpleName() + " is not written yet");
             }
         }
@@ -280,7 +285,7 @@ final class EmtpSynchronousMachines {
         }
         // In the order of the observe requests: vd, the field current, vq - and id and iq for the terminal's powers.
         if (regulated || readsPower(generator)) {
-            boolean powers = regulator(generator) instanceof St4BModel || readsPower(generator);
+            boolean powers = regulator(generator) instanceof St4BModel || readsPower(generator) || limitersReadPowers(generator);
             observed.add(signal(name, "vd"));
             if (powers) {
                 observed.add(signal(name, "id"));
@@ -342,7 +347,7 @@ final class EmtpSynchronousMachines {
             if (readsFieldCurrent(generator)) {
                 observe.set(OBSERVE_IF, OBSERVED);
             }
-            if (regulator(generator) instanceof St4BModel || readsPower(generator)) {
+            if (regulator(generator) instanceof St4BModel || readsPower(generator) || limitersReadPowers(generator)) {
                 observe.set(OBSERVE_ID, OBSERVED);
                 observe.set(OBSERVE_IQ, OBSERVED);
             }
@@ -566,6 +571,44 @@ final class EmtpSynchronousMachines {
             errorInputs.add(vhz);
             error.append("-u[").append(errorInputs.size()).append("]");
         }
+        // A UEL2C, an SCL1C, a PF/var controller: on the terminal's voltage and powers, P = vd id + vq iq, Q = vd iq - vq id, as the ST4B.
+        EmtpExcitationLimiters.Uel uel = null;
+        if (EmtpExcitationLimiters.readsPowers(generator)) {
+            MachineInitialState.TerminalPowers terminal = initial.terminal();
+            List<String> axes = List.of(signal(name, "vd"), signal(name, "vq"), signal(name, "id"), signal(name, "iq"));
+            String vt = signal(name, "LVT");
+            String pt = signal(name, "LPT");
+            String qt = signal(name, "LQT");
+            devices.add(function(name + "_LVT", vt, axes.subList(0, 2), initial.terminalVoltage(), "SQRT(u[1]*u[1]+u[2]*u[2])"));
+            devices.add(EmtpVoltageSourceConverters.scoped(function(name + "_LPT", pt, axes, terminal.activePower(), "u[1]*u[3]+u[2]*u[4]")));
+            devices.add(EmtpVoltageSourceConverters.scoped(function(name + "_LQT", qt, axes, terminal.reactivePower(), "u[1]*u[4]-u[2]*u[3]")));
+            boolean rateFeedback = dc1a.getRateFeedbackGain() != 0.0 && dc1a.getRateFeedbackTimeConstant() > 0.0;
+            uel = EmtpExcitationLimiters.uel(devices, generator, name, vt, pt, qt, rateFeedback ? signal(name, "VRF") : null);
+            if (uel != null && !uel.takeover()) {
+                errorInputs.add(uel.output());
+                error.append("+u[").append(errorInputs.size()).append("]-(").append(number(uel.summingOutput0())).append(")");
+            }
+            EmtpExcitationLimiters.Scl scl = EmtpExcitationLimiters.scl(devices, generator, name, vt, pt, qt);
+            if (scl != null) {
+                errorInputs.add(scl.output());
+                error.append("+u[").append(errorInputs.size()).append("]-(").append(number(scl.output0())).append(")");
+            }
+            List<String> actings = new ArrayList<>();
+            if (oel != null) {
+                actings.add(oel.acting());
+            }
+            if (uel != null) {
+                actings.add(uel.acting());
+            }
+            if (scl != null) {
+                actings.add(scl.acting());
+            }
+            String pfVar = EmtpExcitationLimiters.pfVar(devices, generator, name, vt, pt, qt, actings);
+            if (pfVar != null) {
+                errorInputs.add(pfVar);
+                error.append("+u[").append(errorInputs.size()).append("]");
+            }
+        }
         if (dc1a.getRateFeedbackGain() != 0.0 && dc1a.getRateFeedbackTimeConstant() > 0.0) {
             String feedback = signal(name, "VRF");
             devices.add(firstOrder(name + "_VRF", feedback, field, 0.0, 1.0, 0.0, dc1a.getRateFeedbackGain(), dc1a.getRateFeedbackTimeConstant()));
@@ -575,7 +618,14 @@ final class EmtpSynchronousMachines {
         String errorSignal = signal(name, "VERR");
         devices.add(function(name + "_VERR", errorSignal, errorInputs, vr0 / ka, error.toString()));
         String regulator = signal(name, "VR");
-        devices.add(new Device("_c_fslim", List.of("_c_fslim;" + name + "_VR;4;4;" + regulator + "," + errorSignal + ",0,0,",
+        String regulatorInput = errorSignal;
+        if (uel != null && uel.takeover()) {
+            // A UEL2C taking over through a high-value gate on the error, ahead of the regulator, as ATP's.
+            uel.initial().checkTakeover(generator, vr0 / ka);
+            regulatorInput = signal(name, "UG");
+            devices.add(function(name + "_UG", regulatorInput, List.of(errorSignal, uel.output()), vr0 / ka, "0.5*(u[1]+u[2]+ABS(u[1]-u[2]))"));
+        }
+        devices.add(new Device("_c_fslim", List.of("_c_fslim;" + name + "_VR;4;4;" + regulator + "," + regulatorInput + ",0,0,",
                 number(vr0) + "," + number(dc1a.getMaxOutput()) + "," + number(dc1a.getMinOutput()) + ",1,1,2," + number(ka) + ",S1,",
                 "1", ";", "1 " + number(dc1a.getRegulatorTimeConstant()))));
         // The exciter: 1 / (Te s) on Vr - (Ke + Aex exp(Bex Efd)) Efd, at rest on 0 with Efd at Efd0.
@@ -1031,7 +1081,7 @@ final class EmtpSynchronousMachines {
      * clamp(T1/T2 (u - x), min, max)}, {@code x} a transfer function {@code ((T1 - T2) / T1) / (1 + sT1)} on {@code y}; without lead, a
      * lag whose limits stop its state; without lag, the limits alone. At rest on {@code output0}.
      */
-    private static List<Device> limitedLeadLag(String device, String output, String input, double lead, double lag, double min, double max,
+    static List<Device> limitedLeadLag(String device, String output, String input, double lead, double lag, double min, double max,
                                                double output0) {
         if (lag <= 0.0) {
             return List.of(new Device("_c_lim", List.of("_c_lim;" + device + ";2;2;" + output + "," + input + ",", number(max) + "," + number(min) + ",1,S1,")));
@@ -1104,6 +1154,11 @@ final class EmtpSynchronousMachines {
     static Device firstOrder(String device, String output, String input, double rest, double gain, double n0, double n1, double d1) {
         return new Device("_c_fs", List.of("_c_fs;" + device + ";2;2;" + output + "," + input + ",", number(rest) + ",1,2,2," + number(gain) + ",S1,",
                 number(n0) + " " + number(n1), ";", "1 " + number(d1)));
+    }
+
+    /** Whether the machine's DC1A's limiters read its terminal powers. */
+    private static boolean limitersReadPowers(Generator generator) {
+        return regulator(generator) instanceof Dc1AModel && EmtpExcitationLimiters.readsPowers(generator);
     }
 
     /** Whether the machine's governor reads its electrical power. */
