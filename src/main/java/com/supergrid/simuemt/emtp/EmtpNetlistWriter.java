@@ -279,7 +279,7 @@ public final class EmtpNetlistWriter {
                 FastValving fastValving = events.stream().filter(e -> e instanceof FastValving f && f.generatorId().equals(generator.getId()))
                         .map(FastValving.class::cast).findFirst().orElse(null);
                 for (EmtpSynchronousMachines.Device control : EmtpSynchronousMachines.controls(generator, id(generator), step, fastValving,
-                        settings.timeStepSeconds())) {
+                        settings.nominalFrequencyHz(), settings.timeStepSeconds())) {
                     devices.addBlock(control.part(), control.lines());
                 }
             } else {

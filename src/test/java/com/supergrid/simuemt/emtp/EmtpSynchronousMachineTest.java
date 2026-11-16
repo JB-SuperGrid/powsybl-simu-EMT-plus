@@ -30,7 +30,7 @@ import com.powsybl.simuemt.extensions.excitation.St5BInitialState;
 import com.powsybl.simuemt.extensions.excitation.St5BModel;
 import com.powsybl.simuemt.extensions.excitation.St6BInitialState;
 import com.powsybl.simuemt.extensions.excitation.St6BModel;
-import com.powsybl.simuemt.extensions.governor.GoverNordicModel;
+import com.powsybl.simuemt.extensions.governor.GenericTurbineGovernorModel;
 import com.powsybl.simuemt.extensions.governor.Tgov1Model;
 import com.powsybl.simuemt.extensions.governor.TurbineGovernorModel;
 import com.powsybl.simuemt.extensions.machine.SubtransientMachineModel;
@@ -114,12 +114,12 @@ class EmtpSynchronousMachineTest {
     @Test
     void refusesTheMachineWhileAGovernorItDoesNotWriteIsEnabled(@TempDir Path tempDir) {
         Network network = EmtExtensionsXmlReader.readNetwork(ExampleNetworks.resource("/two-bus.xiidm"), ExampleNetworks.resource("/two-bus-extensions.xml"));
-        network.getGenerator("GEN").addExtension(TurbineGovernorModel.class, new GoverNordicModel(true, 0.4, 2.0, 0.04, 120.0));
+        network.getGenerator("GEN").addExtension(TurbineGovernorModel.class, new GenericTurbineGovernorModel("HYGOV4", true, java.util.Map.of("R", 0.05)));
 
         assertThatThrownBy(() -> EmtpNetlistWriter.write(network, tempDir, SETTINGS))
                 .isInstanceOf(PowsyblException.class)
                 .hasMessageContaining("generator 'GEN'")
-                .hasMessageContaining("GoverNordicModel is not written yet")
+                .hasMessageContaining("GenericTurbineGovernorModel is not written yet")
                 .hasMessageNotContaining("SimplifiedAvrModel")
                 .hasMessageNotContaining("Pss1AModel");
     }
