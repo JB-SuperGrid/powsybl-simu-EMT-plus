@@ -37,8 +37,10 @@ import static org.assertj.core.api.Assertions.within;
  * its example's machine islanded on its load: held to upstream's Xyce checks ({@code XyceSolverIntegrationTest}), which ATP and
  * Kestrel are held to as well. The step at 0.5 s, run 12 s; each kept in {@code target/emtp/governor-<name>}.
  *
- * <p>Run 2026-11-16: lot 3 (GoverNordic, GovSteamEU, GovCT2 with and without its engine's delay) within 2.1e-5 of Xyce's; lot 2 every value within 6.3e-5 of Xyce's (GovSteam1's valve as it crosses its gap), lot 1's within 1.1e-5 - HYGOV's 27 within 3.8e-6, IEEEG2's power at 3 s 4.9e-5 under the check's
- * rounded 1.0172, Xyce's own 1.017155 within 4e-6; before the step, every bus on its load flow within 8.3e-6 pu.
+ * <p>Run 2026-11-16: GoverNordic, GovSteamEU and GovCT2, with and without its engine's delay, within 2.1e-5 of Xyce's; IEEEG1,
+ * GovSteam1, GovHydro4 and TGOV3 within 6.3e-5 (GovSteam1's valve as it crosses its gap); the first five within 1.1e-5 - HYGOV's 27
+ * within 3.8e-6, IEEEG2's power at 3 s 4.9e-5 under the check's rounded 1.0172, Xyce's own 1.017155 within 4e-6; before the step,
+ * every bus on its load flow within 8.3e-6 pu.
  *
  * @author Jean-Baptiste Heyberger : jean-baptiste.heyberger@supergrid-institute.com
  */
