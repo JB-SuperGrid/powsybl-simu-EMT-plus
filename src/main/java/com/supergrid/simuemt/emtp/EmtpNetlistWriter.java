@@ -52,6 +52,9 @@ import com.powsybl.simuemt.extensions.event.FastValving;
 import com.powsybl.simuemt.extensions.event.FaultClearing;
 import com.powsybl.simuemt.extensions.event.PowerReferenceStep;
 import com.powsybl.simuemt.extensions.event.SwitchOperation;
+import com.powsybl.simuemt.extensions.event.VoltageReferenceStep;
+import com.powsybl.simuemt.extensions.excitation.Dc1AModel;
+import com.powsybl.simuemt.extensions.excitation.ExcitationSystemModel;
 import com.powsybl.simuemt.extensions.governor.TGov3Model;
 import com.powsybl.simuemt.extensions.infinitebus.InfiniteBusEmf;
 import com.powsybl.simuemt.extensions.infinitebus.InfiniteBusGeneratorModel;
@@ -186,6 +189,16 @@ public final class EmtpNetlistWriter {
                 }
                 continue;
             }
+            if (event instanceof VoltageReferenceStep voltageStep) {
+                Generator stepped = network.getGenerator(voltageStep.generatorId());
+                if (stepped == null || !EmtpSynchronousMachines.isMachine(stepped) || !(stepped.getExtension(ExcitationSystemModel.class) instanceof Dc1AModel dc1a)
+                        || !dc1a.isEnabled()) {
+                    refused.add("generator '" + voltageStep.generatorId() + "''s voltage reference is stepped, but it is no machine under a DC1A");
+                } else if (events.stream().filter(e -> e instanceof VoltageReferenceStep v && v.generatorId().equals(voltageStep.generatorId())).count() > 1) {
+                    refused.add("generator '" + voltageStep.generatorId() + "''s voltage reference is stepped more than once");
+                }
+                continue;
+            }
             if (event instanceof FastValving valving) {
                 Generator valved = network.getGenerator(valving.generatorId());
                 if (valved == null || !EmtpSynchronousMachines.isMachine(valved) || !(EmtpSynchronousMachines.governor(valved) instanceof TGov3Model)) {
@@ -278,7 +291,9 @@ public final class EmtpNetlistWriter {
                         .map(PowerReferenceStep.class::cast).findFirst().orElse(null);
                 FastValving fastValving = events.stream().filter(e -> e instanceof FastValving f && f.generatorId().equals(generator.getId()))
                         .map(FastValving.class::cast).findFirst().orElse(null);
-                for (EmtpSynchronousMachines.Device control : EmtpSynchronousMachines.controls(generator, id(generator), step, fastValving,
+                VoltageReferenceStep voltageStep = events.stream().filter(e -> e instanceof VoltageReferenceStep v && v.generatorId().equals(generator.getId()))
+                        .map(VoltageReferenceStep.class::cast).findFirst().orElse(null);
+                for (EmtpSynchronousMachines.Device control : EmtpSynchronousMachines.controls(generator, id(generator), step, fastValving, voltageStep,
                         settings.nominalFrequencyHz(), settings.timeStepSeconds())) {
                     devices.addBlock(control.part(), control.lines());
                 }
