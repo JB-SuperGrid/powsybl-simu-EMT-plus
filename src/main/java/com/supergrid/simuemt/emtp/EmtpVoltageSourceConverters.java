@@ -604,13 +604,14 @@ final class EmtpVoltageSourceConverters {
         String centre = "";
         String alternating = "";
         if (blockable) {
-            emfInputs.add(vPole);
-            emfInputs.add(vReturn);
+            // The DC midpoint on a function of its own: with both rails, a bipole's pole's EMFs read nine inputs, past EMTP's 100 characters.
+            String midpoint = id + "_VMD";
+            devices.add(function(midpoint, midpoint, List.of(vPole, vReturn), 0.0, "0.5*(u[1]+u[2])"));
+            emfInputs.add(midpoint);
             emfInputs.add(id + "_RUN");
             int k = emfInputs.size() - 1;
             alternating = "*u[" + (k + 1) + "]";
-            centre = "+0.5*(1+(t/" + number(NumericalAids.MIDPOINT_RAMP_SECONDS) + ")-ABS(1-(t/" + number(NumericalAids.MIDPOINT_RAMP_SECONDS) + ")))*0.5*(u["
-                    + (k - 1) + "]+u[" + k + "])";
+            centre = "+0.5*(1+(t/" + number(NumericalAids.MIDPOINT_RAMP_SECONDS) + ")-ABS(1-(t/" + number(NumericalAids.MIDPOINT_RAMP_SECONDS) + ")))*u[" + k + "]";
         }
         for (int k = 0; k < 3; k++) {
             String shift = ahead + (k == 0 ? "" : k == 1 ? "-" + third : "+" + third);
@@ -818,7 +819,7 @@ final class EmtpVoltageSourceConverters {
             dcCurrentRecorded(devices, id, initial);
             inputs.add(protectionLatch(devices, id + "_PT", id + "_PTI", protection));
             if (protection.getAutomaticRestart().isPresent()) {
-                inputs.set(1, automaticRestart(devices, id, protection, settings));
+                inputs.set(1, automaticRestart(devices, converter, id, protection, initial, settings));
             }
             before = before + "*u[2]";
             if (deblocked) {
@@ -847,11 +848,35 @@ final class EmtpVoltageSourceConverters {
      * <id>_DEB} the integrals restart from 0 on ({@link #freeze}). Each latch the free integral of its rate within 1 - never falling, its rate
      * no less than 0 -, as the protection's ({@link #protectionLatch}).
      */
-    private static String automaticRestart(List<EmtpSynchronousMachines.Device> devices, String id, OvercurrentProtection protection,
-                                           EmtpSimulationSettings settings) {
+    private static String automaticRestart(List<EmtpSynchronousMachines.Device> devices, VoltageSourceConverter converter, String id,
+                                           OvercurrentProtection protection, AveragedVscInitialState initial, EmtpSimulationSettings settings) {
         AutomaticRestart restart = protection.getAutomaticRestart().orElseThrow();
         String up = id + "_RVU";
-        devices.add(function(up, up, List.of(id + "_VDC"), 1.0, step("u[1]-" + number(restart.dcVoltageThreshold()))));
+        List<String> upInputs = new ArrayList<>(List.of(id + "_VDC"));
+        String upExpression = step("u[1]-" + number(restart.dcVoltageThreshold()));
+        if (hasBand(protection)) {
+            // Within its band too, on the raw voltage it trips on; a blocked MMC's capacitor, behind its diode, within it by a margin - restarted
+            // on its terminal alone, the capacitor still charged at the limit it tripped on sets the terminal back out at once.
+            double base = initial.dcNominalVoltage() * 1.0e3;
+            upInputs.add(id + "_VDP");
+            upInputs.add(id + "_VDR");
+            upExpression += withinBand(protection, "(u[2]-u[3])", base, 0.0);
+            if (((AveragedConverterModel) converter.getExtension(VoltageSourceConverterModel.class)).blocksCapacitorDischarge()) {
+                boolean midpoint = converter.getExtension(DcEarthingModel.class) instanceof DcMidpointEarthing;
+                String plate = id + "_VCQ";
+                devices.add(element("_cI", id + "_PRCQ", List.of(id + "_CQ", "", id + "_ZERO", plate, id + "_PRCQI", id + "_PRCQP"), "-1,1E15,0,0,0,0,>v,0,0,"));
+                String returnPlate = id + "_VDR";
+                if (midpoint) {
+                    returnPlate = id + "_VCE";
+                    devices.add(element("_cI", id + "_PRCE", List.of(id + "_CE", "", id + "_ZERO", returnPlate, id + "_PRCEI", id + "_PRCEP"),
+                            "-1,1E15,0,0,0,0,>v,0,0,"));
+                }
+                upInputs.add(plate);
+                upInputs.add(returnPlate);
+                upExpression += withinBand(protection, "(u[4]-u[5])", base, AutomaticRestart.CAPACITOR_BAND_MARGIN_PU);
+            }
+        }
+        devices.add(function(up, up, upInputs, 1.0, upExpression));
         String bleed = number(1.0 / NumericalAids.RESTART_RESET_TIME_CONSTANT_SECONDS);
         String rate = number(2.0 / settings.timeStepSeconds());
         String previousFlag = id + "_PTF";
@@ -881,6 +906,24 @@ final class EmtpVoltageSourceConverters {
         return running;
     }
 
+    /** Whether {@code protection} has a DC voltage band. */
+    private static boolean hasBand(OvercurrentProtection protection) {
+        return protection.getDcUndervoltage().isPresent() || protection.getDcOvervoltage().isPresent();
+    }
+
+    /** {@code protection}'s DC voltage band on {@code volts}, {@code margin} pu within it, each limit a factor {@code *step(...)}, {@code base}
+     * volts its base; empty without one. */
+    private static String withinBand(OvercurrentProtection protection, String volts, double base, double margin) {
+        String within = "";
+        if (protection.getDcUndervoltage().isPresent()) {
+            within += "*" + step(volts + "-" + number((protection.getDcUndervoltage().getAsDouble() + margin) * base));
+        }
+        if (protection.getDcOvervoltage().isPresent()) {
+            within += "*" + step(number((protection.getDcOvervoltage().getAsDouble() - margin) * base) + "-" + volts);
+        }
+        return within;
+    }
+
     /** A protected converter's DC current, {@code control:<id>_IDC}, per unit of its base, unfiltered - as the other backends record it. */
     private static void dcCurrentRecorded(List<EmtpSynchronousMachines.Device> devices, String id, AveragedVscInitialState initial) {
         devices.add(scoped(function(id + "_IDC", id + "_IDC", List.of(id + "_IDCM"), initial.dcCurrent() * 1.0e3 / initial.dcCurrentBase(),
@@ -888,7 +931,8 @@ final class EmtpVoltageSourceConverters {
     }
 
     /** An {@link OvercurrentProtection}'s detection {@code <id>_PTI}: the worst arm current, {@code |i_dc| / 3 + |i_k| / 2}, past its
-     * threshold - times {@code 2 / Dt}, the latch's rate, as ATP's. */
+     * threshold - or, with a DC voltage band, its DC voltage, pole less return, read raw, out of the band - times {@code 2 / Dt}, the
+     * latch's rate, as ATP's. */
     private static void protection(List<EmtpSynchronousMachines.Device> devices, String id, OvercurrentProtection protection, AveragedVscInitialState initial,
                                    EmtpSimulationSettings settings) {
         String threshold = number(protection.getThreshold() * OvercurrentProtection.ratedArmCurrentAmps(initial));
@@ -896,8 +940,19 @@ final class EmtpVoltageSourceConverters {
         for (int k = 2; k <= 4; k++) {
             trips += (k > 2 ? "+" : "") + step("ABS(u[1])/3+0.5*ABS(u[" + k + "])-" + threshold);
         }
-        devices.add(function(id + "_PTI", id + "_PTI", List.of(id + "_IDCM", id + "_IMa", id + "_IMb", id + "_IMc"), 0.0,
-                "(" + trips + ")*" + number(2.0 / settings.timeStepSeconds())));
+        List<String> inputs = new ArrayList<>(List.of(id + "_IDCM", id + "_IMa", id + "_IMb", id + "_IMc"));
+        double base = initial.dcNominalVoltage() * 1.0e3;
+        if (hasBand(protection)) {
+            inputs.add(id + "_VDP");
+            inputs.add(id + "_VDR");
+            if (protection.getDcUndervoltage().isPresent()) {
+                trips += "+" + step(number(protection.getDcUndervoltage().getAsDouble() * base) + "-(u[5]-u[6])");
+            }
+            if (protection.getDcOvervoltage().isPresent()) {
+                trips += "+" + step("(u[5]-u[6])-" + number(protection.getDcOvervoltage().getAsDouble() * base));
+            }
+        }
+        devices.add(function(id + "_PTI", id + "_PTI", inputs, 0.0, "(" + trips + ")*" + number(2.0 / settings.timeStepSeconds())));
     }
 
     /** A protection's latch on {@code input}: its integral - never falling, {@code input} being no less than 0 - within 1, then its delay's
