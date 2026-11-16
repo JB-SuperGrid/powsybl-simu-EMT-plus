@@ -730,8 +730,8 @@ public final class EmtpNetlistWriter {
         return terminal == TransformerWindings.NEUTRAL ? neutral : phaseNodes[terminal];
     }
 
-    /** What ties a side to earth: its star point's grounding impedance, 0.003 uF from an isolated star point, 0.003 uF from each phase
-     * of a delta side - ATP's. */
+    /** What ties a side to earth: its star point's grounding impedance and 0.003 uF across it, 0.003 uF from an isolated star point, 0.003
+     * uF from each phase of a delta side - ATP's. */
     private static void earthReference(Devices lines, String name, WindingConnectionType connection, double groundingR, double groundingX,
                                        String neutral, String[] phaseNodes, EmtpSimulationSettings settings) {
         String capacitor = "0,0," + number(NumericalAids.FLOATING_WINDING_EARTH_REFERENCE_F) + ",0,0,";
@@ -745,6 +745,9 @@ public final class EmtpNetlistWriter {
             lines.add("_RLC", name + "_CN", List.of(neutral), capacitor);
         } else if (!neutral.isEmpty()) {
             lines.add("_RLC", name + "_ZN", List.of(neutral), rl(groundingR, groundingX / omega(settings)));
+            // Across its grounding impedance, the isolated star point's earth reference too, as upstream's backends have it.
+            lines.comment(NumericalAids.COMMENT_MARKER + ": 0.003 uF earth reference across an impedance-earthed star point");
+            lines.add("_RLC", name + "_CN", List.of(neutral), capacitor);
         }
     }
 

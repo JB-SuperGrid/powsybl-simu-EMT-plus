@@ -13,6 +13,8 @@ import com.powsybl.iidm.network.VoltageSourceConverter;
 import com.powsybl.simuemt.extensions.circuit.NumericalAids;
 import com.powsybl.simuemt.extensions.event.BranchOperation;
 import com.powsybl.simuemt.extensions.event.BreakerAction;
+import com.powsybl.simuemt.extensions.event.ConverterBlocking;
+import com.powsybl.simuemt.extensions.event.ConverterDeblocking;
 import com.powsybl.simuemt.extensions.event.DcFault;
 import com.powsybl.simuemt.extensions.event.DcSwitchOperation;
 import com.powsybl.simuemt.extensions.event.EmtEvent;
@@ -280,6 +282,106 @@ class EmtpVoltageSourceConverterTest {
         softly.assertThat(dc2p).as("%s, DC2P after the fault, V", name).isCloseTo(0.0, within(10.0));
         softly.assertThat(-dc1n / 1.0e3).as("%s, DC1N after the fault, kV below earth", name).isBetween(490.0, 502.0);
         softly.assertAll();
+    }
+
+    /** A blockable MMC earthing its midpoint: its equivalent capacitor behind a diode on both sides - its halves from {@code _CQ} to {@code
+     * _CE}, its DC current's return tie on {@code _CE}, a diode from {@code _CE} into the return, bypassed while it runs. */
+    @Test
+    void writesASymmetricMonopolesBlockedMmcBehindDiodesOnBothSides(@TempDir Path tempDir) throws IOException {
+        Network network = bench("vsc-symmetric-monopole-mmc");
+        List<String> lines = Files.readAllLines(EmtpNetlistWriter.write(network, tempDir, new EmtpSimulationSettings(20.0e-6, 1.0, FREQUENCY),
+                List.of(new ConverterBlocking("VSC2", 0.3))), StandardCharsets.ISO_8859_1);
+        String ret = EmtpVoltageSourceConverters.dcNode(network.getVoltageSourceConverter("VSC2").getDcTerminal2().getDcNode());
+        assertThat(lines).contains("_RLC;VSC2_CDC1;2;2;VSC2_CQ,VSC2_MID,", "_RLC;VSC2_CDC2;2;2;VSC2_MID,VSC2_CE,", "_RLC;VSC2_TR;2;2;VSC2_DCR,VSC2_CE,",
+                "_D0;VSC2_CDIE;2;2;VSC2_CL," + ret + ",", "_RLC;VSC2_CDRE;2;2;VSC2_CE,VSC2_CL,").noneMatch(l -> l.startsWith("_RLC;VSC1_CDC2;2;2;VSC1_MID,VSC1_CE"));
+    }
+
+    /**
+     * Upstream's {@code AtpSolverIntegrationTest#aSymmetricMonopolesInverterBlockedAndDeblocked} on its MMCs ({@code
+     * vsc-symmetric-monopole-mmc}, valve windings earthed through 5 kohm): VSC2 blocked at 0.3 s, deblocked at 0.5 s, run 1 s - its
+     * equivalent capacitor behind a diode on both sides. Held to ATP's checks: VSC2 idle while blocked, VSC1's DC voltage peaking between
+     * 1.02 and 1.12 pu, VSC2 back on -0.8 pu and the DC voltage on 1 pu at the end within 1e-3, each station's poles summing to within 1
+     * kV of earth over every 20 ms. Kept in {@code target/emtp/mmc-symmetric-blocked}.
+     *
+     * <p>Run 2026-11-16: VSC2 2.24e-4 pu blocked (ATP 2e-4); VSC1's DC voltage up to 1.0879 pu (ATP 1.083); at the end VSC2 -0.7999 pu,
+     * the DC voltage 0.9999; the poles' sum within 0.73 kV (ATP 0.52).
+     */
+    @Test
+    @Tag("emtp")
+    void aSymmetricMonopolesMmcBlockedAndDeblocked() {
+        double runEnd = 1.0;
+        EmtpOutput output = EmtpRunner.run(EmtpNetlistWriter.write(bench("vsc-symmetric-monopole-mmc"), Path.of("target", "emtp", "mmc-symmetric-blocked"),
+                new EmtpSimulationSettings(20.0e-6, runEnd, FREQUENCY), List.of(new ConverterBlocking("VSC2", 0.3), new ConverterDeblocking("VSC2", 0.5))),
+                EmtpSettings.defaults()).output();
+        double blocked = output.mean("control:VSC2_P", 0.34, 0.5);
+        double peak = output.peakAbsolute("control:VSC1_VDC", 0.3, 0.5);
+        double p2 = output.mean("control:VSC2_P", runEnd - 0.1, runEnd);
+        double vdc1 = output.mean("control:VSC1_VDC", runEnd - 0.1, runEnd);
+        double worst = worstPoleSum(output, 0.0, runEnd);
+        System.out.printf(Locale.ROOT, "VSC2 %.2e pu blocked; VSC1's DC voltage up to %.4f pu; at the end VSC2 %.4f pu, DC %.4f pu; poles' sum within %.2f kV%n",
+                blocked, peak, p2, vdc1, worst / 1.0e3);
+        SoftAssertions softly = new SoftAssertions();
+        softly.assertThat(blocked).as("VSC2 power blocked, pu: an idle bridge").isCloseTo(0.0, within(1.0e-3));
+        softly.assertThat(peak).as("VSC1 DC voltage's peak once VSC2 is blocked, pu").isBetween(1.02, 1.12);
+        softly.assertThat(p2).as("VSC2 power at the end, pu: deblocked").isCloseTo(-0.8, within(1.0e-3));
+        softly.assertThat(vdc1).as("VSC1 DC voltage at the end, pu").isCloseTo(1.0, within(1.0e-3));
+        softly.assertThat(worst / 1.0e3).as("a station's poles, kV off symmetric about earth").isLessThan(1.0);
+        softly.assertAll();
+    }
+
+    /**
+     * Upstream's {@code AtpSolverIntegrationTest#aSymmetricMonopolesProtectionsBlockItOnAPoleToPoleFault} on its MMCs: protected at 2 pu,
+     * no DC reactor added, through a solid pole-to-pole fault from DC2P to DC2N from 0.3 s, run 1 s - VSC2 blocked by its protection
+     * first, VSC1 as the discharge reaches it, ATP's 0.22 and 3.6 ms after the fault, within 0.5 ms; then every 0.2 s VSC2's AC side a
+     * bolted short behind its reactor, {@code Q X / V^2} within 0.03 of 1; a station's poles summing to within 2.2 kV of earth from 0.34
+     * s. Kept in {@code target/emtp/mmc-symmetric-pole-to-pole}.
+     *
+     * <p>Run 2026-11-16: VSC2 blocked 0.25 ms after the fault, VSC1 3.59 ms (ATP 0.22 and 3.6); {@code Q X / V^2} 0.986 to 0.992 (ATP
+     * 0.986); VSC1's DC voltage 0.0887 pu (ATP 0.089); the poles' sum within 1.56 kV (ATP 1.1).
+     */
+    @Test
+    @Tag("emtp")
+    void aSymmetricMonopolesMmcProtectionsBlockItOnAPoleToPoleFault() {
+        double fault = 0.3;
+        double runEnd = 1.0;
+        Network network = ExampleNetworks.readVscBench("vsc-symmetric-monopole-mmc", EmtExtensionsXmlReader::readNetwork);
+        network.getVoltageSourceConverters().forEach(c -> c.addExtension(VscProtectionModel.class, new OvercurrentProtection(2.0, 0.0)));
+        EmtNetworkPreprocessor.preprocess(network, LocalComputationManager.getDefault());
+        EmtpOutput output = EmtpRunner.run(EmtpNetlistWriter.write(network, Path.of("target", "emtp", "mmc-symmetric-pole-to-pole"),
+                new EmtpSimulationSettings(20.0e-6, runEnd, FREQUENCY), List.of(new DcFault("F", "DC2P", 0.0, fault, 10.0, "DC2N"))), EmtpSettings.defaults()).output();
+        SoftAssertions softly = new SoftAssertions();
+        String[] ids = {"VSC1", "VSC2"};
+        double[] atp = {3.6e-3, 0.22e-3};
+        for (int k = 0; k < 2; k++) {
+            double blocked = output.firstTimeBelow("control:" + ids[k] + "_RUN", 0.5, 0.2) - NumericalAids.switchingInstant(fault, 20.0e-6);
+            System.out.printf(Locale.ROOT, "%s blocked %.2f ms after the fault (ATP %.2f)%n", ids[k], blocked * 1.0e3, atp[k] * 1.0e3);
+            softly.assertThat(blocked).as("%s blocked after the fault, s, against ATP's", ids[k]).isCloseTo(atp[k], within(0.5e-3));
+        }
+        double reactance = ((AveragedConverterModel) network.getVoltageSourceConverter("VSC2").getExtension(VoltageSourceConverterModel.class))
+                .getPhaseReactorReactance();
+        for (double start = 0.4; start < runEnd - 1.0e-9; start += 0.2) {
+            double v2 = output.mean("control:VSC2_VAC", start, start + 0.2);
+            double shortCircuit = output.mean("control:VSC2_Q", start, start + 0.2) / (v2 * v2) * reactance;
+            System.out.printf(Locale.ROOT, "from %.1f s: VSC2 Q X / V^2 %.4f; VSC1 DC %.4f pu%n", start, shortCircuit, output.mean("control:VSC1_VDC", start, start + 0.2));
+            softly.assertThat(shortCircuit).as("VSC2 Q X / V^2 from %.1f s", start).isCloseTo(1.0, within(0.03));
+        }
+        double worst = worstPoleSum(output, 0.34, runEnd);
+        System.out.printf(Locale.ROOT, "the poles' sum within %.2f kV from 0.34 s%n", worst / 1.0e3);
+        softly.assertThat(worst / 1.0e3).as("a station's poles from 0.34 s, kV off symmetric about earth").isLessThan(2.2);
+        softly.assertAll();
+    }
+
+    /** The largest a station's two poles sum to, V, in absolute value, over each 20 ms from {@code from} to {@code to}. */
+    private static double worstPoleSum(EmtpOutput output, double from, double to) {
+        double worst = 0.0;
+        for (double start = from; start < to - 1.0e-9; start += 0.02) {
+            for (String station : List.of("1", "2")) {
+                double end = Math.min(start + 0.02, to);
+                worst = Math.max(worst, Math.abs(output.mean(EmtpVoltageSourceConverters.dcVoltageScope("DC" + station + "P"), start, end)
+                        + output.mean(EmtpVoltageSourceConverters.dcVoltageScope("DC" + station + "N"), start, end)));
+            }
+        }
+        return worst;
     }
 
     /**
