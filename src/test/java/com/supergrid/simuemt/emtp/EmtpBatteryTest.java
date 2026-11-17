@@ -6,8 +6,15 @@ package com.supergrid.simuemt.emtp;
 
 import com.powsybl.iidm.network.Bus;
 import com.powsybl.iidm.network.Network;
+import com.powsybl.simuemt.extensions.event.EmtEvent;
 import com.powsybl.simuemt.extensions.output.Phasor;
+import com.powsybl.simuemt.pscad.PscadEdition;
+import com.powsybl.simuemt.pscad.PscadOutput;
+import com.powsybl.simuemt.pscad.PscadSimulationSettings;
+import com.powsybl.simuemt.pscad.PscadSwitching;
 import com.powsybl.simuemt.testresources.ExampleNetworks;
+import com.supergrid.simuemt.pscadpro.PscadProSettings;
+import com.supergrid.simuemt.pscadpro.PscadProSimulation;
 import org.assertj.core.api.SoftAssertions;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -33,6 +40,7 @@ class EmtpBatteryTest {
     private static final double FREQUENCY = 50.0;
     private static final double TIME_STEP = 20.0e-6;
     private static final double WINDOW = 0.02;
+    private static final double TRANSIENT_TOLERANCE = 5.0e-3;
 
     /** The battery on the two-bus bench: its probes, its coupling reactors, its PLL, its regulator. */
     @Test
@@ -89,9 +97,9 @@ class EmtpBatteryTest {
      * pu from 0.5 s on; its reactive current coming down as its voltage regulator's integral, wound up through the fault - REEC_C's
      * integral is not held at the limit in upstream's model, nor here -, unwinds: slowly, at Kvi times a voltage the machine's own
      * regulator holds near its reference - swinging with that regulator at first, falling over each of the run's last two seconds.
-     * Not against PSCAD yet: upstream's PSCAD backend refuses the battery's fault from rest (its coupling reactance's offset), and from a
-     * snapshot its template finds the machine 0.34 rad off the load flow at 4 s - or, behind an infinite bus, refuses a fault before 2 s.
-     * Kept in {@code target/emtp/battery-fault}.
+     * Against PSCAD on the infinite bus's bench ({@link #aFaultAtTheBatterysBusRunsInEmtpAsInPscadProfessional}): on this one upstream's
+     * PSCAD backend refuses the battery's fault from rest (its coupling reactance's offset), and from a snapshot its template finds the
+     * machine 0.34 rad off the load flow at 4 s. Kept in {@code target/emtp/battery-fault}.
      *
      * <p>Run 2026-11-15: through the fault its voltage 0.037 pu, Iq 1.0000 and Id 0.6633 pu; Iq 0.744, 0.755, 0.536 and 0.384 pu at 1, 2,
      * 3 and 4 s, its power on its reference throughout.
@@ -130,6 +138,63 @@ class EmtpBatteryTest {
             softly.assertThat(iq[k]).as("its reactive current at %d s against a second before, pu: unwinding", k + 1).isLessThan(iq[k - 1]).isPositive();
         }
         softly.assertAll();
+    }
+
+    /**
+     * The battery behind upstream's ideal infinite bus through the same fault, against PSCAD Professional - upstream's route for it
+     * ({@code PscadFileWriterTest#writeRestartRunsAReecCBatteryThroughAFaultAsKestrelDoes}): from its steady state, its template's
+     * snapshot, the battery held on the load flow until 2 s, the fault after. EMTP starts from its steady state: the same fault, at
+     * the same instant. Its voltage, reactive and active currents on 5 ms means, within 1e-3 pu of PSCAD's before the fault and in
+     * the last 100 ms, within 5e-3 through the fault and the recovery. Kept in {@code
+     * target/emtp/battery-fault-pscad} and {@code target/pscad/battery-fault-pscad}.
+     *
+     * <p>Run 2026-11-17, 72 s the two: settled within 2.4e-5 pu (VT), 1.1e-4 (Iq), 4.5e-6 (Id); through the fault 1.4e-3, 2.0e-3 and
+     * 1.4e-3 - its voltage 0.125 pu, Iq on Iqh1, Id 0.6633 in both. Cleared, the bus back at 1.017 pu with Iq still on its limit in
+     * both: behind the infinite bus nothing pulls the voltage down to the reference the wound-up integral chases.
+     */
+    @Test
+    @Tag("emtp")
+    @Tag("pscad")
+    void aFaultAtTheBatterysBusRunsInEmtpAsInPscadProfessional() {
+        double fault = 2.3;
+        double runEnd = 3.0;
+        double window = 5.0e-3;
+        String name = "battery-fault-pscad";
+        List<EmtEvent> events = List.of(EmtpVscFaultAgainstPscadTest.fault("ABC", fault));
+        EmtpOutput emtp = EmtpRunner.run(EmtpNetlistWriter.write(infiniteBusBench(), Path.of("target", "emtp", name), new EmtpSimulationSettings(TIME_STEP,
+                runEnd, FREQUENCY), events), EmtpSettings.defaults()).output();
+        PscadOutput pscad = PscadProSimulation.runFromSteadyState(infiniteBusBench(), Path.of("target", "pscad", name), new PscadSimulationSettings(TIME_STEP,
+                runEnd, FREQUENCY, PscadEdition.PROFESSIONAL, PscadSwitching.INTERPOLATED), events, PscadProSettings.defaults()).output();
+        SoftAssertions softly = new SoftAssertions();
+        for (String quantity : List.of("VT", "IQ", "ID")) {
+            String ours = "control:BAT_" + quantity;
+            String theirs = "BAT_" + quantity;
+            double settled = 0.0;
+            double through = 0.0;
+            for (double t = 1.5; t + window <= runEnd + 1.0e-9; t += window) {
+                double gap = Math.abs(emtp.mean(ours, t, t + window) - pscad.mean(theirs, t, t + window));
+                if (t + window <= fault || t >= runEnd - 0.1) {
+                    settled = Math.max(settled, gap);
+                } else {
+                    through = Math.max(through, gap);
+                }
+            }
+            System.out.printf(Locale.ROOT, "%s: %s settled within %.2e pu, through the fault %.2e pu of PSCAD's; EMTP %.4f before, %.4f through,"
+                    + " %.4f at the end; PSCAD %.4f, %.4f, %.4f%n", name, quantity, settled, through, emtp.mean(ours, fault - 0.05, fault),
+                    emtp.mean(ours, fault + 0.05, fault + 0.1), emtp.mean(ours, runEnd - 0.05, runEnd), pscad.mean(theirs, fault - 0.05, fault),
+                    pscad.mean(theirs, fault + 0.05, fault + 0.1), pscad.mean(theirs, runEnd - 0.05, runEnd));
+            softly.assertThat(settled).as("%s settled against PSCAD's, pu", quantity).isLessThan(1.0e-3);
+            softly.assertThat(through).as("%s through the fault against PSCAD's, pu", quantity).isLessThan(TRANSIENT_TOLERANCE);
+        }
+        softly.assertAll();
+    }
+
+    /** Upstream's two-bus bench behind its ideal infinite bus, its REEC_C battery on B2, the load flow run. */
+    private static Network infiniteBusBench() {
+        Network network = ExampleNetworks.createTwoBusNetworkWithIdealInfiniteBusGenerator();
+        ExampleNetworks.addReecC(network, "B2");
+        ExampleNetworks.runLoadFlow(network);
+        return network;
     }
 
     /** Upstream's two-bus bench with its REEC_C battery on B2, the load flow run. */
