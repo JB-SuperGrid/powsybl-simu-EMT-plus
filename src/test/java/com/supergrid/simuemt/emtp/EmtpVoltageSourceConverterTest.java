@@ -99,6 +99,19 @@ class EmtpVoltageSourceConverterTest {
         assertThat(bipole).filteredOn(line -> !line.startsWith("!")).allMatch(line -> line.length() <= EmtpNetlistWriter.MAX_LINE);
     }
 
+    /** A protected grid-forming converter (example 3, {@link EmtpVscFaultAgainstPscadTest#protectedGridForming}): written, no longer
+     * refused - its protection's detection on its meters, its running flag, its virtual machine's integrals held on it; every line within
+     * EMTP's 100 characters. */
+    @Test
+    void writesAProtectedGridFormingConverter(@TempDir Path tempDir) throws IOException {
+        List<String> lines = Files.readAllLines(EmtpNetlistWriter.write(EmtpVscFaultAgainstPscadTest.protectedGridForming(), tempDir,
+                new EmtpSimulationSettings(20.0e-6, 0.2, FREQUENCY)), StandardCharsets.ISO_8859_1);
+
+        assertThat(lines).contains("_c_fu;VSC2_PTI;5;5;VSC2_PTI,VSC2_IDCM,VSC2_IMa,VSC2_IMb,VSC2_IMc,");
+        assertThat(lines).anyMatch(line -> line.startsWith("_c_fu;VSC2_RUN;"));
+        assertThat(lines).filteredOn(line -> !line.startsWith("!")).allMatch(line -> line.length() <= EmtpNetlistWriter.MAX_LINE);
+    }
+
     /** A hybrid DC breaker opened through a DC fault (example 4 with DCB): its main branch's switch closed from the steady state, opened
      * at the order whatever its current; its ZnO absorber across it, its first segment from 1e-3 pu; the fault's switch and resistance. */
     @Test

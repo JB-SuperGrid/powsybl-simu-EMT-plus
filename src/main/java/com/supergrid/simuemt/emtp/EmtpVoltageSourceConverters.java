@@ -116,8 +116,9 @@ import static com.supergrid.simuemt.emtp.EmtpSynchronousMachines.function;
  * its DC current read on a meter at its DC terminal, every switch of its blocking on its running flag; restarted by its {@link
  * AutomaticRestart}, if any ({@link #automaticRestart}).
  *
- * <p>Refused, until written: a PLL but the SRF and DDSRF ones, a protection, a chopper but the averaged one, a
- * chopper at an MMC's DC terminal; what {@link EmtpGridFormingControls} refuses.
+ * <p>Refused, until written: a PLL but the SRF and DDSRF ones, a protection but an overcurrent one, a chopper but the averaged one, a
+ * chopper at an MMC's DC terminal; what {@link EmtpGridFormingControls} refuses. A grid-forming converter's protection blocks it as a
+ * grid-following one's, its virtual machine held with it ({@link EmtpGridFormingControls}).
  *
  * @author Jean-Baptiste Heyberger : jean-baptiste.heyberger@supergrid-institute.com
  */
@@ -154,12 +155,11 @@ final class EmtpVoltageSourceConverters {
                 || GridFollowingControl.of(converter).getSynchronization() instanceof DdsrfPll)) {
             reasons.add("its PLL but the SRF and DDSRF ones are not written yet");
         }
-        if (converter.getExtension(VscProtectionModel.class) != null && (!(converter.getExtension(VscProtectionModel.class) instanceof OvercurrentProtection protection)
-                || converter.getExtension(VscControlModel.class) instanceof GridFormingControl
+        if (converter.getExtension(VscProtectionModel.class) != null && (!(converter.getExtension(VscProtectionModel.class) instanceof OvercurrentProtection)
                 || converter.getExtension(VoltageSourceConverterModel.class) instanceof AveragedMmcModel && converter.getExtension(DcEarthingModel.class) != null
                 && !DcMidpointEarthing.valveWindingEarthed(converter))) {
-            reasons.add("its protection but an overcurrent one on a grid-following converter - an MMC earthed at its midpoint with its valve winding"
-                    + " earthed - is not written yet");
+            reasons.add("its protection but an overcurrent one - on an MMC earthed at its midpoint, with its valve winding earthed - is not"
+                    + " written yet");
         }
         if (converter.getExtension(DcEarthingModel.class) != null && !(converter.getExtension(DcEarthingModel.class) instanceof DcMidpointEarthing)) {
             reasons.add("its DC earthing but the midpoint one is not written yet");
