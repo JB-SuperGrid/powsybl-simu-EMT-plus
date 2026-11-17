@@ -378,6 +378,27 @@ class EmtpVscFaultAgainstPscadTest {
                 "CSW"), "ieee39-dc-fault-b16", 5.0e-3, SETTLED_TOLERANCE, 0.03, false, 2.2, PscadSwitching.INTERPOLATED);
     }
 
+    /**
+     * The overlay's PROMOTioN five-terminal benchmark ({@code PromotionDcNetwork}): its MMC stations - A1's and B1's choppers across their
+     * DC terminals - and its wind parks, through a solid three-phase fault at A1's grid for 100 ms, as its PSCAD study's {@code
+     * promotion-dc-ac-fault-a1}: A1's power gone, the DC voltages braked by A1's and B1's choppers. PSCAD's 2.3 s, from rest. Its stations
+     * by 5 ms windows: settled within 5e-3 pu of PSCAD's - its DC grid's cables ringing in both before the fault, CB1's power around
+     * -1.004 pu by +-3e-3, not in phase -, through the fault and the recovery 3e-2, as the AC networks'.
+     *
+     * <p>Run 2026-11-17, 52 s the two: settled within 4.0e-3 pu of PSCAD's (CB1's power), the rest 9.2e-4; through the fault every
+     * station within 6e-3 but A1's reactive power, on the faulted bus, 2.4e-2; the DC voltages braked alike, within 7.4e-4.
+     */
+    @Test
+    void promotionsChoppersBrakeItsDcVoltageInEmtpAsInPscadProfessional() throws IOException {
+        compare(() -> {
+            Network network = EmtExtensionsXmlReader.readNetwork(EmtpVscFaultAgainstPscadTest.class.getResourceAsStream("/promotion-dc.xiidm"),
+                    EmtpVscFaultAgainstPscadTest.class.getResourceAsStream("/promotion-dc-extensions.xml"));
+            EmtNetworkPreprocessor.preprocess(network, LocalComputationManager.getDefault());
+            return network;
+        }, start -> List.of(new BusFault("F", "BGA1", "ABC", true, 1.0, start, start + 0.1, FaultClearing.AT_CURRENT_ZERO)), converters("CA1", "CB1", "CC2",
+                "CD1", "CD2"), "promotion-dc-ac-fault-a1", 5.0e-3, 5.0e-3, 0.03, false, PSCAD_SHIFT, PscadSwitching.INTERPOLATED);
+    }
+
     static void compare(Supplier<Network> bench, DoubleFunction<List<? extends EmtEvent>> events, List<Channel> channels, String name,
                                 double window, double settledTolerance, double transientTolerance, boolean settlesAfter, double pscadShift,
                                 PscadSwitching switching) throws IOException {
