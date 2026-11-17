@@ -11,12 +11,15 @@ import com.powsybl.simuemt.extensions.event.BusFault;
 import com.powsybl.simuemt.extensions.event.ConverterBlocking;
 import com.powsybl.simuemt.extensions.infinitebus.InfiniteBusEmf;
 import com.powsybl.simuemt.extensions.infinitebus.InfiniteBusGeneratorModel;
+import com.powsybl.simuemt.extensions.wind.Wt4bModel;
 import com.powsybl.simuemt.pscad.PscadSwitching;
 import com.powsybl.simuemt.testresources.ExampleNetworks;
 import org.assertj.core.api.SoftAssertions;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -143,6 +146,61 @@ class EmtpWindTurbineTest {
         EmtpVscFaultAgainstPscadTest.compare(EmtpWindTurbineTest::bench, start -> List.of(new BusFault(dip.id(), dip.busId(), "ABC", true, dip.onResistanceOhm(),
                 start, start + dip.openTimeSeconds() - dip.closeTimeSeconds(), dip.clearing())), channels, "wt4b-dip-pscad", 5.0e-3, 1.0e-3, 0.02, true,
                 EmtpVscFaultAgainstPscadTest.PSCAD_SHIFT, PscadSwitching.INTERPOLATED);
+    }
+
+    /** REEC_A's three controls written (the park with {@code PfFlag}, {@code VFlag} and {@code QFlag}): its active power filtered, its
+     * reactive power's and its voltage's PIs - each integral frozen through a dip -, no longer {@code tIq}'s lag; every line within EMTP's
+     * 100 characters. */
+    @Test
+    void writesAWt4bsReactiveControls(@TempDir Path tempDir) throws IOException {
+        List<String> lines = Files.readAllLines(EmtpNetlistWriter.write(flagged(true, true, true), tempDir, new EmtpSimulationSettings(20.0e-6, 0.1,
+                FREQUENCY)), StandardCharsets.ISO_8859_1);
+
+        assertThat(lines).anyMatch(line -> line.startsWith("_c_fs;WT1_PF;")).anyMatch(line -> line.startsWith("_c_fu;WT1_QPIN;"))
+                .anyMatch(line -> line.startsWith("_c_fu;WT1_VPIN;")).noneMatch(line -> line.startsWith("_c_fu;WT1_BN;"));
+        assertThat(lines).filteredOn(line -> !line.startsWith("!")).allMatch(line -> line.length() <= EmtpNetlistWriter.MAX_LINE);
+    }
+
+    /**
+     * REEC_A's power factor, reactive power and voltage controls against PSCAD Professional, the park through the same dip as {@link
+     * #theWindParksDipRunsInEmtpAsInPscadProfessional}: with {@code PfFlag} alone, the reactive power reference the active power's through
+     * {@code tpREEC} on the load flow's power factor; with all three, that reference through a PI on the reactive power to the voltage
+     * reference, and a PI on the voltage to the reactive current. No dataset sets them: Dynawo's example's park with its gains. Its terminal
+     * voltage and its powers within 1e-3 pu of PSCAD's settled, before the dip and in its last 100 ms, and 2e-2 through it and the
+     * recovery, on 5 ms means. Kept in {@code target/emtp/wt4b-<flags>-pscad} and {@code target/pscad/wt4b-<flags>-pscad}.
+     *
+     * <p>Run 2026-11-17, 61 s the four: {@code PfFlag} alone settled within 8.4e-6 pu of PSCAD's, through the dip 4.0e-3 (voltage), 2.9e-3
+     * (active power), 5.1e-3 (reactive power); all three within 3.8e-6, and 3.5e-3, 3.0e-3, 3.9e-3.
+     */
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"pf", "pf-v-q"})
+    @Tag("emtp")
+    @Tag("pscad")
+    void theWindParksReactiveControlsRunInEmtpAsInPscadProfessional(String flags) throws IOException {
+        List<EmtpVscFaultAgainstPscadTest.Channel> channels = List.of(new EmtpVscFaultAgainstPscadTest.Channel("WT1_U", "control:WT1_U", "WT1_WU", 1.0),
+                new EmtpVscFaultAgainstPscadTest.Channel("WT1_P", "control:WT1_P", "WT1_WP", 1.0),
+                new EmtpVscFaultAgainstPscadTest.Channel("WT1_Q", "control:WT1_Q", "WT1_WQ", 1.0));
+        BusFault dip = ExampleNetworks.WIND_TURBINE_DIP;
+        boolean all = "pf-v-q".equals(flags);
+        EmtpVscFaultAgainstPscadTest.compare(() -> flagged(true, all, all), start -> List.of(new BusFault(dip.id(), dip.busId(), "ABC", true,
+                dip.onResistanceOhm(), start, start + dip.openTimeSeconds() - dip.closeTimeSeconds(), dip.clearing())), channels, "wt4b-" + flags + "-pscad",
+                5.0e-3, 1.0e-3, 0.02, true, EmtpVscFaultAgainstPscadTest.PSCAD_SHIFT, PscadSwitching.INTERPOLATED);
+    }
+
+    /** Upstream's WT4B bench, its REEC_A's {@code PfFlag}, {@code VFlag} and {@code QFlag} as given, the load flow run. */
+    static Network flagged(boolean powerFactor, boolean reactivePower, boolean voltage) {
+        Network network = ExampleNetworks.createWindTurbineNetwork();
+        Generator turbine = network.getGenerator("WT1");
+        Wt4bModel model = (Wt4bModel) turbine.getExtension(GeneratorModel.class);
+        Wt4bModel.ElectricalControl r = model.getElectricalControl();
+        turbine.addExtension(GeneratorModel.class, new Wt4bModel(new Wt4bModel.ElectricalControl(powerFactor, reactivePower, voltage, r.activePowerPriority(),
+                r.voltageFilterTimeConstant(), r.activePowerFilterTimeConstant(), r.reactivePowerMax(), r.reactivePowerMin(), r.voltageMax(), r.voltageMin(),
+                r.reactivePowerProportionalGain(), r.reactivePowerIntegralGain(), r.voltageProportionalGain(), r.voltageIntegralGain(),
+                r.reactiveCurrentTimeConstant(), r.voltageBias(), r.voltageDipThreshold(), r.voltageUpThreshold(), r.injectionVoltageReference(),
+                r.injectionDeadbandLow(), r.injectionDeadbandHigh(), r.injectionGain(), r.injectionMax(), r.injectionMin(), r.injectionHoldTime(),
+                r.frozenInjection(), r.activePowerRateMax(), r.activePowerRateMin(), r.activePowerOrderTimeConstant(), r.activePowerMax(), r.activePowerMin(),
+                r.currentMax(), r.activeCurrentLimitHoldTime(), r.activeCurrentLimit(), r.reactiveCurrentLimit()), model.getGeneratorConverter(), model.getPll()));
+        return ExampleNetworks.withLoadFlow(network);
     }
 
     /** Upstream's WT4B bench, the load flow run. */

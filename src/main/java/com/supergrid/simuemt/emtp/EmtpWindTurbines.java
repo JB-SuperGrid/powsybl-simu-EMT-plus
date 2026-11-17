@@ -45,8 +45,12 @@ import static com.supergrid.simuemt.emtp.EmtpVoltageSourceConverters.step;
  * while it is under its duration. Blocked ({@code ConverterBlocking} on its generator): the injector's currents times a flag stepping to 0
  * at its instant, and a breaker between its bus and its meter letting go of each phase at its current's first zero - for good.
  *
- * <p>Refused, until written: REEC_A's power factor, reactive power and voltage controls ({@code PfFlag}, {@code VFlag}, {@code QFlag}),
- * which no dataset here sets; a negative {@code tHoldIq} is written (the injection held on the voltage).
+ * <p>REEC_A's power factor, reactive power and voltage controls, as upstream's backends write them: with {@code PfFlag}, the reactive
+ * power reference the active power through {@code tpREEC} times the power factor angle's tangent; with {@code VFlag}, the voltage
+ * reference a PI on the reactive power within {@code [VMin, VMax]}, rather than {@code VRef1} plus the reference; with {@code QFlag}, the
+ * reactive current a PI on the voltage within {@code +/- IqMax}, rather than the reference over the voltage through {@code tIq} - each PI's
+ * integral frozen through a dip and wound back at {@link Wt4bLogic#PI_ANTI_WINDUP_NI}, from the load flow's state. A negative {@code
+ * tHoldIq} is written (the injection held on the voltage).
  *
  * @author Jean-Baptiste Heyberger : jean-baptiste.heyberger@supergrid-institute.com
  */
@@ -63,12 +67,7 @@ final class EmtpWindTurbines {
 
     /** Why {@code generator}'s WT4B cannot be written yet - empty if it can. */
     static List<String> unsupportedReasons(Generator generator) {
-        Wt4bModel.ElectricalControl reec = ((Wt4bModel) generator.getExtension(GeneratorModel.class)).getElectricalControl();
-        List<String> reasons = new ArrayList<>();
-        if (reec.powerFactorControl() || reec.reactivePowerControl() || reec.voltageControl()) {
-            reasons.add("its WT4B's REEC_A power factor, reactive power or voltage control (PfFlag, VFlag, QFlag) is not written yet");
-        }
-        return reasons;
+        return new ArrayList<>();
     }
 
     /** {@code generator}'s devices on its bus's phases {@code phaseNodes}, blocked at {@code blockingSeconds} - {@code NaN} for never. */
@@ -212,7 +211,17 @@ final class EmtpWindTurbines {
             String run = f("RN", List.of(frt), 1.0, "1-u[1]");
             String uf = lag("UF", u, u0, reec.voltageFilterTimeConstant());
             String floored = "0.5*(u[1]+" + number(Wt4bLogic.VOLTAGE_FLOOR_PU) + "+ABS(u[1]-" + number(Wt4bLogic.VOLTAGE_FLOOR_PU) + "))";
-            double qLim = Math.min(Math.max(initial.reactivePower(), reec.reactivePowerMin()), reec.reactivePowerMax());
+            // The reactive power reference: the load flow's, or the active power's on its power factor; within [QMin, QMax].
+            double qRef0 = reec.powerFactorControl() ? Math.tan(initial.powerFactorAngle()) * initial.activePower() : initial.reactivePower();
+            double qLim0 = Math.min(Math.max(qRef0, reec.reactivePowerMin()), reec.reactivePowerMax());
+            String qLim;
+            if (reec.powerFactorControl()) {
+                String pf = lag("PF", n("P"), initial.activePower(), reec.activePowerFilterTimeConstant());
+                qLim = f("QL", List.of(pf), qLim0, clamp("(" + number(Math.tan(initial.powerFactorAngle())) + ")*u[1]", number(reec.reactivePowerMin()),
+                        number(reec.reactivePowerMax())));
+            } else {
+                qLim = f("QL", List.of(zero), qLim0, number(qLim0) + "+0*u[1]");
+            }
             // The time since the last dip ended, every hold's clock.
             f("SNR", List.of(run, frt, n("SN")), 1.0, "u[1]-u[2]*u[3]/" + number(Wt4bLogic.TIMER_RESET_TIME_CONSTANT_S));
             String since = integral("SN", n("SNR"), Wt4bLogic.TIME_SINCE_DIP_INITIAL_S);
@@ -241,10 +250,27 @@ final class EmtpWindTurbines {
                         + ")-u[2]") + "*(u[3]-u[4])+u[4]");
             }
 
-            // The reactive current: the reference over the voltage through tIq, frozen through a dip; plus the injection and its logic.
-            f("BN", List.of(run, uf, n("IB")), 0.0, "u[1]*((" + number(qLim) + ")/(" + floored.replace("u[1]", "u[2]") + ")-u[3])/"
-                    + number(reec.reactiveCurrentTimeConstant()));
-            String iqBase = integral("IB", n("BN"), iq0);
+            // The reactive current: the voltage PI's, or the reference over the voltage through tIq - frozen through a dip; plus the
+            // injection and its logic.
+            String iqBase;
+            if (reec.voltageControl()) {
+                String vSel;
+                if (reec.reactivePowerControl()) {
+                    String qError = f("QE", List.of(qLim, n("Q")), qLim0 - initial.reactivePower(), "u[1]-u[2]");
+                    vSel = pi("QPI", qError, reec.reactivePowerProportionalGain(), reec.reactivePowerIntegralGain(), number(reec.voltageMin()),
+                            number(reec.voltageMax()), List.of(), logic.reactivePowerPiIntegral0(), run);
+                } else {
+                    vSel = f("VS", List.of(qLim), Math.min(Math.max(reec.voltageBias() + qLim0, reec.voltageMin()), reec.voltageMax()),
+                            clamp("(" + number(reec.voltageBias()) + ")+u[1]", number(reec.voltageMin()), number(reec.voltageMax())));
+                }
+                String vError = f("VE", List.of(vSel, uf), 0.0, "u[1]-u[2]");
+                iqBase = pi("VPI", vError, reec.voltageProportionalGain(), reec.voltageIntegralGain(), "-u[2]", "u[2]", List.of(iqMax),
+                        logic.voltagePiIntegral0(), run);
+            } else {
+                f("BN", List.of(run, uf, n("IB"), qLim), 0.0, "u[1]*(u[4]/(" + floored.replace("u[1]", "u[2]") + ")-u[3])/"
+                        + number(reec.reactiveCurrentTimeConstant()));
+                iqBase = integral("IB", n("BN"), iq0);
+            }
             String deviation = "(" + number(initial.injectionVoltageReference(reec)) + ")-u[1]";
             String high = "0.5*((" + deviation + "-(" + number(reec.injectionDeadbandHigh()) + "))+ABS(" + deviation + "-(" + number(reec.injectionDeadbandHigh()) + ")))";
             String low = "0.5*((" + deviation + "-(" + number(reec.injectionDeadbandLow()) + "))-ABS(" + deviation + "-(" + number(reec.injectionDeadbandLow()) + ")))";
@@ -300,6 +326,23 @@ final class EmtpWindTurbines {
                         number(vbpk) + "*(u[1]*COS(u[3]+(" + number(ahead) + "))-u[2]*SIN(u[3]+(" + number(ahead) + ")))");
             }
             return devices;
+        }
+
+        /**
+         * A REEC_A PI {@code <id>_<code>} on {@code error}, as upstream's: {@code Kp (e + I)} within {@code [min, max]} - expressions of
+         * {@code u[2]...}, {@code bounds} their inputs -, its integral {@code I} rising at {@code running Ki/Kp (e + (y - Kp (e + I)) / (Kp
+         * Ni))} from {@code integral0}: frozen through a dip, wound back past its bounds.
+         */
+        private String pi(String code, String error, double proportionalGain, double integralGain, String min, String max, List<String> bounds,
+                          double integral0, String running) {
+            List<String> inputs = new ArrayList<>(List.of(n(code + "U")));
+            inputs.addAll(bounds);
+            String unlimited = f(code + "U", List.of(error, n(code + "I")), proportionalGain * integral0, "(" + number(proportionalGain) + ")*(u[1]+u[2])");
+            String y = f(code, inputs, proportionalGain * integral0, clamp("u[1]", min, max));
+            f(code + "N", List.of(running, error, y, unlimited), 0.0, "u[1]*(" + number(integralGain / proportionalGain) + ")*(u[2]+(u[3]-u[4])/("
+                    + number(proportionalGain * Wt4bLogic.PI_ANTI_WINDUP_NI) + "))");
+            integral(code + "I", n(code + "N"), integral0);
+            return y;
         }
 
         /** A voltage-dependent current limit at {@code voltage}: its first point's value, plus each segment's rise up to it - a step, two
