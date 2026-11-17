@@ -337,6 +337,27 @@ class EmtpVscFaultAgainstPscadTest {
         return network;
     }
 
+    /**
+     * The overlay's Kundur two-area system with its DC grid ({@code KundurDcNetwork}): its four machines with their exciters, PSSs and
+     * TGOV1s, its three VSC stations and its wind park, through a solid three-phase fault at bus 7 for 100 ms, as its PSCAD study's
+     * {@code kundur-dc-fault-b7} - PSCAD's 2.5 s, from rest. Its stations by 5 ms windows: settled within 1e-3 pu of PSCAD's, through the
+     * fault and the recovery 3e-2 - the network's first comparison at its own scale, four machines swinging, PSCAD's from rest.
+     *
+     * <p>Run 2026-11-17, 56 s the two: settled within 6.5e-4 pu of PSCAD's; through the fault CS9 within 8e-3 pu and CSW 1.1e-3, the DC
+     * voltages 1.4e-3; CS7, on the faulted bus, 1.3e-2 on its powers and 2.4e-2 on its AC voltage in the 5 ms its fault clears in - at
+     * its currents' zeros, each solver's -, then within 1e-2, swinging with the machines (+4e-3 to -4e-3 by the end).
+     */
+    @Test
+    void kundursTwoAreasWithTheirDcGridRunInEmtpAsInPscadProfessional() throws IOException {
+        compare(() -> {
+            Network network = EmtExtensionsXmlReader.readNetwork(EmtpVscFaultAgainstPscadTest.class.getResourceAsStream("/kundur-dc.xiidm"),
+                    EmtpVscFaultAgainstPscadTest.class.getResourceAsStream("/kundur-dc-extensions.xml"));
+            EmtNetworkPreprocessor.preprocess(network, LocalComputationManager.getDefault());
+            return network;
+        }, start -> List.of(new BusFault("F", "B7", "ABC", true, 1.0, start, start + 0.1, FaultClearing.AT_CURRENT_ZERO)), converters("CS7", "CS9", "CSW"),
+                "kundur-dc-fault-b7", 5.0e-3, SETTLED_TOLERANCE, 0.03, false, 2.2, PscadSwitching.INTERPOLATED);
+    }
+
     static void compare(Supplier<Network> bench, DoubleFunction<List<? extends EmtEvent>> events, List<Channel> channels, String name,
                                 double window, double settledTolerance, double transientTolerance, boolean settlesAfter, double pscadShift,
                                 PscadSwitching switching) throws IOException {
