@@ -32,9 +32,12 @@ import java.util.List;
  * grid-following station on bus 29's short-circuit ratio of 1.3, its PLL slowed to ride this very fault, its power through the recovery
  * 2.7e-2 apart between EMTP's 20 us and 10 us runs, PSCAD's 3e-3 -, and at 10 us EMTP's is PSCAD's within 5e-3.
  *
- * <p>Left out: IEEE 39 all synchronous - no converter, nothing Kundur's machines do not hold already -; IEEE 39 GFM 65 %, until understood:
- * its grid-forming CL36, its current limited through the fault, holds its bus at 0.61 pu in EMTP where PSCAD's falls to 0.41 (0.20 pu
- * of reactive power apart), at 20 us and at 10 us alike, back together within 2e-3 once cleared.
+ * <p>Left out: IEEE 39 all synchronous - no converter, nothing Kundur's machines do not hold already -; and IEEE 39 GFM 65 %, which has
+ * no trajectory to compare through its fault: its grid-forming CL36, deep in the fault and current-limited, enters a limit cycle in both
+ * solvers, its steady-state current limit's integrator swinging from -0.4 to 0.8 every 18 ms or so and its bus with it - 0.36 to 0.87
+ * pu in EMTP, 0.26 to 0.63 in PSCAD -, its amplitude the solver's and its time step's (0.08 pu of reactive power apart at 20 us, 0.20
+ * at 10); its current limit the same in both, its virtual machine's speed within 1e-4 all through, back together within 2e-3 once
+ * cleared.
  *
  * <p>Run 2026-11-17, 22 min the eight: IEEE 68 within 7.6e-4 settled and 2.0e-3 through the fault; IEEE 39 GFM 2.1e-3 and 6.2e-3;
  * CIGRE B4 3.8e-3 and 1.3e-2; IEEE 39 mix 65 % 2.4e-3 and 1.5e-2; IEEE 39 GFL 5.0e-4 and 1.6e-2; IEEE 39 GFL 65 % 5.3e-4 and 1.8e-2;
