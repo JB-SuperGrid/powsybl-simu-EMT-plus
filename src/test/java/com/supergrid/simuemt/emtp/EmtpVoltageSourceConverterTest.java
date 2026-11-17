@@ -112,6 +112,22 @@ class EmtpVoltageSourceConverterTest {
         assertThat(lines).filteredOn(line -> !line.startsWith("!")).allMatch(line -> line.length() <= EmtpNetlistWriter.MAX_LINE);
     }
 
+    /** An MMC's chopper across its DC terminal (PROMOTioN's A1 and B1): its current source from its DC terminal's node to its return's,
+     * between ties of its own, its RC across it, its current {@code -d u / R} on its terminal's voltage - no term of the MMC's DC current. */
+    @Test
+    void writesAnMmcsChopperAcrossItsDcTerminal(@TempDir Path tempDir) throws IOException {
+        Network network = EmtExtensionsXmlReader.readNetwork(EmtpVoltageSourceConverterTest.class.getResourceAsStream("/promotion-dc.xiidm"),
+                EmtpVoltageSourceConverterTest.class.getResourceAsStream("/promotion-dc-extensions.xml"));
+        EmtNetworkPreprocessor.preprocess(network, LocalComputationManager.getDefault());
+        List<String> lines = Files.readAllLines(EmtpNetlistWriter.write(network, tempDir, new EmtpSimulationSettings(20.0e-6, 0.1, FREQUENCY)),
+                StandardCharsets.ISO_8859_1);
+
+        assertThat(lines).contains("_cI;CA1_CH;6;6;CA1_CHP,CA1_CHR,CA1_ICH,CA1_CHV,CA1_CHI,CA1_CHPW,", "_c_fu;CA1_ICH;4;4;CA1_ICH,CA1_DCH,CA1_VDP,CA1_VDR,")
+                .anyMatch(line -> line.startsWith("_RLC;CA1_CHS;2;2;"));
+        assertThat(lines).filteredOn(line -> line.startsWith("_c_fu;CA1_IDCF;")).allMatch(line -> !line.contains("CA1_DCH"));
+        assertThat(lines).filteredOn(line -> !line.startsWith("!")).allMatch(line -> line.length() <= EmtpNetlistWriter.MAX_LINE);
+    }
+
     /** A hybrid DC breaker opened through a DC fault (example 4 with DCB): its main branch's switch closed from the steady state, opened
      * at the order whatever its current; its ZnO absorber across it, its first segment from 1e-3 pu; the fault's switch and resistance. */
     @Test

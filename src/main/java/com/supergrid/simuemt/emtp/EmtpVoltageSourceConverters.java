@@ -116,8 +116,12 @@ import static com.supergrid.simuemt.emtp.EmtpSynchronousMachines.function;
  * its DC current read on a meter at its DC terminal, every switch of its blocking on its running flag; restarted by its {@link
  * AutomaticRestart}, if any ({@link #automaticRestart}).
  *
- * <p>Refused, until written: a PLL but the SRF and DDSRF ones, a protection but an overcurrent one, a chopper but the averaged one, a
- * chopper at an MMC's DC terminal; what {@link EmtpGridFormingControls} refuses. A grid-forming converter's protection blocks it as a
+ * <p>An MMC's {@link AveragedDcChopperModel} across its DC terminal, as ATP's: a current source of its own, {@code d u / R} from its DC
+ * terminal 1's node to its return's, {@code d} on its terminal's DC voltage, the chopper's RC across it - not on its equivalent capacitor,
+ * behind its arms' DC equivalent, where the chopper and that inductance swing with its DC voltage control, never settling.
+ *
+ * <p>Refused, until written: a PLL but the SRF and DDSRF ones, a protection but an overcurrent one, a chopper but the averaged one;
+ * what {@link EmtpGridFormingControls} refuses. A grid-forming converter's protection blocks it as a
  * grid-following one's, its virtual machine held with it ({@link EmtpGridFormingControls}).
  *
  * @author Jean-Baptiste Heyberger : jean-baptiste.heyberger@supergrid-institute.com
@@ -167,9 +171,6 @@ final class EmtpVoltageSourceConverters {
         DcChopperModel chopper = converter.getExtension(DcChopperModel.class);
         if (chopper != null && !(chopper instanceof AveragedDcChopperModel)) {
             reasons.add("its chopper but the averaged one is not written yet");
-        }
-        if (chopper != null && model.measuresDcVoltageAtTerminal()) {
-            reasons.add("its chopper at its DC terminal, beyond its arms, is not written yet");
         }
         return reasons;
     }
@@ -640,8 +641,14 @@ final class EmtpVoltageSourceConverters {
             String duty = id + "_DCH";
             devices.add(function(id + "_DCH", duty, List.of(vPole, vReturn), 0.0, clamp01("((u[1]-u[2])/" + number(dcBaseVolts) + "-" + number(averaged.getActivationVoltage())
                     + ")/" + number(span))));
-            dcInputs.add(duty);
-            chopper = "-u[" + dcInputs.size() + "]*(u[2]-u[3])/" + number(averaged.resistanceOhm(initial.dcNominalVoltage()));
+            String resistance = number(averaged.resistanceOhm(initial.dcNominalVoltage()));
+            if (chopperAtTerminal(converter)) {
+                // Across its DC terminal, on its own current source (dcSide): out of the pole, its terminal's voltage over its resistance.
+                devices.add(function(id + "_ICH", id + "_ICH", List.of(duty, vPole, vReturn), 0.0, "-u[1]*(u[2]-u[3])/" + resistance));
+            } else {
+                dcInputs.add(duty);
+                chopper = "-u[" + dcInputs.size() + "]*(u[2]-u[3])/" + resistance;
+            }
         }
         String floor = number(DC_VOLTAGE_FLOOR_PU * dcBaseVolts);
         devices.add(function(id + "_IDCF", dcCurrent, dcInputs, initial.dcCurrent() * 1.0e3, "u[1]*" + number(initial.baseApparentPower() * 1.0e6)
@@ -784,6 +791,13 @@ final class EmtpVoltageSourceConverters {
         devices.add(element("_RLC", id + "_CSG", List.of(id + "_CZ", capacitor), number(NumericalAids.VALVE_GRADING_OHM) + ",0,0,0,0,"));
         devices.add(element("_RLC", id + "_PSN", List.of(pole, ret), number(NumericalAids.MMC_POLE_SNUBBER_OHM) + ",0," + number(NumericalAids.MMC_POLE_SNUBBER_F)
                 + ",0,0,"));
+    }
+
+    /** Whether {@code converter}'s DC chopper is across its DC terminal, on a current source of its own: an MMC's, its DC voltage read
+     * there, beyond its arms. */
+    static boolean chopperAtTerminal(VoltageSourceConverter converter) {
+        return converter.getExtension(DcChopperModel.class) instanceof AveragedDcChopperModel
+                && ((AveragedConverterModel) converter.getExtension(VoltageSourceConverterModel.class)).measuresDcVoltageAtTerminal();
     }
 
     /** Whether {@code converter}'s protection restarts it automatically. */
@@ -1084,6 +1098,17 @@ final class EmtpVoltageSourceConverters {
         devices.add(element("_cI", id + "_DC", List.of(poleTie, returnTie, dcCurrent, id + "_DCV", id + "_DCI", id + "_DCPW"), "-1,1E15,0,0,0,0,0,0,0,"));
         devices.add(element("_RLC", id + "_TP", List.of(poleTie, pole), number(NumericalAids.CURRENT_SOURCE_TIE_RESISTANCE_OHM) + ",0,0,0,0,"));
         devices.add(element("_RLC", id + "_TR", List.of(returnTie, ret), number(NumericalAids.CURRENT_SOURCE_TIE_RESISTANCE_OHM) + ",0,0,0,0,"));
+        if (chopperAtTerminal(converter)) {
+            // An MMC's chopper across its DC terminal: its current source between ties of its own, its RC across it.
+            String chopperPole = id + "_CHP";
+            String chopperReturn = id + "_CHR";
+            devices.add(element("_cI", id + "_CH", List.of(chopperPole, chopperReturn, id + "_ICH", id + "_CHV", id + "_CHI", id + "_CHPW"),
+                    "-1,1E15,0,0,0,0,0,0,0,"));
+            devices.add(element("_RLC", id + "_CHTP", List.of(chopperPole, terminal), number(NumericalAids.CURRENT_SOURCE_TIE_RESISTANCE_OHM) + ",0,0,0,0,"));
+            devices.add(element("_RLC", id + "_CHTR", List.of(chopperReturn, ret), number(NumericalAids.CURRENT_SOURCE_TIE_RESISTANCE_OHM) + ",0,0,0,0,"));
+            devices.add(element("_RLC", id + "_CHS", List.of(terminal, ret), number(NumericalAids.DC_CHOPPER_SNUBBER_OHM) + ",0,"
+                    + number(NumericalAids.DC_CHOPPER_SNUBBER_F) + ",0,0,"));
+        }
         if (converter.getExtension(DcEarthingModel.class) instanceof DcMidpointEarthing earthing) {
             // A symmetric monopole's converter earthing its DC side itself: its capacitor in two halves of twice its capacitance, their
             // midpoint earthed through its resistance - a solid earthing through a ground connection's 0.01 ohm, as ATP's.
