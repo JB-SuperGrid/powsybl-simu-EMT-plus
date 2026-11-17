@@ -191,6 +191,29 @@ class EmtpVscFaultAgainstPscadTest {
     }
 
     /**
+     * Upstream's {@code BackendComparisonTest#allThreeBackendsCarryABipoleOnAsAMonopoleOnceAPoleIsLost}: the bipole behind its converter
+     * transformers, its negative pole's two converters blocked ({@code converter-blocking-vsc1n-vsc2n-0.3}) - the positive pole carried on
+     * as a monopole returning through earth, the negative pole's converters idle diode bridges, the isolated negative pole discharging
+     * through them. Its four converters' powers, VSC1P's DC voltage and DC1N's by 20 ms windows, upstream's. PSCAD's blocking 2 s on from
+     * EMTP's, after its converters are let go.
+     *
+     * <p>Run 2026-11-17, 38 s the two: settled within 8.7e-4 pu of PSCAD's (DC1N); through the blocking VSC1N's power within 1.3e-3 pu,
+     * the other converters' 2.1e-4, VSC1P's DC voltage 1.5e-5, DC1N 8.8e-4 - 440 V, upstream holding ATP, Xyce and Kestrel to 500 V.
+     */
+    @Test
+    void aBipoleLosingItsNegativePoleRunsInEmtpAsInPscadProfessional() throws IOException {
+        List<Channel> channels = new ArrayList<>();
+        for (String id : List.of("VSC1P", "VSC1N", "VSC2P", "VSC2N")) {
+            channels.add(new Channel(id + "_P", "control:" + id + "_P", id + "_P", 1.0));
+        }
+        channels.add(new Channel("VSC1P_VDC", "control:VSC1P_VDC", "VSC1P_VDC", 1.0));
+        channels.add(new Channel("DC1N", EmtpVoltageSourceConverters.dcVoltageScope("DC1N"), "V_DC1N", 500.0e3));
+        compare(() -> EmtpVoltageSourceConverterTest.bench("vsc-bipole-converter-transformers"), start -> List.of(new ConverterBlocking("VSC1N", start),
+                new ConverterBlocking("VSC2N", start)), channels, "bipole-pole-loss", 0.02, SETTLED_TOLERANCE, TRANSIENT_TOLERANCE, true, PSCAD_SHIFT,
+                PscadSwitching.INTERPOLATED);
+    }
+
+    /**
      * Upstream's {@code dc-fault-protected} ({@link EmtpVoltageSourceConverterTest#protectedWithDcReactors}): example 4's stations with their
      * DC reactors, protected at 2 pu, through a solid fault on DC3P from the fault to the end, blocked in turn by their protections and
      * feeding the fault through their bridges - by 200 ms windows, as upstream holds PSCAD, ATP and Kestrel to one another on it: the
