@@ -99,7 +99,8 @@ import java.util.stream.Stream;
  *     a third in a delta; a star point earth when solidly earthed, else a node of its own with its grounding impedance, or 0.003 uF
  *     to earth isolated, and 0.003 uF from each phase of a delta side, as ATP has them;</li>
  *     <li>a load, constant impedance: per phase, from {@link LoadBranches} at the load flow's voltage, its resistance then its
- *     inductance to earth through a node of its own, {@code 16L/Dt} across the inductance;</li>
+ *     inductance to earth through a node of its own, {@code 16L/Dt} across the inductance - capacitive, its capacitance in series with
+ *     its resistance, that at {@code Dt/16C} at the least, as ATP's;</li>
  *     <li>an infinite-bus generator: per phase a cosine source ({@code _Vsine}, active in the steady state) at the EMF that puts
  *     its bus on the load flow ({@link InfiniteBusEmf}), behind the network's short-circuit resistance - its milliohm at least - and
  *     inductance, {@code 16L/Dt} across it;</li>
@@ -949,6 +950,15 @@ public final class EmtpNetlistWriter {
             double s2 = (branch.pMw() * branch.pMw() + branch.qMvar() * branch.qMvar()) * 1.0e12;
             double resistance = v2 * branch.pMw() * 1.0e6 / s2;
             double inductance = v2 * branch.qMvar() * 1.0e6 / s2 / omega(settings);
+            if (inductance < 0.0) {
+                // Capacitive: a capacitance of the same reactance in series, never the negative inductance, whose branch diverges -
+                // its resistance raised to NumericalAids#capacitiveLoadSeriesResistanceOhm's at the least, as ATP's.
+                double capacitance = -1.0 / (omega(settings) * omega(settings) * inductance);
+                lines.comment(NumericalAids.COMMENT_MARKER + ": the load resistance at Dt/16C at the least, in series with its capacitance");
+                lines.add("_RLC", id(load) + "_C" + phase, List.of(node(busId, branch.from())), number(NumericalAids.capacitiveLoadSeriesResistanceOhm(
+                        resistance, capacitance, settings.timeStepSeconds())) + ",0," + number(capacitance) + ",0,0,");
+                continue;
+            }
             String inner = "Z" + id(load) + phase;
             lines.add("_RLC", id(load) + "_R" + phase, List.of(node(busId, branch.from()), inner), rl(resistance, 0.0));
             lines.add("_RLC", id(load) + "_L" + phase, List.of(inner), rl(0.0, inductance));
@@ -1072,8 +1082,8 @@ public final class EmtpNetlistWriter {
                 }
             } else if (load.getExtension(LoadModel.class) != null) {
                 reasons.add("load '" + load.getId() + "' has a load model, " + load.getExtension(LoadModel.class).getClass().getSimpleName());
-            } else if (LoadBranches.isDelta(load) || load.getQ0() < 0.0) {
-                reasons.add("load '" + load.getId() + "' is delta-connected or capacitive");
+            } else if (LoadBranches.isDelta(load)) {
+                reasons.add("load '" + load.getId() + "' is delta-connected");
             }
         }
         for (Generator generator : network.getGeneratorStream().filter(EmtpNetlistWriter::inService).toList()) {

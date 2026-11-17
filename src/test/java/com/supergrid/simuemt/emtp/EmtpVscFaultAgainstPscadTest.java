@@ -358,6 +358,26 @@ class EmtpVscFaultAgainstPscadTest {
                 "kundur-dc-fault-b7", 5.0e-3, SETTLED_TOLERANCE, 0.03, false, 2.2, PscadSwitching.INTERPOLATED);
     }
 
+    /**
+     * The overlay's IEEE 39-bus system with its DC grid ({@code Ieee39DcNetwork}): its ten machines with their exciters, PSSs and governors,
+     * its four VSC stations and its wind park, two capacitive loads among its loads (L9, L24), through a solid three-phase fault at bus
+     * 16, CS16's, for 100 ms, as its PSCAD study's {@code ieee39-dc-fault-b16} - PSCAD's 2.5 s, from rest. Its stations by 5 ms windows:
+     * settled within 1e-3 pu of PSCAD's, through the fault and the recovery 3e-2, as Kundur's.
+     *
+     * <p>Run 2026-11-17, 105 s the two: settled within 4.6e-4 pu of PSCAD's; through the fault every station within 7.1e-3 pu - CS16's
+     * reactive power, on the faulted bus, 2.7e-2 -, the DC voltages 5.6e-4.
+     */
+    @Test
+    void ieee39WithItsDcGridRunsInEmtpAsInPscadProfessional() throws IOException {
+        compare(() -> {
+            Network network = EmtExtensionsXmlReader.readNetwork(EmtpVscFaultAgainstPscadTest.class.getResourceAsStream("/ieee39-dc.xiidm"),
+                    EmtpVscFaultAgainstPscadTest.class.getResourceAsStream("/ieee39-dc-extensions.xml"));
+            EmtNetworkPreprocessor.preprocess(network, LocalComputationManager.getDefault());
+            return network;
+        }, start -> List.of(new BusFault("F", "B16", "ABC", true, 1.0, start, start + 0.1, FaultClearing.AT_CURRENT_ZERO)), converters("CS4", "CS16", "CS26",
+                "CSW"), "ieee39-dc-fault-b16", 5.0e-3, SETTLED_TOLERANCE, 0.03, false, 2.2, PscadSwitching.INTERPOLATED);
+    }
+
     static void compare(Supplier<Network> bench, DoubleFunction<List<? extends EmtEvent>> events, List<Channel> channels, String name,
                                 double window, double settledTolerance, double transientTolerance, boolean settlesAfter, double pscadShift,
                                 PscadSwitching switching) throws IOException {

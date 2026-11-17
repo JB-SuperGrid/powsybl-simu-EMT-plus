@@ -82,6 +82,17 @@ class EmtpNetlistWriterTest {
         assertThat(lines).contains("_Vsine;LOAD_a;1;1;ELOADa,", "_RLC;LOAD_Za;2;2;ELOADa,B2a,").noneMatch(l -> l.startsWith("_RLC;LOAD_Ra;"));
     }
 
+    /** A capacitive load (Q0 &lt; 0): per phase its capacitance in series with its resistance, to earth on one branch - no inductance, no
+     * node of its own. */
+    @Test
+    void writesACapacitiveLoadAsItsResistanceInSeriesWithItsCapacitance(@TempDir Path tempDir) throws IOException {
+        Network network = ExampleNetworks.createTwoBusNetworkWithEmtExtensions();
+        network.getLoad("LOAD").setQ0(-20.0);
+        ExampleNetworks.withLoadFlow(network);
+        List<String> lines = Files.readAllLines(EmtpNetlistWriter.write(network, tempDir, SETTINGS), StandardCharsets.ISO_8859_1);
+        assertThat(lines).contains("_RLC;LOAD_Ca;1;1;B2a,").noneMatch(l -> l.startsWith("_RLC;LOAD_La;") || l.startsWith("_RLC;LOAD_Ra;"));
+    }
+
     @Test
     void refusesWhatItDoesNotWriteYet(@TempDir Path tempDir) {
         Network network = twoBus();
