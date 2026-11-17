@@ -69,7 +69,7 @@ import static org.assertj.core.api.Assertions.within;
  */
 @Tag("emtp")
 @Tag("pscad")
-class EmtpVscFaultAgainstPscadTest {
+public class EmtpVscFaultAgainstPscadTest {
 
     private static final double FREQUENCY = 50.0;
     private static final double TIME_STEP = 20.0e-6;
@@ -86,7 +86,7 @@ class EmtpVscFaultAgainstPscadTest {
     private static final double TRANSIENT_TOLERANCE = 0.02;
 
     /** A channel compared: its EMTP scope, PSCAD's, the base both are divided by. */
-    record Channel(String label, String emtp, String pscad, double base) {
+    public record Channel(String label, String emtp, String pscad, double base) {
     }
 
     @Test
@@ -399,7 +399,7 @@ class EmtpVscFaultAgainstPscadTest {
                 "CD1", "CD2"), "promotion-dc-ac-fault-a1", 5.0e-3, 5.0e-3, 0.03, false, PSCAD_SHIFT, PscadSwitching.INTERPOLATED);
     }
 
-    static void compare(Supplier<Network> bench, DoubleFunction<List<? extends EmtEvent>> events, List<Channel> channels, String name,
+    public static void compare(Supplier<Network> bench, DoubleFunction<List<? extends EmtEvent>> events, List<Channel> channels, String name,
                                 double window, double settledTolerance, double transientTolerance, boolean settlesAfter, double pscadShift,
                                 PscadSwitching switching) throws IOException {
         EmtpOutput emtp = EmtpRunner.run(EmtpNetlistWriter.write(bench.get(), Path.of("target", "emtp", name),
