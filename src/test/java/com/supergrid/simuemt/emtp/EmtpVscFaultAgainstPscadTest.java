@@ -402,8 +402,15 @@ public class EmtpVscFaultAgainstPscadTest {
     public static void compare(Supplier<Network> bench, DoubleFunction<List<? extends EmtEvent>> events, List<Channel> channels, String name,
                                 double window, double settledTolerance, double transientTolerance, boolean settlesAfter, double pscadShift,
                                 PscadSwitching switching) throws IOException {
+        compare(bench, events, channels, name, window, settledTolerance, transientTolerance, settlesAfter, pscadShift, switching, TIME_STEP);
+    }
+
+    /** The same, EMTP run at {@code emtpTimeStep} - PSCAD at 20 us still. */
+    public static void compare(Supplier<Network> bench, DoubleFunction<List<? extends EmtEvent>> events, List<Channel> channels, String name,
+                                double window, double settledTolerance, double transientTolerance, boolean settlesAfter, double pscadShift,
+                                PscadSwitching switching, double emtpTimeStep) throws IOException {
         EmtpOutput emtp = EmtpRunner.run(EmtpNetlistWriter.write(bench.get(), Path.of("target", "emtp", name),
-                new EmtpSimulationSettings(TIME_STEP, EMTP_FAULT + 0.45, FREQUENCY), events.apply(EMTP_FAULT)), EmtpSettings.defaults()).output();
+                new EmtpSimulationSettings(emtpTimeStep, EMTP_FAULT + 0.45, FREQUENCY), events.apply(EMTP_FAULT)), EmtpSettings.defaults()).output();
         double pscadFault = EMTP_FAULT + pscadShift;
         PscadOutput pscad = PscadProSimulation.run(bench.get(), Path.of("target", "pscad", name),
                 new PscadSimulationSettings(TIME_STEP, pscadFault + 0.45, FREQUENCY, PscadEdition.PROFESSIONAL, switching), events.apply(pscadFault),
