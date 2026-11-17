@@ -4,7 +4,11 @@
  */
 package com.supergrid.simuemt.emtp;
 
+import com.powsybl.computation.local.LocalComputationManager;
 import com.powsybl.iidm.network.Network;
+import com.powsybl.iidm.network.TwoWindingsTransformer;
+import com.powsybl.iidm.network.extensions.TwoWindingsTransformerFortescueAdder;
+import com.powsybl.iidm.network.extensions.WindingConnectionType;
 import com.powsybl.simuemt.extensions.circuit.NumericalAids;
 import com.powsybl.simuemt.extensions.event.BusFault;
 import com.powsybl.simuemt.extensions.event.ConverterBlocking;
@@ -15,10 +19,13 @@ import com.powsybl.simuemt.extensions.event.EmtEvent;
 import com.powsybl.simuemt.extensions.event.FaultClearing;
 import com.powsybl.simuemt.extensions.hvdc.OvercurrentProtection;
 import com.powsybl.simuemt.extensions.hvdc.VscProtectionModel;
+import com.powsybl.simuemt.preprocessing.EmtExtensionsXmlReader;
+import com.powsybl.simuemt.preprocessing.EmtNetworkPreprocessor;
 import com.powsybl.simuemt.pscad.PscadEdition;
 import com.powsybl.simuemt.pscad.PscadOutput;
 import com.powsybl.simuemt.pscad.PscadSimulationSettings;
 import com.powsybl.simuemt.pscad.PscadSwitching;
+import com.powsybl.simuemt.testresources.ExampleNetworks;
 import com.supergrid.simuemt.pscadpro.PscadProSettings;
 import com.supergrid.simuemt.pscadpro.PscadProSimulation;
 import org.assertj.core.api.SoftAssertions;
@@ -33,6 +40,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.function.DoubleFunction;
+import java.util.function.DoubleUnaryOperator;
 import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.within;
@@ -242,6 +250,68 @@ class EmtpVscFaultAgainstPscadTest {
                                 double settledTolerance, double transientTolerance, boolean settlesAfter, double pscadShift) throws IOException {
         compare(() -> EmtpVoltageSourceConverterTest.bench(bench), events, channels, name, window, settledTolerance, transientTolerance, settlesAfter,
                 pscadShift, PscadSwitching.INTERPOLATED);
+    }
+
+    /**
+     * A grid-forming converter's protection: example 3 in full ({@link #protectedGridForming}), its grid-following VSC1 and its grid-forming
+     * VSC2 both protected at 2 pu, through a solid fault on DC2P, VSC2's pole, from the fault to the end - each blocked by its protection,
+     * VSC2's virtual machine with it, its integrals held. Each protection tripping within 0.1 ms of PSCAD's, on the same step for VSC2; by 200
+     * ms windows, as the protected stations of example 4, the running flags by the same windows. PSCAD's fault 4.5 s on from EMTP's, as the
+     * grid-forming bench's through an AC fault: from rest, PSCAD leaves VSC2 off the load flow along its virtual machine's slow swing - 2.2e-2
+     * pu at the fault, as {@code PscadProExampleCoverageTest} finds it (0.026 at 7 s), its snapshot no better -, where EMTP, from its steady
+     * state, holds it within 2.2e-3 - which the windows through the fault carry.
+     *
+     * <p>Run 2026-11-17, 51 s the two: VSC2 tripping 0.02 ms after the fault in both, VSC1 2.02 ms after it, PSCAD's 1.94; through the
+     * fault and after, every station within 7.0e-3 pu of PSCAD's (VSC1's power), the DC voltages 1.4e-4, the running flags 4e-4.
+     */
+    @Test
+    void aProtectedGridFormingConverterTrippingOnADcFaultRunsInEmtpAsInPscadProfessional() throws IOException {
+        String name = "gfm-protection";
+        List<Channel> channels = new ArrayList<>(MONOPOLE);
+        for (String id : List.of("VSC1", "VSC2")) {
+            channels.add(new Channel(id + "_RUN", "control:" + id + "_RUN", id + "_RUN", 1.0));
+        }
+        compare(EmtpVscFaultAgainstPscadTest::protectedGridForming, start -> List.of(new DcFault("FDC", "DC2P", 0.0, start, start + 10.0)), channels,
+                name, 0.2, SETTLED_TOLERANCE, 0.01, false, GRID_FORMING_SHIFT, PscadSwitching.INTERPOLATED);
+        EmtpOutput emtp = EmtpOutput.read(Path.of("target", "emtp", name, "vsc_monopole_3_pj"), "vsc_monopole_3");
+        PscadOutput pscad = PscadOutput.read(Path.of("target", "pscad", name, "vsc_monopole_3.if18"), "vsc_monopole_3");
+        SoftAssertions softly = new SoftAssertions();
+        for (String id : List.of("VSC1", "VSC2")) {
+            double emtpTrip = tripAfter(t -> emtp.mean("control:" + id + "_RUN", t - TIME_STEP / 2, t + TIME_STEP / 2), EMTP_FAULT);
+            double pscadTrip = tripAfter(t -> pscad.mean(id + "_RUN", t - TIME_STEP / 2, t + TIME_STEP / 2), EMTP_FAULT + GRID_FORMING_SHIFT);
+            System.out.printf(Locale.ROOT, "%s: %s trips %.2f ms after the fault, PSCAD's %.2f%n", name, id, emtpTrip * 1.0e3, pscadTrip * 1.0e3);
+            softly.assertThat(emtpTrip - pscadTrip).as("%s's trip against PSCAD's, s", id).isCloseTo(0.0, within(1.0e-4));
+        }
+        softly.assertAll();
+    }
+
+    /** How long after {@code fault} a running flag, read by {@code flag} at each step, first falls under 0.5; NaN if it never does in 50 ms. */
+    private static double tripAfter(DoubleUnaryOperator flag, double fault) {
+        for (double t = fault - TIME_STEP; t < fault + 0.05; t += TIME_STEP) {
+            if (flag.applyAsDouble(t) < 0.5) {
+                return t - fault;
+            }
+        }
+        return Double.NaN;
+    }
+
+    /**
+     * Example 3 in full, {@code vsc-monopole-3} - its grid-following VSC1 and its grid-forming VSC2 behind their converter transformers -,
+     * each transformer wound as example 4's, earthed star on its grid side and star on its converter's, and both stations protected at 2
+     * pu. Blockable, a two-level converter's EMFs sit on its DC midpoint, half its DC voltage above earth on this monopole: earthed on both
+     * sides - the transformers' default -, the transformers would carry it as a zero-sequence DC current, which trips the protections
+     * within 10 ms without a fault, as on the infinite buses' bench, the reactors to the buses all there is.
+     */
+    static Network protectedGridForming() {
+        Network network = ExampleNetworks.readVscBench("vsc-monopole-3", EmtExtensionsXmlReader::readNetwork);
+        for (String id : List.of("T1", "T2")) {
+            TwoWindingsTransformer transformer = network.getTwoWindingsTransformer(id);
+            transformer.newExtension(TwoWindingsTransformerFortescueAdder.class).withRz(transformer.getR()).withXz(transformer.getX())
+                    .withConnectionType1(WindingConnectionType.Y_GROUNDED).withConnectionType2(WindingConnectionType.Y).withFreeFluxes(true).add();
+        }
+        network.getVoltageSourceConverters().forEach(c -> c.addExtension(VscProtectionModel.class, new OvercurrentProtection(2.0, 0.0)));
+        EmtNetworkPreprocessor.preprocess(network, LocalComputationManager.getDefault());
+        return network;
     }
 
     static void compare(Supplier<Network> bench, DoubleFunction<List<? extends EmtEvent>> events, List<Channel> channels, String name,
