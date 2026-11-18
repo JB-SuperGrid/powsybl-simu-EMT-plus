@@ -214,6 +214,21 @@ public class EmtpVscFaultAgainstPscadTest {
     }
 
     /**
+     * Upstream's {@code a98e0e9a}: a symmetric monopole's MMC, its equivalent capacitor's midpoint earthed, blocked behind diodes on both
+     * sides in PSCAD - its return-side plate on a node of its own, behind a diode into the return, as ATP's, Xyce's, Kestrel's and EMTP's -,
+     * which upstream only writes, past PSCAD Free's size. {@code vsc-symmetric-monopole-mmc}, VSC2 blocked: its stations by 5 ms windows,
+     * against EMTP, PSCAD's blocking 2 s on.
+     *
+     * <p>Run 2026-11-18, 49 s the two: settled within 9.2e-5 pu of PSCAD's; through the blocking within 2.8e-3 (VSC2's power), the DC
+     * voltages 4.9e-4.
+     */
+    @Test
+    void aSymmetricMonopolesMmcBlockedBehindDiodesRunsInEmtpAsInPscadProfessional() throws IOException {
+        compare("vsc-symmetric-monopole-mmc", start -> List.of(new ConverterBlocking("VSC2", start)), converters("VSC1", "VSC2"), "mmc-symmetric-blocked", 5.0e-3,
+                SETTLED_TOLERANCE, TRANSIENT_TOLERANCE, false);
+    }
+
+    /**
      * Upstream's {@code dc-fault-protected} ({@link EmtpVoltageSourceConverterTest#protectedWithDcReactors}): example 4's stations with their
      * DC reactors, protected at 2 pu, through a solid fault on DC3P from the fault to the end, blocked in turn by their protections and
      * feeding the fault through their bridges - by 200 ms windows, as upstream holds PSCAD, ATP and Kestrel to one another on it: the
