@@ -115,7 +115,7 @@ class PscadProThreeLimbMagnetizingTest {
 
     /** Upstream's {@code magnetizingThreeLimbThreeWindingBench}: {@link PscadProThreeLimbThreeWindingTest}'s, with 1e-5 - j1.5e-4 and
      * 1e-5 - j1e-4 S at the star bus on legs 1 and 2; the load flow run. */
-    private static Network threeWinding() {
+    static Network threeWinding() {
         Network network = ExampleNetworks.createThreeBusNetworkWithThreeWindingsTransformer();
         EmtExtensionsXmlReader.graftExtensionsFromXml(network, ExampleNetworks.resource("/four-bus-extensions-ynyn0yn0-three-limb.xml"));
         network.getLoad("LOAD3").remove();
