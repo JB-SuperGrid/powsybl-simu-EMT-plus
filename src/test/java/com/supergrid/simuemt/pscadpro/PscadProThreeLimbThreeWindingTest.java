@@ -84,7 +84,7 @@ class PscadProThreeLimbThreeWindingTest {
 
     /** Upstream's three-limb three-winding bench ({@code PscadFileWriterTest#threeLimbThreeWindingBench}): the three-bus network, its source
      * ideal on B2, wired YNyn0yn0 on a three-limb core, legs 2's and 3's loads taken away, the load flow run. */
-    private static Network bench() {
+    static Network bench() {
         Network network = ExampleNetworks.createThreeBusNetworkWithThreeWindingsTransformer();
         EmtExtensionsXmlReader.graftExtensionsFromXml(network, ExampleNetworks.resource("/four-bus-extensions-ynyn0yn0-three-limb.xml"));
         network.getLoad("LOAD3").remove();
