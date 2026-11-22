@@ -16,6 +16,7 @@ import com.powsybl.simuemt.extensions.blackbox.BlackBoxModels;
 import com.powsybl.simuemt.extensions.blackbox.BlackBoxQuantity;
 import com.powsybl.simuemt.extensions.blackbox.BlackBoxSignal;
 import com.powsybl.simuemt.extensions.circuit.MachineInitialState;
+import com.powsybl.simuemt.extensions.circuit.NumericalAids;
 import com.powsybl.simuemt.extensions.hvdc.AveragedVscInitialState;
 
 import java.nio.file.Files;
@@ -46,8 +47,9 @@ import static com.supergrid.simuemt.emtp.EmtpNetlistWriter.number;
  * without any time-step delay" (the toolbox's help). Its model initialisation is called, its outputs held on their initial values until
  * its first call.
  *
- * <p>What EMTP writes so far: a machine's excitation alone ({@link #excitation}); a converter's inner and outer controls together
- * ({@link #converterControl}). A machine is refused by name.
+ * <p>What EMTP writes: a machine's excitation alone ({@link #excitation}); a converter's inner and outer controls together
+ * ({@link #converterControl}); a machine alone, a voltage behind its interface impedance ({@link #machine}). A black-box machine beside
+ * typed regulators is upstream's Kestrel's and PSCAD's alone.
  *
  * @author Jean-Baptiste Heyberger : jean-baptiste.heyberger@supergrid-institute.com
  */
@@ -69,10 +71,7 @@ final class EmtpBlackBoxes {
     /** What EMTP cannot write of {@code network}'s black boxes: upstream's rules for a backend loading win32 DLLs, then what this backend
      * does not write yet. */
     static List<String> unsupportedReasons(Network network) {
-        List<String> reasons = new ArrayList<>(BlackBoxModels.unsupportedReasons(network, BACKEND, DLL_PLATFORM).stream().map(String::strip).toList());
-        network.getGeneratorStream().filter(BlackBoxModels::coversMachine)
-                .forEach(generator -> reasons.add("generator '" + generator.getId() + "': a black-box machine is not written yet"));
-        return reasons;
+        return new ArrayList<>(BlackBoxModels.unsupportedReasons(network, BACKEND, DLL_PLATFORM).stream().map(String::strip).toList());
     }
 
     /** Runs {@code writing} with the netlist {@code netlist} as the one its black boxes' DLLs are copied beside. */
@@ -301,6 +300,153 @@ final class EmtpBlackBoxes {
         EmtpVoltageSourceConverters.measurement(devices, id + "_Q", dq, "u[2]*u[3]-u[1]*u[4]", 0.0, initial.reactivePower());
         EmtpVoltageSourceConverters.measurement(devices, id + "_VAC", dq.subList(0, 2), "SQRT(u[1]*u[1]+u[2]*u[2])", 0.0, initial.terminalVoltage());
         EmtpVoltageSourceConverters.measurement(devices, id + "_VDC", List.of(dc), "u[1]", 0.0, vdc0);
+    }
+
+    /**
+     * The black-box machine of {@code generator}, on bus phase nodes {@code phaseNodes}, its terminal displaced by {@code offsetDegrees}, as
+     * upstream's ATP builds it: per phase, its EMF - a controlled voltage source ({@code _cV}) to earth, as ATP's type-60 sources and
+     * Kestrel's are - a converter's star point is isolated, a machine's stator earthed: from an isolated star, phase A of B2 faulted to earth,
+     * B1's voltage was 43% off the white machine's -, its load-flow phasor {@code V + (R + jX) I} standing in for it in the steady state ({@code _Vsine}) - behind the model's
+     * interface impedance, {@code R + jX} on the machine's rating, {@code 16L/Dt} across its inductance; the bus's voltage read by a
+     * probe. Its DLL reads the bus's phase voltages and the current out of the machine - the source's, counted from its star point - per
+     * unit of its peak phase bases, starts on the load flow ({@code P0}, {@code Q0}, {@code V0}, {@code Theta0} - phase a's voltage angle at
+     * t = 0 as this backend's waveforms have it), and returns its EMF per unit.
+     *
+     * <p>The EMF is turned two steps on in alpha-beta: a step for the DLL's outputs, those of the step before ({@link #converterControl}),
+     * and a step for the controlled source, which takes its control a step after it is computed - every EMF of this backend put a step
+     * ahead. And its initial angle {@code Theta0} is given a step back, {@code angle - w Dt}: with no infinite bus on the bench, the
+     * machine's own angle sets the network's. Measured 2026-11-22 against EMTP's own machine: turned one step, the bus 1.6e-3 off before
+     * the fault, drifting to 2.8e-3; two, 4.6e-5 - and every bus 0.37 degree ahead of the load flow from the first period, a step's
+     * angle, with {@code Theta0} the bus's angle, 0.73 with it a step on, within 0.006 with it a step back.
+     */
+    static List<EmtpSynchronousMachines.Device> machine(Generator generator, String[] phaseNodes, double offsetDegrees, EmtpSimulationSettings settings) {
+        BlackBoxModel<Generator> model = BlackBoxModels.of(generator);
+        com.powsybl.iidm.network.Bus bus = generator.getTerminal().getBusBreakerView().getBus();
+        double nominalKv = bus.getVoltageLevel().getNominalV();
+        double ratedMva = generator.getRatedS();
+        double omega = 2.0 * Math.PI * settings.nominalFrequencyHz();
+        double dt = settings.timeStepSeconds();
+        double vbpk = nominalKv * 1.0e3 * Math.sqrt(2.0 / 3.0);
+        double ibpk = ratedMva * 1.0e6 * Math.sqrt(2.0) / (Math.sqrt(3.0) * nominalKv * 1.0e3);
+        double baseOhm = nominalKv * nominalKv / ratedMva;
+        double r = model.getInterfaceResistance();
+        double x = model.getInterfaceReactance();
+        // The load flow's operating point, per unit of the machine's rating: V at its angle, I out of it, E = V + (R + jX) I.
+        double angle = Math.toRadians(MachineInitialState.terminalAngleDegrees(generator, offsetDegrees));
+        double v0 = bus.getV() / nominalKv;
+        double[] i0 = MachineInitialState.terminalCurrent(generator, offsetDegrees);
+        double vr = v0 * Math.cos(angle);
+        double vi = v0 * Math.sin(angle);
+        double er = vr + r * i0[0] - x * i0[1];
+        double ei = vi + r * i0[1] + x * i0[0];
+        double emf = Math.hypot(er, ei);
+        double emfAngle = Math.atan2(ei, er);
+        double current = Math.hypot(i0[0], i0[1]);
+        double currentAngle = Math.atan2(i0[1], i0[0]);
+
+        String id = EmtpVoltageSourceConverters.sanitize(generator.getId());
+        String zero = id + "_ZERO";
+        String star = "";
+        List<EmtpSynchronousMachines.Device> devices = new ArrayList<>();
+        devices.add(new EmtpSynchronousMachines.Device("_c_cst", List.of("_c_cst;" + zero + ";1;1;" + zero + ",", "0,S1,")));
+        double inductanceH = x * baseOhm / omega;
+        String[] v = new String[3];
+        String[] i = new String[3];
+        String[] e = new String[3];
+        for (int k = 0; k < 3; k++) {
+            char phase = "abc".charAt(k);
+            double offset = -2.0 * Math.PI / 3.0 * (k == 2 ? -1 : k);
+            String inner = id + "_K" + phase;
+            String junction = id + "_J" + phase;
+            String standIn = id + "_M" + phase;
+            v[k] = id + "_V" + phase;
+            i[k] = id + "_I" + phase;
+            e[k] = id + "_EMF" + phase;
+            devices.add(element("_RLC", id + "_R" + phase, List.of(inner, junction), number(r * baseOhm) + ",0,0,0,0,"));
+            devices.add(element("_RLC", id + "_L" + phase, List.of(junction, phaseNodes[k]), "0," + number(inductanceH) + ",0,0,0,"));
+            devices.add(element("_RLC", id + "_LD" + phase, List.of(junction, phaseNodes[k]),
+                    number(NumericalAids.seriesInductanceDampingOhm(inductanceH, dt)) + ",0,0,0,0,"));
+            // The EMF's stand-in, in the steady state only.
+            devices.add(element("_Vsine", id + "_STD" + phase, List.of(inner, standIn), number(vbpk * emf) + "," + number(settings.nominalFrequencyHz()) + ","
+                    + number(Math.toDegrees(emfAngle + offset)) + ",-1,1E-15,"));
+            devices.add(element("_cV", id + "_CV" + phase, List.of(standIn, star, e[k], id + "_CVV" + phase, i[k], id + "_CVP" + phase),
+                    "-1,1E15,0,?v,?i,?p,>v,>i,>p,"));
+            devices.add(element("_cI", id + "_PR" + phase, List.of(phaseNodes[k], "", zero, v[k], id + "_PRI" + phase, id + "_PRP" + phase),
+                    "-1,1E15,0,0,0,0,>v,0,0,"));
+        }
+        // The DLL, on the bus's voltages and the machine's currents per unit.
+        List<String> inputs = new ArrayList<>();
+        for (BlackBoxSignal input : model.getInputs()) {
+            String pin = id + input.port();
+            if (input.isConstant()) {
+                devices.add(new EmtpSynchronousMachines.Device("_c_cst", List.of("_c_cst;" + pin + ";1;1;" + pin + ",", number(input.constant()) + ",S1,")));
+                inputs.add(pin);
+                continue;
+            }
+            int phase = switch (input.quantity()) {
+                case TERMINAL_VOLTAGE_A_PU, MACHINE_CURRENT_A_PU -> 0;
+                case TERMINAL_VOLTAGE_B_PU, MACHINE_CURRENT_B_PU -> 1;
+                case TERMINAL_VOLTAGE_C_PU, MACHINE_CURRENT_C_PU -> 2;
+                default -> throw new PowsyblException("SimuEmt Plus: generator '" + generator.getId() + "': input '" + input.port() + "' reads "
+                        + input.quantity() + ", which EMTP does not feed a black-box machine");
+            };
+            double offset = -2.0 * Math.PI / 3.0 * (phase == 2 ? -1 : phase);
+            boolean voltage = input.quantity().name().startsWith("TERMINAL_VOLTAGE");
+            devices.add(EmtpSynchronousMachines.function(pin, pin, List.of(voltage ? v[phase] : i[phase]),
+                    voltage ? v0 * Math.cos(angle + offset) : current * Math.cos(currentAngle + offset), "u[1]/" + number(voltage ? vbpk : ibpk)));
+            inputs.add(pin);
+        }
+        List<Double> initialValues = new ArrayList<>();
+        for (BlackBoxInitialValue initialValue : model.getInitialValues()) {
+            initialValues.add(switch (initialValue.quantity()) {
+                case ACTIVE_POWER_PU -> vr * i0[0] + vi * i0[1];
+                case REACTIVE_POWER_PU -> vi * i0[0] - vr * i0[1];
+                case TERMINAL_VOLTAGE_MAGNITUDE_PU -> v0;
+                // A step back: see above.
+                case TERMINAL_VOLTAGE_ANGLE_RAD -> angle - omega * dt;
+                default -> throw new PowsyblException("SimuEmt Plus: generator '" + generator.getId() + "': no initial value of "
+                        + initialValue.quantity() + " for a black-box machine");
+            });
+        }
+        String[] outputs = new String[3];
+        double[] initialOutputs = new double[3];
+        for (BlackBoxSignal output : model.getOutputs()) {
+            int phase = switch (output.quantity()) {
+                case MACHINE_EMF_A_PU -> 0;
+                case MACHINE_EMF_B_PU -> 1;
+                case MACHINE_EMF_C_PU -> 2;
+                default -> throw new PowsyblException("SimuEmt Plus: generator '" + generator.getId() + "': output '" + output.port() + "' gives "
+                        + output.quantity() + ", which EMTP does not take from a black-box machine");
+            };
+            outputs[phase] = id + output.port();
+            initialOutputs[phase] = emf * Math.cos(emfAngle - 2.0 * Math.PI / 3.0 * (phase == 2 ? -1 : phase));
+        }
+        // In the DLL's port order.
+        List<String> outputPins = model.getOutputs().stream().map(o -> id + o.port()).toList();
+        List<Double> initialOutputValues = new ArrayList<>();
+        for (String pin : outputPins) {
+            initialOutputValues.add(initialOutputs[List.of(outputs).indexOf(pin)]);
+        }
+        devices.add(instance(id + "_BBX", model, outputPins, initialOutputValues, inputs, initialValues));
+
+        // The EMFs in volts, turned two steps on: e'_k = (2/3) sum_j e_j cos(phi - (k - j) 2 pi / 3).
+        double turn = 2.0 * omega * dt;
+        for (int k = 0; k < 3; k++) {
+            StringBuilder expression = new StringBuilder("(" + number(2.0 / 3.0 * vbpk) + ")*(");
+            for (int j = 0; j < 3; j++) {
+                expression.append(j == 0 ? "" : "+").append("(").append(number(Math.cos(turn - (k - j) * 2.0 * Math.PI / 3.0))).append(")*u[").append(j + 1).append("]");
+            }
+            expression.append(")");
+            double offset = -2.0 * Math.PI / 3.0 * (k == 2 ? -1 : k);
+            devices.add(EmtpSynchronousMachines.function(e[k], e[k], List.of(outputs), vbpk * emf * Math.cos(emfAngle + offset), expression.toString()));
+        }
+        return devices;
+    }
+
+    /** An electrical device: its header - part, name, its pins twice, its nodes - and its data line. */
+    private static EmtpSynchronousMachines.Device element(String part, String name, List<String> nodes, String data) {
+        return new EmtpSynchronousMachines.Device(part, List.of(part + ";" + name + ";" + nodes.size() + ";" + nodes.size() + ";" + String.join(",", nodes) + ",",
+                data));
     }
 
     /** {@code path} as the device reads one: its count of lines, then its lines of {@link EmtpNetlistWriter#MAX_LINE} characters. */
