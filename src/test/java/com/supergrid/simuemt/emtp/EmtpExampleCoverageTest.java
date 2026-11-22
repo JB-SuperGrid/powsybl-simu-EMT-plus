@@ -39,7 +39,9 @@ import static org.assertj.core.api.Assertions.within;
  * <p>2026-11-15, upstream's {@code 6346a20c}: 71 of its 132 examples written - since the shunts, the grounds, the open ends, the SVC, the battery, the WT4B - CIGRE DCS2 with it -, the switches
  * the infinite buses on a load, the Bergeron lines and the ZnO arresters; 2026-11-16, {@code 6f83d62b}: 73 of 134, its two rigid
  * bipoles; 78 with the induction motors, 91 with the governors, 95 with OEL1B and V/Hz, 102 with every excitation limiter, 106 with the DECs and PSS2A, 110 with the coupled lines,
- * 111 with machine saturation, 113 with the constant-power loads - all but the 21 no backend writes, IIDM networks with no EMT model. Its
+ * 111 with machine saturation, 113 with the constant-power loads - all but the 21 no backend writes, IIDM networks with no EMT model;
+ * 2026-11-22, {@code bf288b4a}: 117 of 141, its black boxes' white benches and the black-box excitation, run from its win32 DLL - its
+ * black-box machine and converter control refused by name. Its
  * refusals, the most frequent first: power electronics (VSCs, MMCs, their DC sides), load models
  * (induction motors, constant power), zero-sequence data of lumped lines, excitation limiters,
  * governors but TGOV1, PSS2A.
@@ -68,6 +70,9 @@ class EmtpExampleCoverageTest {
             "createTwoBusNetworkWithDec2A",
             "createTwoBusNetworkWithDec3A",
             "createTwoBusNetworkWithEmtExtensions",
+            "createTwoBusNetworkWithBlackBoxAvr",
+            "createTwoBusNetworkWithHeldSubtransientMachine",
+            "createTwoBusNetworkWithRegulatedSubtransientMachine",
             "createTwoBusNetworkWithSaturatedMachine",
             "createTwoBusNetworkWithConstantPowerLoad",
             "createTwoBusNetworkWithDisconnectedInjections",
@@ -162,6 +167,7 @@ class EmtpExampleCoverageTest {
             "vsc-monopole-3",
             "vsc-monopole-infinite-buses",
             "vsc-monopole-infinite-buses-2",
+            "vsc-monopole-infinite-buses-2-gfl",
             "vsc-monopole-infinite-buses-3",
             "vsc-monopole-infinite-buses-ground-resistance",
             "vsc-monopole-infinite-buses-metallic-return",
