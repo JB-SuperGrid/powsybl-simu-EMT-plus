@@ -17,7 +17,11 @@ import com.powsybl.simuemt.extensions.blackbox.BlackBoxQuantity;
 import com.powsybl.simuemt.extensions.blackbox.BlackBoxSignal;
 import com.powsybl.simuemt.extensions.circuit.MachineInitialState;
 import com.powsybl.simuemt.extensions.circuit.NumericalAids;
+import com.powsybl.simuemt.extensions.excitation.ExcitationSystemModel;
+import com.powsybl.simuemt.extensions.excitation.SimplifiedAvrModel;
 import com.powsybl.simuemt.extensions.hvdc.AveragedVscInitialState;
+import com.powsybl.simuemt.extensions.pss.Pss1AModel;
+import com.powsybl.simuemt.extensions.pss.PssModel;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -48,8 +52,8 @@ import static com.supergrid.simuemt.emtp.EmtpNetlistWriter.number;
  * its first call.
  *
  * <p>What EMTP writes: a machine's excitation alone ({@link #excitation}); a converter's inner and outer controls together
- * ({@link #converterControl}); a machine alone, a voltage behind its interface impedance ({@link #machine}). A black-box machine beside
- * typed regulators is upstream's Kestrel's and PSCAD's alone.
+ * ({@link #converterControl}); a machine alone, a voltage behind its interface impedance ({@link #machine}), beside a typed simplified
+ * AVR and IEEE PSS1A on its field voltage and speed, if any ({@link #typedRegulators}).
  *
  * @author Jean-Baptiste Heyberger : jean-baptiste.heyberger@supergrid-institute.com
  */
@@ -375,12 +379,19 @@ final class EmtpBlackBoxes {
                     "-1,1E15,0,0,0,0,>v,0,0,"));
         }
         // The DLL, on the bus's voltages and the machine's currents per unit.
+        // Its signals out, but its EMFs - its speed, its field current, its field voltage at the load flow -, by quantity.
+        java.util.Map<BlackBoxQuantity, String> signals = new java.util.EnumMap<>(BlackBoxQuantity.class);
+        model.getOutputs().forEach(output -> signals.put(output.quantity(), id + output.port()));
         List<String> inputs = new ArrayList<>();
         for (BlackBoxSignal input : model.getInputs()) {
             String pin = id + input.port();
             if (input.isConstant()) {
                 devices.add(new EmtpSynchronousMachines.Device("_c_cst", List.of("_c_cst;" + pin + ";1;1;" + pin + ",", number(input.constant()) + ",S1,")));
                 inputs.add(pin);
+                continue;
+            }
+            if (input.quantity() == BlackBoxQuantity.FIELD_VOLTAGE_PU) {
+                inputs.add(typedRegulators(devices, generator, id, v, v0, vbpk, signals, pin));
                 continue;
             }
             int phase = switch (input.quantity()) {
@@ -409,23 +420,24 @@ final class EmtpBlackBoxes {
             });
         }
         String[] outputs = new String[3];
-        double[] initialOutputs = new double[3];
+        List<String> outputPins = new ArrayList<>();
+        List<Double> initialOutputValues = new ArrayList<>();
         for (BlackBoxSignal output : model.getOutputs()) {
-            int phase = switch (output.quantity()) {
-                case MACHINE_EMF_A_PU -> 0;
-                case MACHINE_EMF_B_PU -> 1;
-                case MACHINE_EMF_C_PU -> 2;
+            outputPins.add(id + output.port());
+            switch (output.quantity()) {
+                case MACHINE_EMF_A_PU, MACHINE_EMF_B_PU, MACHINE_EMF_C_PU -> {
+                    int phase = output.quantity().ordinal() - BlackBoxQuantity.MACHINE_EMF_A_PU.ordinal();
+                    outputs[phase] = id + output.port();
+                    initialOutputValues.add(emf * Math.cos(emfAngle - 2.0 * Math.PI / 3.0 * (phase == 2 ? -1 : phase)));
+                }
+                // At rest until its first call, its outputs those of the step before: its speed 1; its field current and its field voltage
+                // at the load flow, which only the binary knows, 0 - the typed regulator on its field voltage at the load flow then gives
+                // the DLL's first call 0 plus its own state, 0, a step's field voltage of Td0' (6.5 s): nothing measurable.
+                case ROTOR_SPEED_PU -> initialOutputValues.add(1.0);
+                case FIELD_CURRENT_PU, INITIAL_FIELD_VOLTAGE_PU -> initialOutputValues.add(0.0);
                 default -> throw new PowsyblException("SimuEmt Plus: generator '" + generator.getId() + "': output '" + output.port() + "' gives "
                         + output.quantity() + ", which EMTP does not take from a black-box machine");
-            };
-            outputs[phase] = id + output.port();
-            initialOutputs[phase] = emf * Math.cos(emfAngle - 2.0 * Math.PI / 3.0 * (phase == 2 ? -1 : phase));
-        }
-        // In the DLL's port order.
-        List<String> outputPins = model.getOutputs().stream().map(o -> id + o.port()).toList();
-        List<Double> initialOutputValues = new ArrayList<>();
-        for (String pin : outputPins) {
-            initialOutputValues.add(initialOutputs[List.of(outputs).indexOf(pin)]);
+            }
         }
         devices.add(instance(id + "_BBX", model, outputPins, initialOutputValues, inputs, initialValues));
 
@@ -441,6 +453,59 @@ final class EmtpBlackBoxes {
             devices.add(EmtpSynchronousMachines.function(e[k], e[k], List.of(outputs), vbpk * emf * Math.cos(emfAngle + offset), expression.toString()));
         }
         return devices;
+    }
+
+    /**
+     * The typed regulators beside black-box machine {@code id}, as upstream's Kestrel writes them, its field voltage on {@code efd}: the
+     * terminal voltage {@code Vt}, its bus's phase voltages {@code v}'s amplitude in alpha-beta, per unit of {@code vbpk}; an IEEE PSS1A in
+     * service on the speed the DLL gives; the simplified AVR {@code Ka/(1+sTa)} on {@code Vt0 - Vt + Vs} - a white machine's regulator
+     * starts on {@code Vref = Vt0 + Efd0/Ka}, but only the DLL knows {@code Efd0}, and gives it at every step: its state {@code Efd0 + x},
+     * {@code x} from 0, {@code dx/dt = (Ka (Vt0 - Vt + Vs) - x) / Ta}, stopped at the limits of {@code Efd0 + x}, the field voltage clamped
+     * to them. Disabled, the field voltage is {@code Efd0}. Returns {@code efd}.
+     */
+    private static String typedRegulators(List<EmtpSynchronousMachines.Device> devices, Generator generator, String id, String[] v, double vt0,
+                                          double vbpk, java.util.Map<BlackBoxQuantity, String> signals, String efd) {
+        String efd0 = signals.get(BlackBoxQuantity.INITIAL_FIELD_VOLTAGE_PU);
+        if (efd0 == null) {
+            throw new PowsyblException("SimuEmt Plus: generator '" + generator.getId() + "': a black-box machine fed by a typed excitation must give the"
+                    + " field voltage it needs at the load flow, INITIAL_FIELD_VOLTAGE_PU, for that excitation to start on");
+        }
+        String vt = id + "_VT";
+        String alpha = "(2*u[1]-u[2]-u[3])/3";
+        String beta = "(u[2]-u[3])/" + number(Math.sqrt(3.0));
+        devices.add(EmtpSynchronousMachines.function(vt, vt, List.of(v), vt0, "SQRT((" + alpha + ")*(" + alpha + ")+(" + beta + ")*(" + beta + "))/"
+                + number(vbpk)));
+        String vs = null;
+        String speed = signals.get(BlackBoxQuantity.ROTOR_SPEED_PU);
+        if (speed != null && generator.getExtension(PssModel.class) instanceof Pss1AModel pss && pss.isEnabled()) {
+            String deviation = id + "_DW";
+            devices.add(EmtpVoltageSourceConverters.scoped(EmtpSynchronousMachines.function(deviation, deviation, List.of(speed), 0.0, "u[1]-1")));
+            vs = id + "_VS";
+            devices.addAll(EmtpSynchronousMachines.pss1A(pss, id, deviation, vs));
+        }
+        if (!(generator.getExtension(ExcitationSystemModel.class) instanceof SimplifiedAvrModel avr) || !avr.isEnabled() || avr.getGain() == 0.0) {
+            devices.add(EmtpSynchronousMachines.function(efd, efd, List.of(efd0), 0.0, "u[1]"));
+            return efd;
+        }
+        String x = id + "_AVX";
+        String rate = id + "_AVD";
+        String max = number(avr.getMaxOutput());
+        String min = number(avr.getMinOutput());
+        List<String> rateInputs = new ArrayList<>(List.of(vt, x, efd0));
+        String error = number(vt0) + "-u[1]";
+        if (vs != null) {
+            rateInputs.add(vs);
+            error += "+u[4]";
+        }
+        String derivative = "((" + number(avr.getGain()) + ")*(" + error + ")-u[2])/" + number(avr.getTimeConstant());
+        // Stopped at a limit while driven past it.
+        String atMax = EmtpVoltageSourceConverters.step("u[3]+u[2]-" + max) + "*" + EmtpVoltageSourceConverters.step(derivative);
+        String atMin = EmtpVoltageSourceConverters.step(min + "-u[3]-u[2]") + "*" + EmtpVoltageSourceConverters.step("-(" + derivative + ")");
+        devices.add(EmtpSynchronousMachines.function(rate, rate, rateInputs, 0.0, "(1-" + atMax + "-" + atMin + ")*" + derivative));
+        devices.add(EmtpVoltageSourceConverters.integrator(x, x, rate, 1.0, 0.0));
+        devices.add(EmtpVoltageSourceConverters.scoped(EmtpSynchronousMachines.function(efd, efd, List.of(efd0, x), 0.0,
+                EmtpVoltageSourceConverters.clampBetween("u[1]+u[2]", min, max))));
+        return efd;
     }
 
     /** An electrical device: its header - part, name, its pins twice, its nodes - and its data line. */

@@ -42,7 +42,7 @@ import static org.assertj.core.api.Assertions.within;
  * 111 with machine saturation, 113 with the constant-power loads - all but the 21 no backend writes, IIDM networks with no EMT model;
  * 2026-11-22, {@code bf288b4a}: 117 of 141, its black boxes' white benches and the black-box excitation, run from its win32 DLL - its
  * black-box machine and converter control refused by name; 118 with the converter control, 119 with the machine - its machine beside
- * typed regulators left to Kestrel and PSCAD. Its
+ * typed regulators left to Kestrel and PSCAD; 120 with that machine under typed regulators - all but the 21 no backend writes. Its
  * refusals, the most frequent first: power electronics (VSCs, MMCs, their DC sides), load models
  * (induction motors, constant power), zero-sequence data of lumped lines, excitation limiters,
  * governors but TGOV1, PSS2A.
@@ -73,6 +73,7 @@ class EmtpExampleCoverageTest {
             "createTwoBusNetworkWithEmtExtensions",
             "createTwoBusNetworkWithBlackBoxAvr",
             "createTwoBusNetworkWithBlackBoxMachine",
+            "createTwoBusNetworkWithBlackBoxMachineAndTypedRegulators",
             "createTwoBusNetworkWithHeldSubtransientMachine",
             "createTwoBusNetworkWithRegulatedSubtransientMachine",
             "createTwoBusNetworkWithSaturatedMachine",

@@ -100,14 +100,13 @@ class EmtpBlackBoxTest {
                 .hasMessageContaining("starting with '_'");
     }
 
-    /** A black-box machine beside typed regulators, refused as upstream refuses it on a backend of another repository - its field-port
-     * DLL has no win32 build either; a DLL sampled off the run's step, refused as on every backend. */
+    /** A black-box machine beside typed regulators, taken as upstream's Kestrel takes them, from its field-port DLL's win32 build; a DLL
+     * sampled off the run's step, refused as on every backend. */
     @Test
     void refusesWhatItDoesNotWriteYet(@TempDir Path tempDir) {
         assertThat(EmtpBlackBoxes.unsupportedReasons(ExampleNetworks.withLoadFlow(ExampleNetworks.createTwoBusNetworkWithBlackBoxMachine()))).isEmpty();
         assertThat(EmtpBlackBoxes.unsupportedReasons(ExampleNetworks.withLoadFlow(ExampleNetworks.createTwoBusNetworkWithBlackBoxMachineAndTypedRegulators())))
-                .anyMatch(reason -> reason.contains("beside the typed excitation system model"))
-                .anyMatch(reason -> reason.contains("IEEE_CIGRE_DLL artifact for win32, and this one has none"));
+                .isEmpty();
         Network network = ExampleNetworks.withLoadFlow(ExampleNetworks.createTwoBusNetworkWithBlackBoxAvr());
         assertThatThrownBy(() -> EmtpNetlistWriter.write(network, tempDir, new EmtpSimulationSettings(10.0e-6, 0.1, FREQUENCY)))
                 .isInstanceOf(PowsyblException.class).hasMessageContaining("is sampled every 2.0E-5 s, the run's time step is 1.0E-5 s");
@@ -247,5 +246,41 @@ class EmtpBlackBoxTest {
         softly.assertAll();
     }
 
+    /**
+     * Upstream's {@code KestrelBlackBoxSolverTest#theReferenceBlackBoxMachineRunsUnderTypedRegulatorsAsItsWhiteModel} in EMTP: the two-bus
+     * bench's subtransient machine under its simplified AVR and PSS1A as this backend writes them, and as {@code sub_machine_field_win32.dll}
+     * under the same regulators written around it ({@link EmtpBlackBoxes}), phase A of B2 faulted from 0.3 to 0.4 s: the bus voltages
+     * within 3e-4, the angles 0.05 degree - EMTP's machine in the exact definitions, the DLL's in the classical ones.
+     *
+     * <p>Run 2026-11-22: 6e-5 in the first period, 9e-7 before the fault, 2.2e-4 at worst in it, 7.4e-5 after; the angles within 0.013
+     * degree; the black box's field voltage at its ceiling, 5, from the fault to 0.62 s.
+     */
+    @Test
+    @Tag("emtp")
+    void theReferenceBlackBoxMachineRunsUnderTypedRegulatorsAsItsWhiteModel() {
+        EmtpOutput blackBox = EmtpRunner.run(EmtpNetlistWriter.write(ExampleNetworks.withLoadFlow(
+                ExampleNetworks.createTwoBusNetworkWithBlackBoxMachineAndTypedRegulators()), Path.of("target", "emtp", "black-box-machine-regulated"), SETTINGS,
+                List.of(FAULT)), EmtpSettings.defaults()).output();
+        EmtpOutput white = EmtpRunner.run(EmtpNetlistWriter.write(ExampleNetworks.withLoadFlow(ExampleNetworks.createTwoBusNetworkWithRegulatedSubtransientMachine()),
+                Path.of("target", "emtp", "black-box-machine-regulated-white"), SETTINGS, List.of(FAULT)), EmtpSettings.defaults()).output();
+        SoftAssertions softly = new SoftAssertions();
+        for (double[] window : new double[][] {{0.0, 0.02}, {0.20, 0.22}, {0.32, 0.34}, {0.45, 0.47}, {0.60, 0.62}, {0.76, 0.78}}) {
+            for (String[] phase : new String[][] {{"B1", "A"}, {"B1", "B"}, {"B2", "A"}}) {
+                String scope = EmtpNetlistWriter.voltageScope(phase[0], phase[1].charAt(0));
+                double expected = white.fundamentalPhasor(scope, FREQUENCY, window[0], window[1]).magnitude();
+                double actual = blackBox.fundamentalPhasor(scope, FREQUENCY, window[0], window[1]).magnitude();
+                double angleOff = Math.toDegrees(blackBox.fundamentalPhasor(scope, FREQUENCY, window[0], window[1]).angleRadians()
+                        - white.fundamentalPhasor(scope, FREQUENCY, window[0], window[1]).angleRadians());
+                System.out.printf(Locale.ROOT, "regulated %s%s %.2f-%.2f s: black box %+.2e, %+.4f degree off white%n", phase[0], phase[1], window[0], window[1],
+                        actual / expected - 1.0, angleOff);
+                softly.assertThat(actual).as("%s%s, %s-%s s", phase[0], phase[1], window[0], window[1]).isCloseTo(expected, within(REGULATED_TOLERANCE * expected));
+                softly.assertThat(angleOff).as("%s%s, %s-%s s, degrees", phase[0], phase[1], window[0], window[1]).isCloseTo(0.0, within(0.05));
+            }
+            System.out.printf(Locale.ROOT, "regulated Efd %.2f-%.2f s: black box %.5f%n", window[0], window[1], blackBox.mean("control:GENEfd", window[0], window[1]));
+        }
+        softly.assertAll();
+    }
+
     private static final double MACHINE_TOLERANCE = 2.5e-4;
+    private static final double REGULATED_TOLERANCE = 3e-4;
 }
