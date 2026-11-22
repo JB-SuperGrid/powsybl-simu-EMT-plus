@@ -8,6 +8,7 @@ import com.powsybl.iidm.network.Bus;
 import com.powsybl.iidm.network.Generator;
 import com.powsybl.iidm.network.extensions.GeneratorFortescue;
 import com.powsybl.simuemt.extensions.GeneratorModel;
+import com.powsybl.simuemt.extensions.blackbox.BlackBoxModels;
 import com.powsybl.simuemt.extensions.circuit.MachineInitialState;
 import com.powsybl.simuemt.extensions.circuit.MachineSequenceImpedances;
 import com.powsybl.simuemt.extensions.circuit.NumericalAids;
@@ -232,6 +233,10 @@ final class EmtpSynchronousMachines {
             reasons.add(e.getMessage());
         }
         reasons.addAll(EmtpExcitationLimiters.unsupportedReasons(generator));
+        if (BlackBoxModels.coversExcitation(generator) && generator.getExtension(PssModel.class) instanceof PssModel pss && pss.isEnabled()
+                && !(pss instanceof Pss1AModel)) {
+            reasons.add("its " + pss.getClass().getSimpleName() + " beside a black-box excitation is not written yet - a PSS1A is");
+        }
         for (Object extension : generator.getExtensions()) {
             if (isEnabled(extension) && !(extension instanceof SimplifiedAvrModel) && !(extension instanceof St1AModel) && !(extension instanceof Dc1AModel)
                     && !(extension instanceof Ac1AModel) && !(extension instanceof Ac6AModel) && !(extension instanceof Ac8BModel)
@@ -279,7 +284,7 @@ final class EmtpSynchronousMachines {
         double mechanicalSpeed = omega * 2.0 / machine.getNumberOfPoles();
         double speedDeviationDamping = machine.getDamping() * ratedMva * 1.0e6 / (mechanicalSpeed * mechanicalSpeed);
 
-        boolean regulated = regulator(generator) != null;
+        boolean regulated = regulator(generator) != null || BlackBoxModels.coversExcitation(generator);
         boolean stabilized = stabilizer(generator) != null || speedStabilized(generator);
         boolean governed = governor(generator) != null;
         List<String> controls = new ArrayList<>();
@@ -424,7 +429,8 @@ final class EmtpSynchronousMachines {
                     step, fastValving, frequencyHz, timeStepSeconds));
         }
         ExcitationSystemModel excitation = regulator(generator);
-        if (excitation == null) {
+        boolean blackBox = BlackBoxModels.coversExcitation(generator);
+        if (excitation == null && !blackBox) {
             devices.add(new Device("_c_cst", List.of("_c_cst;" + name + "_VF;1;1;" + fieldVoltageSignal(name) + ",", number(efd) + ",S1,")));
             return devices;
         }
@@ -457,6 +463,13 @@ final class EmtpSynchronousMachines {
             devices.add(new Device("_c_lim", List.of("_c_lim;" + name + "_VSL;2;2;" + stabilizerOutput + "," + unlimited + ",",
                     number(pss.getOutputLimit()) + "," + number(-pss.getOutputLimit()) + ",1,S1,")));
             devices.add(EmtpVoltageSourceConverters.scoped(function(name + "_P1VS", name + "_P1VS", List.of(stabilizerOutput), 0.0, "u[1]")));
+        }
+        if (blackBox) {
+            // Its black box, on the terminal voltage's magnitude and the PSS1A's output, if any.
+            String vt = signal(name, "VT");
+            devices.add(function(name + "_VT", vt, List.of(signal(name, "vd"), signal(name, "vq")), initial.terminalVoltage(), "SQRT(u[1]*u[1]+u[2]*u[2])"));
+            devices.addAll(EmtpBlackBoxes.excitation(generator, name, initial, vt, pss != null ? signal(name, "VS") : null, fieldVoltageSignal(name)));
+            return devices;
         }
         if (excitation instanceof St1AModel st1a) {
             devices.addAll(st1a(st1a, name, initial, stabilized));
@@ -1231,7 +1244,8 @@ final class EmtpSynchronousMachines {
 
     /** The machine's enabled PSS1A, if its regulator is written to take its output, or {@code null}. */
     private static Pss1AModel stabilizer(Generator generator) {
-        return regulator(generator) != null && generator.getExtension(PssModel.class) instanceof Pss1AModel pss && pss.isEnabled() ? pss : null;
+        return (regulator(generator) != null || BlackBoxModels.coversExcitation(generator)) && generator.getExtension(PssModel.class) instanceof Pss1AModel pss
+                && pss.isEnabled() ? pss : null;
     }
 
     /** The machine's enabled excitation system this writes - a simplified regulator, an ST1A, a DC1A or an AC1A -, or {@code null}. */

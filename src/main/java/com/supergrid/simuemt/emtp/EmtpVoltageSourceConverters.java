@@ -155,6 +155,9 @@ final class EmtpVoltageSourceConverters {
         AveragedConverterModel model = (AveragedConverterModel) converter.getExtension(VoltageSourceConverterModel.class);
         if (converter.getExtension(VscControlModel.class) instanceof GridFormingControl gridForming) {
             reasons.addAll(EmtpGridFormingControls.unsupportedReasons(gridForming));
+        } else if (com.powsybl.simuemt.extensions.blackbox.BlackBoxModels.coversConverterControl(converter)) {
+            // Its black-box control, refused by EmtpBlackBoxes.
+            return reasons;
         } else if (!(GridFollowingControl.of(converter).getSynchronization() instanceof SrfPll
                 || GridFollowingControl.of(converter).getSynchronization() instanceof DdsrfPll)) {
             reasons.add("its PLL but the SRF and DDSRF ones are not written yet");

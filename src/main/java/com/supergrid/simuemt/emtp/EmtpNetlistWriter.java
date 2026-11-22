@@ -31,6 +31,7 @@ import com.powsybl.simuemt.extensions.LoadModel;
 import com.powsybl.simuemt.extensions.arrester.ArresterPlacement;
 import com.powsybl.simuemt.extensions.arrester.SurgeArresters;
 import com.powsybl.simuemt.extensions.arrester.ZnOArresterModel;
+import com.powsybl.simuemt.extensions.blackbox.BlackBoxModels;
 import com.powsybl.simuemt.extensions.circuit.CoupledLineParameters;
 import com.powsybl.simuemt.extensions.circuit.ElectricalNodes;
 import com.powsybl.simuemt.extensions.circuit.LineEndShunt;
@@ -228,6 +229,7 @@ public final class EmtpNetlistWriter {
             }
         }
         refused.addAll(EmtpVoltageSourceConverters.unsupportedDcEventReasons(network, events));
+        BlackBoxModels.timeStepReasons(network, settings.timeStepSeconds()).forEach(reason -> refused.add(reason.strip()));
         if (!refused.isEmpty()) {
             throw new PowsyblException("SimuEmt Plus: EMTP cannot write network '" + network.getId() + "' yet: " + String.join("; ", refused));
         }
@@ -238,7 +240,7 @@ public final class EmtpNetlistWriter {
         REPRESENTATIVES.set(network.getBusBreakerView().getBusStream().collect(java.util.stream.Collectors.toMap(Identifiable::getId,
                 b -> nodes.representative(b).getId())));
         try {
-            return write(network, directory, settings, events, new Devices());
+            return EmtpBlackBoxes.writing(directory.resolve(name(network) + ".net"), () -> write(network, directory, settings, events, new Devices()));
         } finally {
             OPERATED_ENDS.remove();
             NODES.remove();
@@ -1121,6 +1123,7 @@ public final class EmtpNetlistWriter {
             }
         });
         reasons.addAll(EmtpVoltageSourceConverters.unsupportedDcReasons(network));
+        reasons.addAll(EmtpBlackBoxes.unsupportedReasons(network));
         network.getStaticVarCompensatorStream().filter(EmtpNetlistWriter::inService).forEach(svc -> {
             List<String> svcReasons = EmtpStaticVarCompensators.unsupportedReasons(svc);
             if (!svcReasons.isEmpty()) {
