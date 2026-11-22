@@ -5,13 +5,17 @@
 package com.supergrid.simuemt.emtp;
 
 import com.powsybl.commons.PowsyblException;
+import com.powsybl.computation.local.LocalComputationManager;
 import com.powsybl.iidm.network.Generator;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.simuemt.extensions.blackbox.BlackBoxModels;
 import com.powsybl.simuemt.extensions.circuit.MachineInitialState;
 import com.powsybl.simuemt.extensions.event.BusFault;
+import com.powsybl.simuemt.extensions.event.ConverterBlocking;
 import com.powsybl.simuemt.extensions.event.FaultClearing;
 import com.powsybl.simuemt.extensions.machine.SubtransientMachineModel;
+import com.powsybl.simuemt.preprocessing.EmtExtensionsXmlReader;
+import com.powsybl.simuemt.preprocessing.EmtNetworkPreprocessor;
 import com.powsybl.simuemt.testresources.ExampleNetworks;
 import org.assertj.core.api.SoftAssertions;
 import org.junit.jupiter.api.Tag;
@@ -138,6 +142,71 @@ class EmtpBlackBoxTest {
             System.out.printf(Locale.ROOT, "Efd %.2f-%.2f s: %.6f%n", window[0], window[1], blackBox.mean("control:GEN_EFD", window[0], window[1]));
         }
         softly.assertThat(blackBox.mean("control:GEN_EFD", 0.35, 0.37)).as("the field voltage at its ceiling in the fault").isCloseTo(5.0, within(1e-9));
+        softly.assertAll();
+    }
+
+    /** Example 2's VSC1 under the core of its grid-following control, white ({@code -gfl}) or as {@code gfl_vsc_win32.dll} ({@code
+     * -blackbox}). */
+    private static Network vscBench(String variant) {
+        Network network = ExampleNetworks.readVscBench("vsc-monopole-infinite-buses-2-" + variant, EmtExtensionsXmlReader::readNetwork);
+        EmtNetworkPreprocessor.preprocess(network, LocalComputationManager.getDefault());
+        return network;
+    }
+
+    /** The converter's DLL device: its three modulation indices out, the bus's phase voltages, its phase currents and its DC voltage in. */
+    @Test
+    void writesTheConverterControlsDllDevice(@TempDir Path tempDir) throws IOException {
+        List<String> lines = Files.readAllLines(EmtpNetlistWriter.write(vscBench("blackbox"), tempDir, SETTINGS), StandardCharsets.ISO_8859_1);
+
+        assertThat(tempDir.resolve("gfl_vsc_win32.dll")).as("the DLL copied beside the netlist").exists();
+        int device = lines.indexOf("_cm_dll;VSC1_BBX;10;10;VSC1Ma,VSC1Mb,VSC1Mc,VSC1Va,VSC1Vb,VSC1Vc,VSC1Ia,VSC1Ib,VSC1Ic,VSC1Vdc,");
+        assertThat(device).as("the DLL's device").isNotNegative();
+        assertThat(lines.subList(device + 1, device + 3)).containsExactly("3,7,3,S0,", "wrapper_1_1_0_0_x86.dll,");
+        // A device's pins past EMTP's 100 characters go on after a pin's comma.
+        assertThat(EmtpBlackBoxes.header("_cm_dll;VSC12_BBX;10;10;", List.of("VSC12Ma", "VSC12Mb", "VSC12Mc", "VSC12Va", "VSC12Vb", "VSC12Vc",
+                "VSC12Ia", "VSC12Ib", "VSC12Ic", "VSC12Vdc"))).containsExactly(
+                "_cm_dll;VSC12_BBX;10;10;VSC12Ma,VSC12Mb,VSC12Mc,VSC12Va,VSC12Vb,VSC12Vc,VSC12Ia,VSC12Ib,VSC12Ic,", "VSC12Vdc,");
+        assertThatThrownBy(() -> EmtpNetlistWriter.write(vscBench("blackbox"), tempDir, SETTINGS, List.of(new ConverterBlocking("VSC1", 0.3))))
+                .isInstanceOf(PowsyblException.class).hasMessageContaining("its control is a black box");
+    }
+
+    /**
+     * Upstream's {@code KestrelBlackBoxSolverTest#theReferenceBlackBoxConverterControlRunsAsItsWhiteModel} in EMTP: example 2's VSC1 under
+     * the core of its grid-following control as this backend writes it and as {@code gfl_vsc_win32.dll}, phase A of B1 faulted from 0.3 to
+     * 0.35 s; held to each other as Kestrel holds them - the bus voltages within 2e-4, the powers and DC voltages 3e-3, the black box's P
+     * and Q unfiltered, the white control's through its 1 ms lag -, but the bus voltages in the fault within 3e-4: the DLL's indices,
+     * turned a step on in alpha-beta ({@link EmtpBlackBoxes#converterControl}), turn the fault's negative sequence the wrong way, as
+     * upstream's ATP, PSCAD and Xyce turn it (Xyce 2.5e-4).
+     *
+     * <p>Run 2026-11-22: the bus voltages 1.5e-8 before the fault, 2.6e-4 in it, 2.4e-6 just after, 3e-7 at 0.77 s; VSC1's P and Q 1e-6
+     * before, 2.5e-3 in the fault, 1.3e-5 at 0.77 s.
+     */
+    @Test
+    @Tag("emtp")
+    void theReferenceBlackBoxConverterControlRunsAsItsWhiteModel() {
+        BusFault fault = new BusFault("FLTA", "B1", 'A', 0.3, 0.35, FaultClearing.AT_CURRENT_ZERO);
+        EmtpOutput blackBox = EmtpRunner.run(EmtpNetlistWriter.write(vscBench("blackbox"), Path.of("target", "emtp", "black-box-gfl"), SETTINGS,
+                List.of(fault)), EmtpSettings.defaults()).output();
+        EmtpOutput white = EmtpRunner.run(EmtpNetlistWriter.write(vscBench("gfl"), Path.of("target", "emtp", "black-box-gfl-white"), SETTINGS,
+                List.of(fault)), EmtpSettings.defaults()).output();
+        SoftAssertions softly = new SoftAssertions();
+        for (double[] window : new double[][] {{0.20, 0.22}, {0.32, 0.34}, {0.45, 0.47}, {0.76, 0.78}}) {
+            for (String[] phase : new String[][] {{"B1", "A"}, {"B1", "B"}, {"B2", "A"}}) {
+                String scope = EmtpNetlistWriter.voltageScope(phase[0], phase[1].charAt(0));
+                double expected = white.fundamentalPhasor(scope, FREQUENCY, window[0], window[1]).magnitude();
+                double actual = blackBox.fundamentalPhasor(scope, FREQUENCY, window[0], window[1]).magnitude();
+                System.out.printf(Locale.ROOT, "%s%s %.2f-%.2f s: black box %+.2e off white%n", phase[0], phase[1], window[0], window[1],
+                        actual / expected - 1.0);
+                double tolerance = window[0] > 0.3 && window[1] < 0.35 ? 3e-4 : 2e-4;
+                softly.assertThat(actual).as("%s%s, %s-%s s", phase[0], phase[1], window[0], window[1]).isCloseTo(expected, within(tolerance * expected));
+            }
+            for (String signal : List.of("VSC1_P", "VSC1_Q", "VSC1_VDC", "VSC2_P", "VSC2_VDC")) {
+                double expected = white.mean("control:" + signal, window[0], window[1]);
+                double actual = blackBox.mean("control:" + signal, window[0], window[1]);
+                System.out.printf(Locale.ROOT, "%s %.2f-%.2f s: white %.6f, black box %+.2e%n", signal, window[0], window[1], expected, actual - expected);
+                softly.assertThat(actual).as("%s, %s-%s s", signal, window[0], window[1]).isCloseTo(expected, within(3e-3));
+            }
+        }
         softly.assertAll();
     }
 }
