@@ -30,7 +30,15 @@ import java.util.List;
  *
  * <p>EMTP at 20 us, but 10 on IEEE 39's grid-following variants: there EMTP's step error is PSCAD's several times over - CL38, a
  * grid-following station on bus 29's short-circuit ratio of 1.3, its PLL slowed to ride this very fault, its power through the recovery
- * 2.7e-2 apart between EMTP's 20 us and 10 us runs, PSCAD's 3e-3 -, and at 10 us EMTP's is PSCAD's within 5e-3.
+ * 2.7e-2 apart between EMTP's 20 us and 10 us runs, PSCAD's 3e-3 -, and at 10 us EMTP's is PSCAD's within 5e-3. The cause, measured
+ * 2026-11-22 on a weak-grid bench (vsc-monopole-infinite-buses, its second station on an infinite bus of 325 MVA, a 5 ohm three-phase
+ * fault cleared at its currents' zeros; VSC2's P, Q and AC voltage against a 1 us run): EMTP's error is first order - 3.4e-2, 1.5e-2,
+ * 6.5e-3 at 20, 10, 5 us -, born at the fault's clearing, more than nine tenths of it - never cleared, 2.9e-3 at 20 us. A switch opens
+ * at the step after its current crosses zero, the instant uninterpolated (EMTP's {@code _Sw0} has no such option), as ATP's; PSCAD
+ * interpolates its switchings. EMTP's default integration doubles it - two backward Euler half steps at every discontinuity: pure
+ * trapezoidal ({@code SolutionMethod.TRAP=1;}) gives 1.8e-2, 8.4e-3, 3.4e-3 -, kept as it is. Not the controls - EMTP solves a loop
+ * through an integrator at second order -, nor the control's step to the network - one step, PSCAD's -, nor the 16L/Dt aids - at their
+ * 5 us values, 20 us is as far.
  *
  * <p>Left out: IEEE 39 all synchronous - no converter, nothing Kundur's machines do not hold already -; and IEEE 39 GFM 65 %, which has
  * no trajectory to compare through its fault: its grid-forming CL36, deep in the fault and current-limited, enters a limit cycle in both
