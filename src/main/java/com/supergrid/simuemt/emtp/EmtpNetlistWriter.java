@@ -319,6 +319,12 @@ public final class EmtpNetlistWriter {
                         boost, settings.nominalFrequencyHz(), settings.timeStepSeconds())) {
                     devices.addBlock(control.part(), control.lines());
                 }
+            } else if (BlackBoxModels.coversMachine(generator)) {
+                Bus bus = generator.getTerminal().getBusBreakerView().getBus();
+                for (EmtpSynchronousMachines.Device device : EmtpBlackBoxes.machine(generator, phaseNodes(bus.getId()),
+                        VectorGroupOffsets.of(network).degrees(bus), settings)) {
+                    devices.addBlock(device.part(), device.lines());
+                }
             } else {
                 writeInfiniteBus(devices, generator, settings);
             }
@@ -1099,7 +1105,7 @@ public final class EmtpNetlistWriter {
                 if (!machineReasons.isEmpty()) {
                     reasons.add("generator '" + generator.getId() + "': " + String.join(", ", machineReasons));
                 }
-            } else if (!(generator.getExtension(GeneratorModel.class) instanceof InfiniteBusGeneratorModel)) {
+            } else if (!(generator.getExtension(GeneratorModel.class) instanceof InfiniteBusGeneratorModel) && !BlackBoxModels.coversMachine(generator)) {
                 reasons.add("generator '" + generator.getId() + "' is neither an infinite bus nor a synchronous machine");
             }
         }

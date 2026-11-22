@@ -100,12 +100,14 @@ class EmtpBlackBoxTest {
                 .hasMessageContaining("starting with '_'");
     }
 
-    /** A black-box converter control and a black-box machine, refused by name; a DLL sampled off the run's step, refused as on every
-     * backend. */
+    /** A black-box machine beside typed regulators, refused as upstream refuses it on a backend of another repository - its field-port
+     * DLL has no win32 build either; a DLL sampled off the run's step, refused as on every backend. */
     @Test
     void refusesWhatItDoesNotWriteYet(@TempDir Path tempDir) {
-        assertThat(EmtpBlackBoxes.unsupportedReasons(ExampleNetworks.withLoadFlow(ExampleNetworks.createTwoBusNetworkWithBlackBoxMachine())))
-                .contains("generator 'GEN': a black-box machine is not written yet");
+        assertThat(EmtpBlackBoxes.unsupportedReasons(ExampleNetworks.withLoadFlow(ExampleNetworks.createTwoBusNetworkWithBlackBoxMachine()))).isEmpty();
+        assertThat(EmtpBlackBoxes.unsupportedReasons(ExampleNetworks.withLoadFlow(ExampleNetworks.createTwoBusNetworkWithBlackBoxMachineAndTypedRegulators())))
+                .anyMatch(reason -> reason.contains("beside the typed excitation system model"))
+                .anyMatch(reason -> reason.contains("IEEE_CIGRE_DLL artifact for win32, and this one has none"));
         Network network = ExampleNetworks.withLoadFlow(ExampleNetworks.createTwoBusNetworkWithBlackBoxAvr());
         assertThatThrownBy(() -> EmtpNetlistWriter.write(network, tempDir, new EmtpSimulationSettings(10.0e-6, 0.1, FREQUENCY)))
                 .isInstanceOf(PowsyblException.class).hasMessageContaining("is sampled every 2.0E-5 s, the run's time step is 1.0E-5 s");
@@ -209,4 +211,41 @@ class EmtpBlackBoxTest {
         }
         softly.assertAll();
     }
+
+    /**
+     * Upstream's {@code KestrelBlackBoxSolverTest#theReferenceBlackBoxMachineRunsAsItsWhiteModel} in EMTP: the two-bus bench's held
+     * subtransient machine as this backend writes it - EMTP's own machine, in the exact definitions - and as {@code sub_machine_win32.dll},
+     * the same machine in the classical ones behind the voltage this backend builds, phase A of B2 faulted from 0.3 to 0.4 s; the bus
+     * voltages within 2.5e-4, as upstream's ATP holds its black box to its own machine (2.4e-4 in the fault) - not the same equations
+     * written twice, as Kestrel's and Xyce's are.
+     *
+     * <p>Run 2026-11-22: 5.6e-5 in the first period, 4.2e-5 before the fault, 1.9e-4 in it, 1e-4 at worst after it; the angles within
+     * 0.006 degree before the fault, 0.03 after it, held within 0.05.
+     */
+    @Test
+    @Tag("emtp")
+    void theReferenceBlackBoxMachineRunsAsItsWhiteModel() {
+        EmtpOutput blackBox = EmtpRunner.run(EmtpNetlistWriter.write(ExampleNetworks.withLoadFlow(ExampleNetworks.createTwoBusNetworkWithBlackBoxMachine()),
+                Path.of("target", "emtp", "black-box-machine"), SETTINGS, List.of(FAULT)), EmtpSettings.defaults()).output();
+        EmtpOutput white = EmtpRunner.run(EmtpNetlistWriter.write(ExampleNetworks.withLoadFlow(ExampleNetworks.createTwoBusNetworkWithHeldSubtransientMachine()),
+                Path.of("target", "emtp", "black-box-machine-white"), SETTINGS, List.of(FAULT)), EmtpSettings.defaults()).output();
+        SoftAssertions softly = new SoftAssertions();
+        for (double[] window : new double[][] {{0.0, 0.02}, {0.20, 0.22}, {0.32, 0.34}, {0.45, 0.47}, {0.60, 0.62}, {0.76, 0.78}}) {
+            for (String[] phase : new String[][] {{"B1", "A"}, {"B1", "B"}, {"B2", "A"}}) {
+                String scope = EmtpNetlistWriter.voltageScope(phase[0], phase[1].charAt(0));
+                double expected = white.fundamentalPhasor(scope, FREQUENCY, window[0], window[1]).magnitude();
+                double actual = blackBox.fundamentalPhasor(scope, FREQUENCY, window[0], window[1]).magnitude();
+                System.out.printf(Locale.ROOT, "%s%s %.2f-%.2f s: black box %+.2e off white%n", phase[0], phase[1], window[0], window[1],
+                        actual / expected - 1.0);
+                softly.assertThat(actual).as("%s%s, %s-%s s", phase[0], phase[1], window[0], window[1]).isCloseTo(expected, within(MACHINE_TOLERANCE * expected));
+                double angleOff = Math.toDegrees(blackBox.fundamentalPhasor(scope, FREQUENCY, window[0], window[1]).angleRadians()
+                        - white.fundamentalPhasor(scope, FREQUENCY, window[0], window[1]).angleRadians());
+                System.out.printf(Locale.ROOT, "%s%s %.2f-%.2f s: black box %+.4f degree off white%n", phase[0], phase[1], window[0], window[1], angleOff);
+                softly.assertThat(angleOff).as("%s%s, %s-%s s, degrees", phase[0], phase[1], window[0], window[1]).isCloseTo(0.0, within(0.05));
+            }
+        }
+        softly.assertAll();
+    }
+
+    private static final double MACHINE_TOLERANCE = 2.5e-4;
 }
