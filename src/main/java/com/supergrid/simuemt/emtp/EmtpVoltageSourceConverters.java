@@ -193,6 +193,8 @@ final class EmtpVoltageSourceConverters {
         VoltageSourceConverter converter = network.getVoltageSourceConverter(blocking.converterId());
         if (converter == null) {
             reasons.add("converter '" + blocking.converterId() + "' is blocked, which the network has not");
+        } else if (com.powsybl.simuemt.extensions.blackbox.BlackBoxModels.coversConverterControl(converter)) {
+            reasons.add("converter '" + converter.getId() + "' is blocked but its control is a black box, whose state is inside the binary");
         } else if (converter.getExtension(VoltageSourceConverterModel.class) instanceof AveragedMmcModel && converter.getExtension(DcEarthingModel.class) != null
                 && !DcMidpointEarthing.valveWindingEarthed(converter)) {
             reasons.add("converter '" + converter.getId() + "' is blocked but it is an MMC earthed at its midpoint with its valve winding unearthed,"
@@ -406,6 +408,13 @@ final class EmtpVoltageSourceConverters {
         String cos2 = id + "_C2";
         String sin2 = id + "_S2";
 
+        // A black-box control: its DLL's EMFs, parked for the power stage (EmtpBlackBoxes).
+        if (com.powsybl.simuemt.extensions.blackbox.BlackBoxModels.coversConverterControl(converter)) {
+            EmtpBlackBoxes.converterControl(devices, converter, id, initial, v, i, angle0, omega, settings.timeStepSeconds());
+            emfsAndDcCurrent(devices, converter, initial, false, new Sequences(id + "_ID", id + "_IQ", null, null, null, null), cos2, sin2,
+                    emfMagnitude, emfAngle, omega, settings);
+            return devices;
+        }
         // A grid-forming control: its internal EMF's angle and magnitude, the current through its virtual admittance followed.
         if (converter.getExtension(VscControlModel.class) instanceof GridFormingControl gridForming) {
             EmtpGridFormingControls.write(devices, converter, model, gridForming, initial, v, i, angle0, omega, blockable, !Double.isNaN(deblockingSeconds));
