@@ -454,15 +454,7 @@ final class EmtpSynchronousMachines {
                     signal(name, "vq"), deviation, signal(name, "VA"), boost, timeStepSeconds, signal(name, "VS")));
         }
         if (pss != null) {
-            String washout = signal(name, "XW");
-            String firstLeadLag = signal(name, "Y1");
-            String unlimited = signal(name, "VSP");
-            devices.add(firstOrder(name + "_XW", washout, deviation, 0.0, pss.getGain(), 0.0, pss.getWashoutTimeConstant(), pss.getWashoutTimeConstant()));
-            devices.add(firstOrder(name + "_Y1", firstLeadLag, washout, 0.0, 1.0, 1.0, pss.getLeadTimeConstant(), pss.getLagTimeConstant()));
-            devices.add(firstOrder(name + "_VSP", unlimited, firstLeadLag, 0.0, 1.0, 1.0, pss.getLeadTimeConstant2(), pss.getLagTimeConstant2()));
-            devices.add(new Device("_c_lim", List.of("_c_lim;" + name + "_VSL;2;2;" + stabilizerOutput + "," + unlimited + ",",
-                    number(pss.getOutputLimit()) + "," + number(-pss.getOutputLimit()) + ",1,S1,")));
-            devices.add(EmtpVoltageSourceConverters.scoped(function(name + "_P1VS", name + "_P1VS", List.of(stabilizerOutput), 0.0, "u[1]")));
+            devices.addAll(pss1A(pss, name, deviation, stabilizerOutput));
         }
         if (blackBox) {
             // Its black box, on the terminal voltage's magnitude and the PSS1A's output, if any.
@@ -1206,6 +1198,21 @@ final class EmtpSynchronousMachines {
 
     /** A first-order transfer function {@code gain (n0 + n1 s) / (1 + d1 s)} from {@code input} to {@code output}, at rest at {@code
      * rest}. */
+    /** An IEEE PSS1A on the speed deviation {@code deviation}: its washout and two lead-lags, at rest, its output limited on {@code output},
+     * scoped ({@code control:<name>_P1VS}). */
+    static List<Device> pss1A(Pss1AModel pss, String name, String deviation, String output) {
+        String washout = signal(name, "XW");
+        String firstLeadLag = signal(name, "Y1");
+        String unlimited = signal(name, "VSP");
+        return List.of(
+                firstOrder(name + "_XW", washout, deviation, 0.0, pss.getGain(), 0.0, pss.getWashoutTimeConstant(), pss.getWashoutTimeConstant()),
+                firstOrder(name + "_Y1", firstLeadLag, washout, 0.0, 1.0, 1.0, pss.getLeadTimeConstant(), pss.getLagTimeConstant()),
+                firstOrder(name + "_VSP", unlimited, firstLeadLag, 0.0, 1.0, 1.0, pss.getLeadTimeConstant2(), pss.getLagTimeConstant2()),
+                new Device("_c_lim", List.of("_c_lim;" + name + "_VSL;2;2;" + output + "," + unlimited + ",",
+                        number(pss.getOutputLimit()) + "," + number(-pss.getOutputLimit()) + ",1,S1,")),
+                EmtpVoltageSourceConverters.scoped(function(name + "_P1VS", name + "_P1VS", List.of(output), 0.0, "u[1]")));
+    }
+
     static Device firstOrder(String device, String output, String input, double rest, double gain, double n0, double n1, double d1) {
         return new Device("_c_fs", List.of("_c_fs;" + device + ";2;2;" + output + "," + input + ",", number(rest) + ",1,2,2," + number(gain) + ",S1,",
                 number(n0) + " " + number(n1), ";", "1 " + number(d1)));
