@@ -25,7 +25,9 @@ import static com.supergrid.simuemt.emtp.EmtpVoltageSourceConverters.step;
 
 /**
  * A {@link Wt4bModel} wind turbine in EMTP, Dynawo's WT4B, by the equations every backend writes ({@link Wt4bLogic}): in pu of its rating,
- * generator convention, its currents {@code (id, iq)} the injector's - a positive {@code iq} producing reactive power.
+ * generator convention, its currents {@code (id, iq)} the injector's - a positive {@code iq} producing reactive power. Blocked, its bus has
+ * an RC to earth on each phase from the start, upstream's ({@link NumericalAids#WIND_TURBINE_BUS_SNUBBER_F}, {@link
+ * NumericalAids#WIND_TURBINE_BUS_SNUBBER_OHM}), which holds it once its breaker has let go.
  * <ul>
  *     <li>The PLL on its terminal's Park transform, {@code wdev = Kp vq + I}, {@code I} the integral of {@code Ki vq} held within {@code
  *     [OmegaMin - 1, OmegaMax - 1]}.</li>
@@ -163,6 +165,10 @@ final class EmtpWindTurbines {
                     meterBus = n("B" + phase);
                     devices.add(element("_Sw0", n("BRK" + phase), List.of(node, meterBus), "-1," + number(NumericalAids.switchingInstant(blockingSeconds, dt))
                             + ",0,0,0,,1,.1,.001,5,"));
+                    // Its bus's RC to earth, from the start, as every upstream backend writes it (NumericalAids#WIND_TURBINE_BUS_SNUBBER_F): its
+                    // breaker let go, the bus may be held by nothing but a transformer's winding.
+                    devices.add(element("_RLC", n("SNB" + phase), List.of(node), number(NumericalAids.WIND_TURBINE_BUS_SNUBBER_OHM) + ",0,"
+                            + number(NumericalAids.WIND_TURBINE_BUS_SNUBBER_F) + ",0,0,"));
                 }
                 String measured = n("X" + phase);
                 devices.add(element("_cV", n("MET" + phase), List.of(measured, meterBus, zero, n("MV" + phase), i[k], n("MP" + phase)), "-1,1E15,0,?v,?i,?p,>v,>i,>p,"));

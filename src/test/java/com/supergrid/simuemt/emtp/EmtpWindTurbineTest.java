@@ -7,6 +7,7 @@ package com.supergrid.simuemt.emtp;
 import com.powsybl.iidm.network.Generator;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.simuemt.extensions.GeneratorModel;
+import com.powsybl.simuemt.extensions.circuit.NumericalAids;
 import com.powsybl.simuemt.extensions.event.BusFault;
 import com.powsybl.simuemt.extensions.event.ConverterBlocking;
 import com.powsybl.simuemt.extensions.infinitebus.InfiniteBusEmf;
@@ -41,13 +42,21 @@ class EmtpWindTurbineTest {
     private static final double FREQUENCY = 50.0;
     private static final double TIME_STEP = 20.0e-6;
 
-    /** The park on upstream's bench: its meter, its coupling, its PLL, REGC_A's currents recorded; blocked, its breaker at its current's zero. */
+    /** The park on upstream's bench: its meter, its coupling, its PLL, REGC_A's currents recorded; blocked, its breaker at its current's zero
+     * and its bus's RC to earth, upstream's, from the start. */
     @Test
     void writesAWt4bWindPark(@TempDir Path tempDir) throws IOException {
         List<String> lines = Files.readAllLines(EmtpNetlistWriter.write(bench(), tempDir, new EmtpSimulationSettings(TIME_STEP, 0.1, FREQUENCY),
                 List.of(new ConverterBlocking("WT1", 0.05))), StandardCharsets.ISO_8859_1);
         assertThat(lines).contains("_Sw0;WT1_BRKa;2;2;B3a,WT1_Ba,", "_cV;WT1_METa;6;6;WT1_Xa,WT1_Ba,WT1_ZERO,WT1_MVa,WT1_IMa,WT1_MPa,",
                 "_RLC;WT1_LCa;2;2;WT1_Ka,WT1_Xa,");
+        int snubber = lines.indexOf("_RLC;WT1_SNBa;1;1;B3a,");
+        assertThat(snubber).as("phase a's RC to earth").isNotNegative();
+        String[] data = lines.get(snubber + 1).split(",");
+        assertThat(Double.parseDouble(data[0])).isCloseTo(NumericalAids.WIND_TURBINE_BUS_SNUBBER_OHM, within(1e-9));
+        assertThat(Double.parseDouble(data[2])).isCloseTo(NumericalAids.WIND_TURBINE_BUS_SNUBBER_F, within(1e-18));
+        assertThat(Files.readAllLines(EmtpNetlistWriter.write(bench(), tempDir.resolve("unblocked"), new EmtpSimulationSettings(TIME_STEP, 0.1, FREQUENCY)),
+                StandardCharsets.ISO_8859_1)).as("unblocked, none").noneMatch(line -> line.contains("_SNB"));
     }
 
     /**
