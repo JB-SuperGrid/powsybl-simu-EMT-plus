@@ -8,6 +8,7 @@ import com.powsybl.computation.local.LocalComputationManager;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.simuemt.extensions.event.BusFault;
 import com.powsybl.simuemt.extensions.event.FaultClearing;
+import com.powsybl.simuemt.extensions.event.LoadStep;
 import com.powsybl.simuemt.preprocessing.EmtExtensionsXmlReader;
 import com.powsybl.simuemt.preprocessing.EmtNetworkPreprocessor;
 import com.powsybl.simuemt.pscad.PscadEdition;
@@ -28,6 +29,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Locale;
 import java.util.function.Supplier;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.within;
 
@@ -45,6 +47,12 @@ import static org.assertj.core.api.Assertions.within;
  * regulated one 1.7e-3 and 2.3e-4. Against EMTP: the AVR 1.3e-3 in the fault, the two solvers' own machines on either side, 1.6e-4 at
  * 2.8 s; the converter's voltages 7.8e-4 in the fault and 1.2e-6 out of it, its powers 2.3e-3 pu in it; the black-box machines, the
  * same DLL in both solvers, closer than PSCAD's machine to them: 1.7e-4 in the fault, 5.1e-5 out of it.
+ *
+ * <p>Upstream's black boxes on the rotor's speed ({@code 4295f31d}), run 2026-11-25, 4 min 25 the four: against PSCAD Professional's own
+ * PSS1A, simplified AVR and TGOV1, as upstream measured PSCAD Free's - the stabilizer's Vs 1.8e-5 and the bus voltages 9.6e-6, the AVR
+ * with its stabilizer 1.8e-5 and 1.1e-5, the governor's power 3.7e-7 through the fault and 1.2e-6 through upstream's load rejection, its
+ * speed 1.8e-7, B1A 3.6e-6. Against EMTP, the two solvers' own machines on either side: the bus voltages 1.5e-3 in the fault, 2.3e-4
+ * out of it, Vs 4.7e-4; the governor's power 1.2e-4, the speed 3.7e-5. EMTP steps no load: the load rejection is held to PSCAD alone.
  *
  * <p>Tagged {@code pscad} and {@code emtp}: run with {@code mvn test -Ppscad,emtp}.
  *
@@ -65,6 +73,14 @@ class PscadProBlackBoxTest {
     private static final double EMTP_MEASUREMENT_TOLERANCE = 3e-3;
 
     private static final Tolerances MACHINE = new Tolerances(2.5e-3, 5e-4, 3e-4, 1e-4);
+    /** The regulated machine's: its black-box regulators against PSCAD's own, then against EMTP's machine. */
+    private static final Tolerances REGULATED = new Tolerances(3e-5, 3e-5, 2e-3, 3e-4);
+    private static final double[] REGULATED_STARTS = {2.04, 2.4, 2.52, 2.58, 2.65, 2.8, 3.0, 3.5};
+    /** The stabilizer's output, pu. */
+    private static final Measurement STABILIZER = new Measurement("GEN_VS", "control:GEN_P1VS", 0.0, 4e-5, 1e-3);
+    /** The governor's power and the speed, per unit; EMTP records the speed's deviation. */
+    private static final Measurement GOVERNOR_POWER = new Measurement("GEN_PMT", "control:GEN_PM", 0.0, 2.5e-6, 3e-4);
+    private static final Measurement GOVERNOR_SPEED = new Measurement("GEN_W", "control:GEN_DW", 1.0, 3.5e-7, 1e-4);
 
     @Test
     void theReferenceBlackBoxAvrRunsAsItsWhiteModel() {
@@ -77,7 +93,8 @@ class PscadProBlackBoxTest {
     @Test
     void theReferenceBlackBoxConverterControlRunsAsItsWhiteModel() {
         compare("black-box-gfl", () -> vscBench("blackbox"), () -> vscBench("gfl"), 3.2, "B1", 2.5, 2.55, new double[] {2.1, 2.4, 2.52, 2.6, 3.0},
-                List.of("VSC1_P", "VSC1_Q", "VSC1_VDC", "VSC2_P", "VSC2_VDC"), new Tolerances(5e-5, 5e-5, 1e-3, 2e-5));
+                Stream.of("VSC1_P", "VSC1_Q", "VSC1_VDC", "VSC2_P", "VSC2_VDC").map(PscadProBlackBoxTest::converterMeasurement).toList(),
+                new Tolerances(5e-5, 5e-5, 1e-3, 2e-5));
     }
 
     @Test
@@ -94,6 +111,59 @@ class PscadProBlackBoxTest {
                 new double[] {2.04, 2.4, 2.52, 2.58, 2.65, 2.8, 3.0, 3.5}, List.of(), MACHINE);
     }
 
+    @Test
+    void theReferenceBlackBoxPssRunsAsItsWhiteModel() {
+        compare("black-box-pss", () -> ExampleNetworks.withLoadFlow(ExampleNetworks.createTwoBusNetworkWithBlackBoxPss()),
+                () -> ExampleNetworks.withLoadFlow(ExampleNetworks.createTwoBusNetworkWithRegulatedSubtransientMachine()), 4.0, "B2", 2.5, 2.6,
+                REGULATED_STARTS, List.of(STABILIZER), REGULATED);
+    }
+
+    @Test
+    void theReferenceBlackBoxAvrWithItsPssRunsAsItsWhiteModels() {
+        compare("black-box-avr-pss", () -> ExampleNetworks.withLoadFlow(ExampleNetworks.createTwoBusNetworkWithBlackBoxAvrAndPss()),
+                () -> ExampleNetworks.withLoadFlow(ExampleNetworks.createTwoBusNetworkWithRegulatedSubtransientMachine()), 4.0, "B2", 2.5, 2.6,
+                REGULATED_STARTS, List.of(STABILIZER), REGULATED);
+    }
+
+    @Test
+    void theReferenceBlackBoxGovernorRunsAsItsWhiteModelThroughAFault() {
+        compare("black-box-governor", () -> ExampleNetworks.withLoadFlow(ExampleNetworks.createTwoBusNetworkWithBlackBoxGovernor()),
+                () -> ExampleNetworks.withLoadFlow(ExampleNetworks.createTwoBusNetworkWithTgov1()), 5.0, "B2", 2.5, 2.6,
+                new double[] {2.4, 2.52, 2.65, 3.0, 4.0, 4.96}, List.of(GOVERNOR_POWER, GOVERNOR_SPEED), REGULATED);
+    }
+
+    /**
+     * Upstream's own scenario for {@code tgov1.dll} ({@code PscadBlackBoxModelTest}), in PSCAD Professional: from rest, released at 2 s, the
+     * islanded machine's load stepped to 0.6 of its own at 2.7 s, run 7.2 s; held to PSCAD Professional's TGOV1 as upstream holds PSCAD
+     * Free's - the power 2.5e-6, the speed 3.5e-7, B1A and B2A 1e-5. EMTP steps no load: it is held to EMTP through the fault above.
+     */
+    @Test
+    void theReferenceBlackBoxGovernorRunsAsItsWhiteModelThroughALoadRejection() {
+        PscadSimulationSettings settings = new PscadSimulationSettings(TIME_STEP, 7.2, FREQUENCY, PscadEdition.PROFESSIONAL, PscadSwitching.ON_TIME_STEP);
+        List<LoadStep> rejection = List.of(new LoadStep("LOAD", 2.7, 0.6));
+        PscadProSimulation.PscadProRun blackBox = PscadProSimulation.run(ExampleNetworks.withLoadFlow(ExampleNetworks.createTwoBusNetworkWithBlackBoxGovernor()),
+                Path.of("target", "black-box-governor-rejection"), settings, rejection, PscadProSettings.defaults());
+        PscadProSimulation.PscadProRun white = PscadProSimulation.run(ExampleNetworks.withLoadFlow(ExampleNetworks.createTwoBusNetworkWithTgov1()),
+                Path.of("target", "black-box-governor-rejection-white"), settings, rejection, PscadProSettings.defaults());
+        SoftAssertions softly = new SoftAssertions();
+        for (double start : new double[] {1.0, 2.5, 2.72, 3.2, 4.2, 5.7, 7.16}) {
+            for (String[] channel : new String[][] {{"GEN_PMT", "2.5e-6"}, {"GEN_W", "3.5e-7"}}) {
+                double expected = white.output().mean(channel[0], start, start + 0.02);
+                double actual = blackBox.output().mean(channel[0], start, start + 0.02);
+                System.out.printf(Locale.ROOT, "governor rejection %s at %.2f s: white %.7f, black box %+.2e%n", channel[0], start, expected, actual - expected);
+                softly.assertThat(actual).as("%s at %s s", channel[0], start).isCloseTo(expected, within(Double.parseDouble(channel[1])));
+            }
+            for (String bus : List.of("B1", "B2")) {
+                double expected = white.output().fundamentalPhasor(white.project().circuit().voltageChannel(bus, 'A'), FREQUENCY, start, start + 0.02).magnitude();
+                double actual = blackBox.output().fundamentalPhasor(blackBox.project().circuit().voltageChannel(bus, 'A'), FREQUENCY, start, start + 0.02)
+                        .magnitude();
+                System.out.printf(Locale.ROOT, "governor rejection %sA at %.2f s: black box %+.2e off white%n", bus, start, actual / expected - 1.0);
+                softly.assertThat(actual).as("%sA at %s s", bus, start).isCloseTo(expected, within(1e-5 * expected));
+            }
+        }
+        softly.assertAll();
+    }
+
     /** Example 2's VSC1 under the core of its grid-following control, white ({@code -gfl}) or as its DLL ({@code -blackbox}). */
     private static Network vscBench(String variant) {
         Network network = ExampleNetworks.readVscBench("vsc-monopole-infinite-buses-2-" + variant, EmtExtensionsXmlReader::readNetwork);
@@ -102,7 +172,7 @@ class PscadProBlackBoxTest {
     }
 
     private static void compare(String name, Supplier<Network> blackBoxNetwork, Supplier<Network> whiteNetwork, double seconds, String faultBus,
-                                double faultStart, double faultEnd, double[] starts, List<String> measurements, Tolerances tolerances) {
+                                double faultStart, double faultEnd, double[] starts, List<Measurement> measurements, Tolerances tolerances) {
         PscadSimulationSettings settings = new PscadSimulationSettings(TIME_STEP, seconds, FREQUENCY, PscadEdition.PROFESSIONAL, PscadSwitching.ON_TIME_STEP);
         BusFault fault = new BusFault("FLTA", faultBus, 'A', faultStart, faultEnd, FaultClearing.AT_CURRENT_ZERO);
         PscadProSimulation.PscadProRun blackBox = PscadProSimulation.run(blackBoxNetwork.get(), Path.of("target", name), settings, List.of(fault),
@@ -133,19 +203,33 @@ class PscadProBlackBoxTest {
                     softly.assertThat(actual).as("%s%s at %s s, against EMTP", phase[0], phase[1], start).isCloseTo(inEmtp, within(emtpTolerance * inEmtp));
                 }
             }
-            for (String measurement : measurements) {
-                double actual = pro.mean(measurement, start, start + 0.02);
-                double expected = white.output().mean(measurement, start, start + 0.02);
-                double inEmtp = start < SHIFT + 0.1 ? Double.NaN : emtp.mean("control:" + measurement, start - SHIFT, start - SHIFT + 0.02);
-                System.out.printf(Locale.ROOT, "%s %s at %.2f s: PSCAD Pro black box %.6f, %+.2e off its white model, %+.2e off EMTP's black box%n", name,
-                        measurement, start, actual, actual - expected, actual - inEmtp);
-                softly.assertThat(actual).as("%s at %s s, against the white model", measurement, start).isCloseTo(expected, within(MEASUREMENT_TOLERANCE));
+            for (Measurement measurement : measurements) {
+                double actual = pro.mean(measurement.channel(), start, start + 0.02);
+                double expected = white.output().mean(measurement.channel(), start, start + 0.02);
+                double inEmtp = start < SHIFT + 0.1 ? Double.NaN
+                        : emtp.mean(measurement.emtpScope(), start - SHIFT, start - SHIFT + 0.02) + measurement.emtpOffset();
+                System.out.printf(Locale.ROOT, "%s %s at %.2f s: PSCAD Pro black box %.7f, %+.2e off its white model, %+.2e off EMTP's black box%n", name,
+                        measurement.channel(), start, actual, actual - expected, actual - inEmtp);
+                softly.assertThat(actual).as("%s at %s s, against the white model", measurement.channel(), start)
+                        .isCloseTo(expected, within(measurement.white()));
                 if (!Double.isNaN(inEmtp)) {
-                    softly.assertThat(actual).as("%s at %s s, against EMTP", measurement, start).isCloseTo(inEmtp, within(EMTP_MEASUREMENT_TOLERANCE));
+                    softly.assertThat(actual).as("%s at %s s, against EMTP", measurement.channel(), start).isCloseTo(inEmtp, within(measurement.emtp()));
                 }
             }
         }
         softly.assertAll();
+    }
+
+    /** A converter's power or DC voltage, pu, recorded under the same name by the two solvers. */
+    private static Measurement converterMeasurement(String name) {
+        return new Measurement(name, "control:" + name, 0.0, MEASUREMENT_TOLERANCE, EMTP_MEASUREMENT_TOLERANCE);
+    }
+
+    /**
+     * A signal PSCAD records on {@code channel} and EMTP on {@code emtpScope}, plus {@code emtpOffset}; held within {@code white} to the
+     * white model, {@code emtp} to EMTP.
+     */
+    private record Measurement(String channel, String emtpScope, double emtpOffset, double white, double emtp) {
     }
 
     /** The bus voltages' relative tolerances: against the white model in and out of the fault's windows, then against EMTP. */

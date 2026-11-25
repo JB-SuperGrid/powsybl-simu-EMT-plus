@@ -166,6 +166,10 @@ import static com.supergrid.simuemt.emtp.EmtpNetlistWriter.number;
  * rating (2026-11-14) -, from the same speed deviation, every state at {@code Pm0}, the load flow's mechanical power ({@link
  * MachineInitialState#mechanicalPower()}), as ATP's TACS has it.
  *
+ * <p>A black box ({@link EmtpBlackBoxes}) covering the turbine-governor drives that power the same way; one covering the stabilizer
+ * alone feeds the typed regulator's stabilizing input as a typed one; one covering the excitation, with its stabilizer or not, drives the
+ * field voltage. Each reads the observed speed {@code Omega_1} itself.
+ *
  * <p>Refused, until written: zero-sequence data ({@code GeneratorFortescue}), and any other enabled excitation system,
  * stabilizer, limiter or turbine-governor - one disabled holds what it would have regulated, as in upstream's backends.
  *
@@ -285,8 +289,8 @@ final class EmtpSynchronousMachines {
         double speedDeviationDamping = machine.getDamping() * ratedMva * 1.0e6 / (mechanicalSpeed * mechanicalSpeed);
 
         boolean regulated = regulator(generator) != null || BlackBoxModels.coversExcitation(generator);
-        boolean stabilized = stabilizer(generator) != null || speedStabilized(generator);
-        boolean governed = governor(generator) != null;
+        boolean stabilized = stabilizer(generator) != null || speedStabilized(generator) || BlackBoxModels.coversPss(generator);
+        boolean governed = governor(generator) != null || BlackBoxModels.coversGovernor(generator);
         List<String> controls = new ArrayList<>();
         if (governed) {
             controls.add(signal(name, MASS_POWER));
@@ -411,8 +415,12 @@ final class EmtpSynchronousMachines {
         TurbineGovernorModel tgov1 = governor(generator);
         String deviation = signal(name, "DW");
         List<Device> devices = new ArrayList<>();
-        boolean stabilized = pss != null || stabilizedThroughDec(generator);
-        if (pss != null || speedStabilized(generator) || tgov1 != null || EmtpExcitationLimiters.voltsPerHertz(generator) != null) {
+        // A black box covering the stabilizer alone feeds the typed regulator's stabilizing input, as a typed one.
+        boolean blackBoxPss = BlackBoxModels.coversPss(generator) && !BlackBoxModels.coversExcitation(generator);
+        boolean blackBoxGovernor = BlackBoxModels.coversGovernor(generator);
+        boolean stabilized = pss != null || stabilizedThroughDec(generator) || blackBoxPss;
+        if (pss != null || speedStabilized(generator) || tgov1 != null || EmtpExcitationLimiters.voltsPerHertz(generator) != null
+                || BlackBoxModels.coversPss(generator) || blackBoxGovernor) {
             Device speedDeviation = new Device("_c_fu", List.of("_c_fu;" + name + "_DW;2;2;" + deviation + "," + signal(name, ROTOR_SPEED) + ",", "0,S1,", "u[1]-1"));
             // Scoped ({@code control:<name>_DW}), as upstream's benches record the speed.
             devices.add(EmtpVoltageSourceConverters.scoped(speedDeviation));
@@ -427,6 +435,9 @@ final class EmtpSynchronousMachines {
             }
             devices.addAll(EmtpTurbineGovernors.devices(generator, tgov1, name, deviation, electricalPower, signal(name, MASS_POWER), initial.mechanicalPower(),
                     step, fastValving, frequencyHz, timeStepSeconds));
+        }
+        if (blackBoxGovernor) {
+            devices.addAll(EmtpBlackBoxes.speedBlackBox(generator, name, initial, signal(name, ROTOR_SPEED), signal(name, MASS_POWER), null));
         }
         ExcitationSystemModel excitation = regulator(generator);
         boolean blackBox = BlackBoxModels.coversExcitation(generator);
@@ -456,11 +467,15 @@ final class EmtpSynchronousMachines {
         if (pss != null) {
             devices.addAll(pss1A(pss, name, deviation, stabilizerOutput));
         }
+        if (blackBoxPss) {
+            devices.addAll(EmtpBlackBoxes.speedBlackBox(generator, name, initial, signal(name, ROTOR_SPEED), null, signal(name, "VS")));
+        }
         if (blackBox) {
-            // Its black box, on the terminal voltage's magnitude and the PSS1A's output, if any.
+            // Its black box, on the terminal voltage's magnitude, the PSS1A's output, if any, and the speed, for one covering the stabilizer.
             String vt = signal(name, "VT");
             devices.add(function(name + "_VT", vt, List.of(signal(name, "vd"), signal(name, "vq")), initial.terminalVoltage(), "SQRT(u[1]*u[1]+u[2]*u[2])"));
-            devices.addAll(EmtpBlackBoxes.excitation(generator, name, initial, vt, pss != null ? signal(name, "VS") : null, fieldVoltageSignal(name)));
+            devices.addAll(EmtpBlackBoxes.excitation(generator, name, initial, vt, pss != null ? signal(name, "VS") : null, signal(name, ROTOR_SPEED),
+                    fieldVoltageSignal(name)));
             return devices;
         }
         if (excitation instanceof St1AModel st1a) {

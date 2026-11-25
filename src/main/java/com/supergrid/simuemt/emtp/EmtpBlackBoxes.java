@@ -51,7 +51,8 @@ import static com.supergrid.simuemt.emtp.EmtpNetlistWriter.number;
  * without any time-step delay" (the toolbox's help). Its model initialisation is called, its outputs held on their initial values until
  * its first call.
  *
- * <p>What EMTP writes: a machine's excitation alone ({@link #excitation}); a converter's inner and outer controls together
+ * <p>What EMTP writes: a machine's excitation alone or with its stabilizer ({@link #excitation}); its turbine-governor alone or its
+ * stabilizer alone, on its rotor's speed ({@link #speedBlackBox}); a converter's inner and outer controls together
  * ({@link #converterControl}); a machine alone, a voltage behind its interface impedance ({@link #machine}), beside a typed simplified
  * AVR and IEEE PSS1A on its field voltage and speed, if any ({@link #typedRegulators}).
  *
@@ -90,25 +91,28 @@ final class EmtpBlackBoxes {
 
     /**
      * The black-box excitation system of {@code generator}, machine {@code name}: its DLL's instance, reading the terminal voltage {@code
-     * vt} and the stabilizer's output {@code vs} ({@code null} without one: 0) on the ports bound to them, a constant on a port held at
-     * one, initialised on the load flow; its field voltage on {@code efd}, also scoped ({@code control:<name>_EFD}).
+     * vt}, the stabilizer's output {@code vs} ({@code null} without one: 0) and, for a black box covering the stabilizer too, the rotor's
+     * speed per unit {@code speed}, on the ports bound to them, a constant on a port held at one, initialised on the load flow; its field
+     * voltage on {@code efd}, also scoped ({@code control:<name>_EFD}); its stabilizer's output, if it gives it out, on {@code vs} for the
+     * record only, scoped as a typed PSS1A's ({@code control:<name>_P1VS}).
      */
     static List<EmtpSynchronousMachines.Device> excitation(Generator generator, String name, MachineInitialState initial, String vt, String vs,
-                                                           String efd) {
+                                                           String speed, String efd) {
         BlackBoxModel<Generator> model = BlackBoxModels.of(generator);
+        boolean withPss = model.covers(com.powsybl.simuemt.extensions.blackbox.BlackBoxSlot.PSS);
         List<EmtpSynchronousMachines.Device> devices = new ArrayList<>();
         List<String> inputs = new ArrayList<>();
         for (BlackBoxSignal input : model.getInputs()) {
             String constant = name + "_BBX_" + input.port();
             if (input.isConstant() || input.quantity() == BlackBoxQuantity.PSS_OUTPUT_PU && vs == null) {
-                devices.add(new EmtpSynchronousMachines.Device("_c_cst", List.of("_c_cst;" + constant + ";1;1;" + constant + ",",
-                        number(input.isConstant() ? input.constant() : 0.0) + ",S1,")));
+                devices.add(constant(constant, input.isConstant() ? input.constant() : 0.0));
                 inputs.add(constant);
                 continue;
             }
             inputs.add(switch (input.quantity()) {
                 case TERMINAL_VOLTAGE_MAGNITUDE_PU -> vt;
                 case PSS_OUTPUT_PU -> vs;
+                case ROTOR_SPEED_PU -> speed;
                 default -> throw new PowsyblException("SimuEmt Plus: generator '" + generator.getId() + "': input '" + input.port() + "' reads "
                         + input.quantity() + ", which EMTP does not feed a black-box excitation");
             });
@@ -122,9 +126,77 @@ final class EmtpBlackBoxes {
                         + initialValue.quantity() + " for a black-box excitation");
             });
         }
-        devices.add(instance(name + "_BBX", model, List.of(efd), List.of(initial.efd()), inputs, initialValues));
+        List<String> outputs = new ArrayList<>();
+        List<Double> initialOutputs = new ArrayList<>();
+        for (BlackBoxSignal output : model.getOutputs()) {
+            switch (output.quantity()) {
+                case FIELD_VOLTAGE_PU -> {
+                    outputs.add(efd);
+                    initialOutputs.add(initial.efd());
+                }
+                case PSS_OUTPUT_PU -> {
+                    outputs.add(withPss ? name + "_VS" : name + "_BBX_" + output.port());
+                    initialOutputs.add(0.0);
+                }
+                default -> throw new PowsyblException("SimuEmt Plus: generator '" + generator.getId() + "': output '" + output.port() + "' gives "
+                        + output.quantity() + ", which EMTP does not take from a black-box excitation");
+            }
+        }
+        devices.add(instance(name + "_BBX", model, outputs, initialOutputs, inputs, initialValues));
         devices.add(EmtpVoltageSourceConverters.scoped(EmtpSynchronousMachines.function(name + "_EFD", name + "_EFD", List.of(efd), initial.efd(), "u[1]")));
+        if (withPss && outputs.contains(name + "_VS")) {
+            devices.add(EmtpVoltageSourceConverters.scoped(EmtpSynchronousMachines.function(name + "_P1VS", name + "_P1VS", List.of(name + "_VS"), 0.0, "u[1]")));
+        }
         return devices;
+    }
+
+    /**
+     * The black box of {@code generator}, machine {@code name}, that reads its rotor's speed alone - its turbine-governor or its
+     * stabilizer -: its DLL's instance on the speed per unit {@code speed}, a constant on a port held at one. A governor's power, from the
+     * load flow's {@code Pm0}, drives the machine's mass's power {@code massPower}, scoped as a typed governor's ({@code control:<name>_PM});
+     * a stabilizer's output, from rest at 0, goes on {@code vs}, the typed regulator's stabilizing input, scoped as a typed PSS1A's
+     * ({@code control:<name>_P1VS}).
+     */
+    static List<EmtpSynchronousMachines.Device> speedBlackBox(Generator generator, String name, MachineInitialState initial, String speed, String massPower,
+                                                              String vs) {
+        BlackBoxModel<Generator> model = BlackBoxModels.of(generator);
+        boolean governor = BlackBoxModels.coversGovernor(generator);
+        List<EmtpSynchronousMachines.Device> devices = new ArrayList<>();
+        List<String> inputs = new ArrayList<>();
+        for (BlackBoxSignal input : model.getInputs()) {
+            if (input.isConstant()) {
+                String constant = name + "_BBX_" + input.port();
+                devices.add(constant(constant, input.constant()));
+                inputs.add(constant);
+            } else if (input.quantity() == BlackBoxQuantity.ROTOR_SPEED_PU) {
+                inputs.add(speed);
+            } else {
+                throw new PowsyblException("SimuEmt Plus: generator '" + generator.getId() + "': input '" + input.port() + "' reads " + input.quantity()
+                        + ", which EMTP does not feed a black box reading the speed");
+            }
+        }
+        double pm0 = initial.mechanicalPower();
+        List<Double> initialValues = new ArrayList<>();
+        for (BlackBoxInitialValue initialValue : model.getInitialValues()) {
+            if (initialValue.quantity() != BlackBoxQuantity.MECHANICAL_POWER_PU) {
+                throw new PowsyblException("SimuEmt Plus: generator '" + generator.getId() + "': no initial value of " + initialValue.quantity()
+                        + " for a black box reading the speed");
+            }
+            initialValues.add(pm0);
+        }
+        if (governor) {
+            String power = name + "_BBPM";
+            devices.add(instance(name + "_BBX", model, List.of(power), List.of(pm0), inputs, initialValues));
+            devices.add(EmtpVoltageSourceConverters.scoped(EmtpSynchronousMachines.function(name + "_PM", massPower, List.of(power), pm0, "u[1]")));
+        } else {
+            devices.add(instance(name + "_BBX", model, List.of(vs), List.of(0.0), inputs, initialValues));
+            devices.add(EmtpVoltageSourceConverters.scoped(EmtpSynchronousMachines.function(name + "_P1VS", name + "_P1VS", List.of(vs), 0.0, "u[1]")));
+        }
+        return devices;
+    }
+
+    private static EmtpSynchronousMachines.Device constant(String signal, double value) {
+        return new EmtpSynchronousMachines.Device("_c_cst", List.of("_c_cst;" + signal + ";1;1;" + signal + ",", number(value) + ",S1,"));
     }
 
     /**
