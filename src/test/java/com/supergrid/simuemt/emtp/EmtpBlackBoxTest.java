@@ -283,4 +283,133 @@ class EmtpBlackBoxTest {
 
     private static final double MACHINE_TOLERANCE = 2.5e-4;
     private static final double REGULATED_TOLERANCE = 3e-4;
+
+    /**
+     * The black boxes on the rotor's speed ({@code 4295f31d}): {@code tgov1_win32.dll} on the machine's observed speed, its power driving
+     * the mass's ({@code Pm_1}), Pm0 its one initial value; {@code pss1a_win32.dll} on the speed, its output the typed AVR's stabilizing
+     * input; {@code avr_pss1a_win32.dll} on the terminal voltage and the speed, the field voltage and the stabilizer's output out.
+     */
+    @Test
+    void writesTheDllDevicesReadingTheSpeed(@TempDir Path tempDir) throws IOException {
+        Network governed = ExampleNetworks.withLoadFlow(ExampleNetworks.createTwoBusNetworkWithBlackBoxGovernor());
+        List<String> governor = Files.readAllLines(EmtpNetlistWriter.write(governed, tempDir.resolve("governor"), SETTINGS), StandardCharsets.ISO_8859_1);
+        assertThat(tempDir.resolve("governor").resolve("tgov1_win32.dll")).exists();
+        int device = governor.indexOf("_cm_dll;GEN_BBX;2;2;GEN_BBPM,GEN_Omega_1,");
+        assertThat(device).as("the governor's device").isNotNegative();
+        assertThat(governor.get(device + 1)).isEqualTo("1,1,3,S0,");
+        assertThat(governor).contains("_c_fu;GEN_PM;2;2;GEN_Pm_1,GEN_BBPM,").anyMatch(line -> line.startsWith("_SM;GENa;") && line.contains("GEN_Pm_1,GEN_Vf,"));
+        double pm0 = MachineInitialState.subtransient(governed.getGenerator("GEN"), (SubtransientMachineModel) governed.getGenerator("GEN")
+                .getExtension(com.powsybl.simuemt.extensions.GeneratorModel.class), 0.0).mechanicalPower();
+        // Past the two paths, the 19 options, the input's accumulation flag and the initial-output pins' flag: its initial output, its eight
+        // parameters, then Pm0, then nine "variable" flags.
+        List<String> data = governor.subList(device + 4, governor.size());
+        List<String> rest = data.subList(1 + Integer.parseInt(data.get(0)), data.size());
+        List<String> options = rest.subList(1 + Integer.parseInt(rest.get(0)), rest.size());
+        assertThat(options.subList(19, 21)).containsExactly("0", "0");
+        assertThat(Double.parseDouble(options.get(21))).isCloseTo(pm0, within(1e-12));
+        assertThat(options.subList(22, 30).stream().map(Double::parseDouble).toList()).containsExactly(0.05, 0.5, 0.0, 1.1, 2.0, 10.0, 0.0, 0.02);
+        assertThat(Double.parseDouble(options.get(30))).isCloseTo(pm0, within(1e-12));
+        assertThat(options.subList(31, 40)).containsOnly("0");
+
+        List<String> pss = Files.readAllLines(EmtpNetlistWriter.write(ExampleNetworks.withLoadFlow(ExampleNetworks.createTwoBusNetworkWithBlackBoxPss()),
+                tempDir.resolve("pss"), SETTINGS), StandardCharsets.ISO_8859_1);
+        assertThat(tempDir.resolve("pss").resolve("pss1a_win32.dll")).exists();
+        assertThat(pss).contains("_cm_dll;GEN_BBX;2;2;GEN_VS,GEN_Omega_1,", "_c_fu;GEN_VERR;4;4;GEN_VERR,GEN_vd,GEN_vq,GEN_VS,")
+                .noneMatch(line -> line.startsWith("_c_fs;GEN_XW;"));
+
+        List<String> avrPss = Files.readAllLines(EmtpNetlistWriter.write(ExampleNetworks.withLoadFlow(ExampleNetworks.createTwoBusNetworkWithBlackBoxAvrAndPss()),
+                tempDir.resolve("avr-pss"), SETTINGS), StandardCharsets.ISO_8859_1);
+        assertThat(tempDir.resolve("avr-pss").resolve("avr_pss1a_win32.dll")).exists();
+        int avr = avrPss.indexOf("_cm_dll;GEN_BBX;4;4;GEN_Vf,GEN_VS,GEN_VT,GEN_Omega_1,");
+        assertThat(avr).as("the excitation's device").isNotNegative();
+        assertThat(avrPss.get(avr + 1)).isEqualTo("2,2,3,S0,");
+        assertThat(avrPss).contains("_c_fu;GEN_P1VS;2;2;GEN_P1VS,GEN_VS,").anyMatch(line -> line.startsWith("_SM;GENa;") && line.contains("GEN_Omega_1,"));
+    }
+
+    /**
+     * Upstream's {@code KestrelBlackBoxSolverTest#theReferenceBlackBoxPssRunsAsItsWhiteModel} in EMTP: the regulated machine's PSS1A as this
+     * backend writes it and as {@code pss1a_win32.dll} on the same simplified AVR, phase A of B2 faulted from 0.3 to 0.4 s; Vs and the bus
+     * voltages held as Kestrel holds them, 1e-4 and 5e-6.
+     *
+     * <p>Run 2026-11-25, Vs up to 0.088: Vs within 7.2e-7, the bus voltages 6.5e-7 - the DLL fed the step's own speed, where Kestrel feeds
+     * it a step late (4.8e-5).
+     */
+    @Test
+    @Tag("emtp")
+    void theReferenceBlackBoxPssRunsAsItsWhiteModel() {
+        compareRegulated("black-box-pss", ExampleNetworks.createTwoBusNetworkWithBlackBoxPss(), 1e-4, 5e-6);
+    }
+
+    /**
+     * Upstream's {@code KestrelBlackBoxSolverTest#theReferenceBlackBoxAvrWithItsPssRunsAsItsWhiteModels} in EMTP: the regulated machine's
+     * simplified AVR and PSS1A as this backend writes them and as {@code avr_pss1a_win32.dll}, phase A of B2 faulted from 0.3 to 0.4 s; Vs
+     * and the bus voltages held as Kestrel holds them, 1.3e-4 and 6e-5.
+     *
+     * <p>Run 2026-11-25: Vs within 3.1e-6, the bus voltages 3.4e-6 (Kestrel 6.6e-5 and 2.9e-5).
+     */
+    @Test
+    @Tag("emtp")
+    void theReferenceBlackBoxAvrWithItsPssRunsAsItsWhiteModels() {
+        compareRegulated("black-box-avr-pss", ExampleNetworks.createTwoBusNetworkWithBlackBoxAvrAndPss(), 1.3e-4, 6e-5);
+    }
+
+    private static void compareRegulated(String name, Network blackBoxNetwork, double vsTolerance, double voltageTolerance) {
+        EmtpOutput blackBox = EmtpRunner.run(EmtpNetlistWriter.write(ExampleNetworks.withLoadFlow(blackBoxNetwork), Path.of("target", "emtp", name), SETTINGS,
+                List.of(FAULT)), EmtpSettings.defaults()).output();
+        EmtpOutput white = EmtpRunner.run(EmtpNetlistWriter.write(ExampleNetworks.withLoadFlow(ExampleNetworks.createTwoBusNetworkWithRegulatedSubtransientMachine()),
+                Path.of("target", "emtp", name + "-white"), SETTINGS, List.of(FAULT)), EmtpSettings.defaults()).output();
+        SoftAssertions softly = new SoftAssertions();
+        for (double[] window : new double[][] {{0.20, 0.22}, {0.32, 0.34}, {0.45, 0.47}, {0.60, 0.62}, {0.76, 0.78}}) {
+            double vs = white.mean("control:GEN_P1VS", window[0], window[1]);
+            double actualVs = blackBox.mean("control:GEN_P1VS", window[0], window[1]);
+            System.out.printf(Locale.ROOT, "%s Vs %.2f-%.2f s: white %+.6f, black box %+.2e%n", name, window[0], window[1], vs, actualVs - vs);
+            softly.assertThat(actualVs).as("Vs, %s-%s s", window[0], window[1]).isCloseTo(vs, within(vsTolerance));
+            for (String[] phase : new String[][] {{"B1", "A"}, {"B1", "B"}, {"B2", "A"}}) {
+                String scope = EmtpNetlistWriter.voltageScope(phase[0], phase[1].charAt(0));
+                double expected = white.fundamentalPhasor(scope, FREQUENCY, window[0], window[1]).magnitude();
+                double actual = blackBox.fundamentalPhasor(scope, FREQUENCY, window[0], window[1]).magnitude();
+                System.out.printf(Locale.ROOT, "%s %s%s %.2f-%.2f s: black box %+.2e off white%n", name, phase[0], phase[1], window[0], window[1],
+                        actual / expected - 1.0);
+                softly.assertThat(actual).as("%s%s, %s-%s s", phase[0], phase[1], window[0], window[1]).isCloseTo(expected, within(voltageTolerance * expected));
+            }
+        }
+        softly.assertAll();
+    }
+
+    /**
+     * Upstream's {@code KestrelBlackBoxSolverTest#theReferenceBlackBoxGovernorRunsAsItsWhiteModel} in EMTP, but through a fault - EMTP
+     * steps no load -: the islanded machine's TGOV1 as this backend writes it and as {@code tgov1_win32.dll}, phase A of B2 faulted from
+     * 0.3 to 0.4 s, run 3 s; the power, the speed and the bus voltages held as Kestrel holds them, 2e-6, 2.5e-7 and 6e-6.
+     *
+     * <p>Run 2026-11-25, the speed up to 6.2e-3 pu, the power from 1.006 to 0.984 pu: the power within 7.8e-9, the speed 3.8e-10, the bus
+     * voltages 4.3e-10 - both on the same Pm0 and the same machine, the DLL fed the step's own speed.
+     */
+    @Test
+    @Tag("emtp")
+    void theReferenceBlackBoxGovernorRunsAsItsWhiteModel() {
+        EmtpSimulationSettings settings = new EmtpSimulationSettings(TIME_STEP, 3.0, FREQUENCY);
+        EmtpOutput blackBox = EmtpRunner.run(EmtpNetlistWriter.write(ExampleNetworks.withLoadFlow(ExampleNetworks.createTwoBusNetworkWithBlackBoxGovernor()),
+                Path.of("target", "emtp", "black-box-governor"), settings, List.of(FAULT)), EmtpSettings.defaults()).output();
+        EmtpOutput white = EmtpRunner.run(EmtpNetlistWriter.write(ExampleNetworks.withLoadFlow(ExampleNetworks.createTwoBusNetworkWithTgov1()),
+                Path.of("target", "emtp", "black-box-governor-white"), settings, List.of(FAULT)), EmtpSettings.defaults()).output();
+        SoftAssertions softly = new SoftAssertions();
+        for (double[] window : new double[][] {{0.20, 0.22}, {0.32, 0.34}, {0.45, 0.47}, {1.00, 1.02}, {2.00, 2.02}, {2.96, 2.98}}) {
+            double pm = white.mean("control:GEN_PM", window[0], window[1]);
+            double dw = white.mean("control:GEN_DW", window[0], window[1]);
+            double actualPm = blackBox.mean("control:GEN_PM", window[0], window[1]);
+            double actualDw = blackBox.mean("control:GEN_DW", window[0], window[1]);
+            System.out.printf(Locale.ROOT, "governor %.2f-%.2f s: white Pm %.6f Dw %+.3e, black box %+.2e %+.2e%n", window[0], window[1], pm, dw, actualPm - pm,
+                    actualDw - dw);
+            softly.assertThat(actualPm).as("Pm, %s-%s s", window[0], window[1]).isCloseTo(pm, within(2e-6));
+            softly.assertThat(actualDw).as("Dw, %s-%s s", window[0], window[1]).isCloseTo(dw, within(2.5e-7));
+            for (String bus : List.of("B1", "B2")) {
+                String scope = EmtpNetlistWriter.voltageScope(bus, 'A');
+                double expected = white.fundamentalPhasor(scope, FREQUENCY, window[0], window[1]).magnitude();
+                double actual = blackBox.fundamentalPhasor(scope, FREQUENCY, window[0], window[1]).magnitude();
+                System.out.printf(Locale.ROOT, "governor %sA %.2f-%.2f s: black box %+.2e off white%n", bus, window[0], window[1], actual / expected - 1.0);
+                softly.assertThat(actual).as("%sA, %s-%s s", bus, window[0], window[1]).isCloseTo(expected, within(6e-6 * expected));
+            }
+        }
+        softly.assertAll();
+    }
 }
