@@ -4,6 +4,7 @@
  */
 package com.supergrid.simuemt.pscadpro;
 
+import com.powsybl.commons.PowsyblException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -12,9 +13,12 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
@@ -54,6 +58,54 @@ class PscadProRunnerTest {
         assertThat(result.ran()).isFalse();
         assertThat(result.buildFolder()).hasFileName("two_bus.if18");
         assertThat(result.errors()).containsExactly("Input port 'I' is floating.", "LINK : fatal error LNK1104");
+    }
+
+    /** A driver stuck past its timeout is killed and run once more: the second go's result is the run's. */
+    @Test
+    void aStuckRunIsKilledAndRunOnceMore(@TempDir Path tempDir) throws IOException {
+        assumeTrue(pythonAvailable(), "no Python on this machine");
+        Path project = Files.createFile(tempDir.resolve("two_bus.pscx"));
+        PscadProSettings settings = fakePscad(tempDir, false);
+
+        PscadProRunner.Result result = PscadProRunner.run(project, settings);
+
+        assertThat(result.ran()).isTrue();
+        assertThat(Files.readAllLines(tempDir.resolve("attempts"))).hasSize(2);
+        assertThat(tempDir.resolve("two_bus.timed-out.log")).content().contains("stuck");
+        assertThat(tempDir.resolve("two_bus.log")).content().contains("ran");
+    }
+
+    /** A driver stuck at every go is reported once it has had its {@link PscadProRunner#ATTEMPTS}. */
+    @Test
+    void aRunStuckEveryTimeIsReported(@TempDir Path tempDir) throws IOException {
+        assumeTrue(pythonAvailable(), "no Python on this machine");
+        Path project = Files.createFile(tempDir.resolve("two_bus.pscx"));
+        PscadProSettings settings = fakePscad(tempDir, true);
+
+        assertThatThrownBy(() -> PscadProRunner.run(project, settings)).isInstanceOf(PowsyblException.class)
+                .hasMessageContaining("two_bus took longer than PT3S 2 times");
+        assertThat(Files.readAllLines(tempDir.resolve("attempts"))).hasSize(PscadProRunner.ATTEMPTS);
+    }
+
+    /** A Python script in PSCAD's place, given the driver's arguments: stuck at its first go - or at every go - and run at the next. */
+    private static PscadProSettings fakePscad(Path tempDir, boolean alwaysStuck) throws IOException {
+        Path script = tempDir.resolve("fake_pscad.py");
+        Files.writeString(script, """
+                import os, sys, time
+                with open('attempts', 'a') as f:
+                    f.write('go\\n')
+                with open('attempts') as f:
+                    goes = len(f.readlines())
+                if %s or goes == 1:
+                    print('stuck', flush=True)
+                    time.sleep(120)
+                name = os.path.splitext(os.path.basename(sys.argv[2]))[0]
+                open(name + '.infx', 'w').close()
+                with open(name + '.result', 'w') as f:
+                    f.write('status=ran\\nbuild_folder=' + os.getcwd() + '\\n')
+                print('ran')
+                """.formatted(alwaysStuck ? "True" : "False"), StandardCharsets.UTF_8);
+        return PscadProSettings.defaults().withPythonCommand(List.of("py", "-I", script.toString())).withTimeout(Duration.ofSeconds(3));
     }
 
     private static boolean pythonAvailable() {
