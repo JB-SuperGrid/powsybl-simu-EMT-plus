@@ -16,7 +16,9 @@ import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * Has PSCAD Professional build and run a project, and reads what it reports: PSCAD launched, the project built, compiled and
@@ -51,6 +53,12 @@ public final class PscadProRunner {
     /** The driver a {@code .pscx} is loaded, built and run by, written beside it. */
     static final String DRIVER = "pscad_run.py";
 
+    /** How many times a project is run before its timeout is reported. */
+    static final int ATTEMPTS = 2;
+
+    /** How long a killed PSCAD is given to be gone, its licence with it, before the next go. */
+    private static final long KILLED_WAIT_SECONDS = 30;
+
     private PscadProRunner() {
     }
 
@@ -77,7 +85,40 @@ public final class PscadProRunner {
         return result;
     }
 
+    /**
+     * Runs the driver; if it takes longer than the settings' timeout, kills it - PSCAD and EMTDC with it - and runs it once more.
+     * A PSCAD stuck once, short of memory, ran the same project at the next go; one stuck twice is reported. The first go's
+     * console is kept as {@code <name>.timed-out.log}.
+     */
     private static Result execute(Path project, PscadProSettings settings, boolean buildOnly) {
+        String name = projectName(project);
+        Path log = project.toAbsolutePath().getParent().resolve(name + ".log");
+        for (int attempt = 1; ; attempt++) {
+            try {
+                return attempt(project, settings, buildOnly);
+            } catch (TimedOut e) {
+                if (attempt == ATTEMPTS) {
+                    throw new PowsyblException("SimuEmt Plus: project " + name + " took longer than " + settings.timeout() + " "
+                            + ATTEMPTS + " times" + logTail(project));
+                }
+                try {
+                    // Copied, not moved: a killed process may hold it open a moment longer.
+                    Files.copy(log, log.resolveSibling(name + ".timed-out.log"), StandardCopyOption.REPLACE_EXISTING);
+                } catch (IOException ignored) {
+                    // the next go writes over it
+                }
+            }
+        }
+    }
+
+    /** The driver took longer than its timeout, and was killed. */
+    private static final class TimedOut extends Exception {
+        TimedOut() {
+            super(null, null, false, false);
+        }
+    }
+
+    private static Result attempt(Path project, PscadProSettings settings, boolean buildOnly) throws TimedOut {
         Path directory = project.toAbsolutePath().getParent();
         String name = projectName(project);
         List<String> command = new ArrayList<>(settings.pythonCommand());
@@ -99,9 +140,8 @@ public final class PscadProRunner {
             Process process = new ProcessBuilder(command).directory(directory.toFile()).redirectErrorStream(true)
                     .redirectOutput(log.toFile()).start();
             if (!process.waitFor(settings.timeout().toMillis(), TimeUnit.MILLISECONDS)) {
-                process.descendants().forEach(ProcessHandle::destroyForcibly);
-                process.destroyForcibly();
-                throw new PowsyblException("SimuEmt Plus: project " + name + " took longer than " + settings.timeout() + logTail(project));
+                kill(process);
+                throw new TimedOut();
             }
         } catch (IOException e) {
             throw new UncheckedIOException("SimuEmt Plus: could not run " + command, e);
@@ -114,6 +154,21 @@ public final class PscadProRunner {
                     + settings.pythonCommand() + "?" + logTail(project));
         }
         return read(resultFile);
+    }
+
+    /** Kills the driver and all it started - PSCAD, EMTDC - and waits for them to be gone. */
+    private static void kill(Process process) throws InterruptedException {
+        List<ProcessHandle> handles = new ArrayList<>(process.descendants().toList());
+        handles.add(process.toHandle());
+        handles.forEach(ProcessHandle::destroyForcibly);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(KILLED_WAIT_SECONDS);
+        for (ProcessHandle handle : handles) {
+            try {
+                handle.onExit().get(Math.max(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
+            } catch (ExecutionException | TimeoutException e) {
+                // still there: the next go will tell
+            }
+        }
     }
 
     /** {@link #DRIVER}, written into {@code directory}. */
