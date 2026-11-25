@@ -9,7 +9,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -28,21 +27,18 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  */
 class PscadProRunnerTest {
 
-    /** The driver ships with the runner, and Python compiles it. */
+    /** The session script ships with the runner, and Python compiles it. */
     @Test
-    void theDriverShipsWithTheRunnerAndPythonCompilesIt(@TempDir Path tempDir) throws Exception {
-        Path driver = tempDir.resolve(PscadProRunner.DRIVER);
-        try (InputStream in = PscadProRunner.class.getResourceAsStream(PscadProRunner.DRIVER)) {
-            assertThat(in).as("%s on the classpath", PscadProRunner.DRIVER).isNotNull();
-            Files.copy(in, driver);
-        }
-        assertThat(Files.readString(driver, StandardCharsets.UTF_8)).contains("pscad.load(path)", "project.build()", "project.run()");
+    void theSessionScriptShipsWithTheRunnerAndPythonCompilesIt(@TempDir Path tempDir) throws Exception {
+        Path script = PscadProSession.script(tempDir);
+        assertThat(Files.readString(script, StandardCharsets.UTF_8)).contains("pscad.load(path)", "project.build()", "project.run()",
+                "project.unload()", PscadProSession.DONE);
 
         assumeTrue(pythonAvailable(), "no Python on this machine");
-        Process process = new ProcessBuilder("py", "-I", "-m", "py_compile", driver.toString()).redirectErrorStream(true).start();
+        Process process = new ProcessBuilder("py", "-I", "-m", "py_compile", script.toString()).redirectErrorStream(true).start();
         String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.ISO_8859_1);
         assertThat(process.waitFor(60, TimeUnit.SECONDS)).isTrue();
-        assertThat(process.exitValue()).as("py_compile %s: %s", driver, output).isZero();
+        assertThat(process.exitValue()).as("py_compile %s: %s", script, output).isZero();
     }
 
     /** The driver's report: its status, its build folder, its errors one per line. */
@@ -60,52 +56,74 @@ class PscadProRunnerTest {
         assertThat(result.errors()).containsExactly("Input port 'I' is floating.", "LINK : fatal error LNK1104");
     }
 
-    /** A driver stuck past its timeout is killed and run once more: the second go's result is the run's. */
+    /** A project stuck past its timeout has its PSCAD killed, and is run once more in a new one: the second go's result is the run's. */
     @Test
     void aStuckRunIsKilledAndRunOnceMore(@TempDir Path tempDir) throws IOException {
         assumeTrue(pythonAvailable(), "no Python on this machine");
         Path project = Files.createFile(tempDir.resolve("two_bus.pscx"));
-        PscadProSettings settings = fakePscad(tempDir, false);
+        PscadProSettings settings = fakePscad(tempDir, true, false);
 
         PscadProRunner.Result result = PscadProRunner.run(project, settings);
 
         assertThat(result.ran()).isTrue();
-        assertThat(Files.readAllLines(tempDir.resolve("attempts"))).hasSize(2);
-        assertThat(tempDir.resolve("two_bus.timed-out.log")).content().contains("stuck");
-        assertThat(tempDir.resolve("two_bus.log")).content().contains("ran");
+        assertThat(Files.readAllLines(tempDir.resolve("sessions"))).hasSize(2);
     }
 
-    /** A driver stuck at every go is reported once it has had its {@link PscadProRunner#ATTEMPTS}. */
+    /** A project stuck at every go is reported once it has had its {@link PscadProRunner#ATTEMPTS}, with the session's console. */
     @Test
     void aRunStuckEveryTimeIsReported(@TempDir Path tempDir) throws IOException {
         assumeTrue(pythonAvailable(), "no Python on this machine");
         Path project = Files.createFile(tempDir.resolve("two_bus.pscx"));
-        PscadProSettings settings = fakePscad(tempDir, true);
+        PscadProSettings settings = fakePscad(tempDir, true, true);
 
         assertThatThrownBy(() -> PscadProRunner.run(project, settings)).isInstanceOf(PowsyblException.class)
-                .hasMessageContaining("two_bus took longer than PT3S 2 times");
-        assertThat(Files.readAllLines(tempDir.resolve("attempts"))).hasSize(PscadProRunner.ATTEMPTS);
+                .hasMessageContaining("two_bus took longer than PT5S 2 times").hasMessageContaining("stuck on two_bus");
+        assertThat(Files.readAllLines(tempDir.resolve("sessions"))).hasSize(PscadProRunner.ATTEMPTS);
     }
 
-    /** A Python script in PSCAD's place, given the driver's arguments: stuck at its first go - or at every go - and run at the next. */
-    private static PscadProSettings fakePscad(Path tempDir, boolean alwaysStuck) throws IOException {
+    /** One PSCAD runs project after project, and is started again after {@link PscadProSession#PROJECTS_PER_SESSION}. */
+    @Test
+    void oneSessionRunsProjectAfterProject(@TempDir Path tempDir) throws IOException {
+        assumeTrue(pythonAvailable(), "no Python on this machine");
+        PscadProSettings settings = fakePscad(tempDir, false, false);
+
+        for (int i = 0; i <= PscadProSession.PROJECTS_PER_SESSION; i++) {
+            Path project = Files.createFile(Files.createDirectory(tempDir.resolve("case" + i)).resolve("two_bus.pscx"));
+            assertThat(PscadProRunner.build(project, settings).status()).isEqualTo("built");
+        }
+
+        assertThat(Files.readAllLines(tempDir.resolve("sessions"))).hasSize(2);
+    }
+
+    /**
+     * A Python script in PSCAD's place, speaking {@link PscadProSession#SCRIPT}'s language: each session it starts is a line of
+     * {@code sessions}; it is stuck on a project in its first session if {@code stuckFirst}, in every one if {@code alwaysStuck}.
+     */
+    private static PscadProSettings fakePscad(Path tempDir, boolean stuckFirst, boolean alwaysStuck) throws IOException {
         Path script = tempDir.resolve("fake_pscad.py");
         Files.writeString(script, """
                 import os, sys, time
-                with open('attempts', 'a') as f:
-                    f.write('go\\n')
-                with open('attempts') as f:
-                    goes = len(f.readlines())
-                if %s or goes == 1:
-                    print('stuck', flush=True)
-                    time.sleep(120)
-                name = os.path.splitext(os.path.basename(sys.argv[2]))[0]
-                open(name + '.infx', 'w').close()
-                with open(name + '.result', 'w') as f:
-                    f.write('status=ran\\nbuild_folder=' + os.getcwd() + '\\n')
-                print('ran')
-                """.formatted(alwaysStuck ? "True" : "False"), StandardCharsets.UTF_8);
-        return PscadProSettings.defaults().withPythonCommand(List.of("py", "-I", script.toString())).withTimeout(Duration.ofSeconds(3));
+                sessions = '%s/sessions'
+                with open(sessions, 'a') as f:
+                    f.write('session\\n')
+                with open(sessions) as f:
+                    count = len(f.readlines())
+                for line in sys.stdin:
+                    command, _, path = line.rstrip('\\r\\n').partition('\\t')
+                    if command not in ('build', 'run'):
+                        break
+                    name = os.path.splitext(os.path.basename(path))[0]
+                    if %s or (%s and count == 1):
+                        print('stuck on ' + name, file=sys.stderr, flush=True)
+                        time.sleep(120)
+                    directory = os.path.dirname(path)
+                    open(os.path.join(directory, name + '.infx'), 'w').close()
+                    with open(os.path.join(directory, name + '.result'), 'w') as f:
+                        f.write('status=' + ('ran' if command == 'run' else 'built') + '\\nbuild_folder=' + directory + '\\n')
+                    print('%s', flush=True)
+                """.formatted(tempDir.toString().replace('\\', '/'), alwaysStuck ? "True" : "False", stuckFirst ? "True" : "False",
+                PscadProSession.DONE), StandardCharsets.UTF_8);
+        return PscadProSettings.defaults().withPythonCommand(List.of("py", "-I", script.toString())).withTimeout(Duration.ofSeconds(5));
     }
 
     private static boolean pythonAvailable() {

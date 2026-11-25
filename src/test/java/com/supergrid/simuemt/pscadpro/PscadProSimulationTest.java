@@ -59,7 +59,7 @@ class PscadProSimulationTest {
         PscadProSimulation.PscadProRun run = PscadProSimulation.run(network, tempDir, settings, List.of(), PRO);
 
         assertThat(run.project().file()).hasFileName("two_bus.pscx");
-        assertThat(tempDir.resolve(PscadProRunner.DRIVER)).exists();
+        assertThat(tempDir.resolve("two_bus.log")).exists();
         PscadSteadyState steady = PscadSteadyState.solve(run.project().circuit(), settings);
         for (String bus : List.of("B1", "B2")) {
             for (char phase : "ABC".toCharArray()) {
