@@ -54,6 +54,11 @@ import static org.assertj.core.api.Assertions.within;
  * speed 1.8e-7, B1A 3.6e-6. Against EMTP, the two solvers' own machines on either side: the bus voltages 1.5e-3 in the fault, 2.3e-4
  * out of it, Vs 4.7e-4; the governor's power 1.2e-4, the speed 3.7e-5. EMTP steps no load: the load rejection is held to PSCAD alone.
  *
+ * <p>Upstream's black-box excitation with the turbine-governor inside it ({@code d4e647ca}), run 2026-11-26, 3 min 20 with the governor's
+ * load rejection: against PSCAD Professional's own simplified AVR and TGOV1 - through the fault the power 8.6e-7, the speed 1.8e-7, the
+ * bus voltages 8.3e-6; through upstream's load rejection 1.7e-6, 1.6e-7 and 9.7e-6. Against EMTP through the fault: the power 1.2e-4,
+ * the speed 2.9e-5, the bus voltages 1.3e-3 in the fault.
+ *
  * <p>Tagged {@code pscad} and {@code emtp}: run with {@code mvn test -Ppscad,emtp}.
  *
  * @author Jean-Baptiste Heyberger : jean-baptiste.heyberger@supergrid-institute.com
@@ -139,26 +144,50 @@ class PscadProBlackBoxTest {
      */
     @Test
     void theReferenceBlackBoxGovernorRunsAsItsWhiteModelThroughALoadRejection() {
+        rejection("black-box-governor-rejection", ExampleNetworks.createTwoBusNetworkWithBlackBoxGovernor(), ExampleNetworks.createTwoBusNetworkWithTgov1(),
+                1e-5);
+    }
+
+    /** Upstream's black-box excitation with the turbine-governor inside it ({@code d4e647ca}, {@code avr_tgov1.dll}) through the fault,
+     * against PSCAD Professional's simplified AVR and TGOV1 and against EMTP's same black box. */
+    @Test
+    void theReferenceBlackBoxAvrWithTheGovernorRunsAsItsWhiteModelsThroughAFault() {
+        compare("black-box-avr-governor", () -> ExampleNetworks.withLoadFlow(ExampleNetworks.createTwoBusNetworkWithBlackBoxAvrAndGovernor()),
+                () -> ExampleNetworks.withLoadFlow(ExampleNetworks.createTwoBusNetworkWithAvrAndTgov1()), 5.0, "B2", 2.5, 2.6,
+                new double[] {2.4, 2.52, 2.65, 3.0, 4.0, 4.96}, List.of(GOVERNOR_POWER, GOVERNOR_SPEED), REGULATED);
+    }
+
+    /** The same through upstream's own scenario for it, the islanded machine's 40 % load rejection, held to PSCAD Professional's white
+     * models as upstream holds PSCAD Free's - its bus voltages 1.5e-5, the AVR's part moving them (PSCAD Free 9.8e-6). */
+    @Test
+    void theReferenceBlackBoxAvrWithTheGovernorRunsAsItsWhiteModelsThroughALoadRejection() {
+        rejection("black-box-avr-governor-rejection", ExampleNetworks.createTwoBusNetworkWithBlackBoxAvrAndGovernor(),
+                ExampleNetworks.createTwoBusNetworkWithAvrAndTgov1(), 1.5e-5);
+    }
+
+    /** {@code blackBoxNetwork} and {@code whiteNetwork} from rest, released at 2 s, the load stepped to 0.6 of its own at 2.7 s, run 7.2 s:
+     * the power within 2.5e-6, the speed 3.5e-7, B1A and B2A {@code voltageTolerance}. */
+    private static void rejection(String name, Network blackBoxNetwork, Network whiteNetwork, double voltageTolerance) {
         PscadSimulationSettings settings = new PscadSimulationSettings(TIME_STEP, 7.2, FREQUENCY, PscadEdition.PROFESSIONAL, PscadSwitching.ON_TIME_STEP);
         List<LoadStep> rejection = List.of(new LoadStep("LOAD", 2.7, 0.6));
-        PscadProSimulation.PscadProRun blackBox = PscadProSimulation.run(ExampleNetworks.withLoadFlow(ExampleNetworks.createTwoBusNetworkWithBlackBoxGovernor()),
-                Path.of("target", "black-box-governor-rejection"), settings, rejection, PscadProSettings.defaults());
-        PscadProSimulation.PscadProRun white = PscadProSimulation.run(ExampleNetworks.withLoadFlow(ExampleNetworks.createTwoBusNetworkWithTgov1()),
-                Path.of("target", "black-box-governor-rejection-white"), settings, rejection, PscadProSettings.defaults());
+        PscadProSimulation.PscadProRun blackBox = PscadProSimulation.run(ExampleNetworks.withLoadFlow(blackBoxNetwork), Path.of("target", name), settings,
+                rejection, PscadProSettings.defaults());
+        PscadProSimulation.PscadProRun white = PscadProSimulation.run(ExampleNetworks.withLoadFlow(whiteNetwork), Path.of("target", name + "-white"), settings,
+                rejection, PscadProSettings.defaults());
         SoftAssertions softly = new SoftAssertions();
         for (double start : new double[] {1.0, 2.5, 2.72, 3.2, 4.2, 5.7, 7.16}) {
             for (String[] channel : new String[][] {{"GEN_PMT", "2.5e-6"}, {"GEN_W", "3.5e-7"}}) {
                 double expected = white.output().mean(channel[0], start, start + 0.02);
                 double actual = blackBox.output().mean(channel[0], start, start + 0.02);
-                System.out.printf(Locale.ROOT, "governor rejection %s at %.2f s: white %.7f, black box %+.2e%n", channel[0], start, expected, actual - expected);
+                System.out.printf(Locale.ROOT, "%s %s at %.2f s: white %.7f, black box %+.2e%n", name, channel[0], start, expected, actual - expected);
                 softly.assertThat(actual).as("%s at %s s", channel[0], start).isCloseTo(expected, within(Double.parseDouble(channel[1])));
             }
             for (String bus : List.of("B1", "B2")) {
                 double expected = white.output().fundamentalPhasor(white.project().circuit().voltageChannel(bus, 'A'), FREQUENCY, start, start + 0.02).magnitude();
                 double actual = blackBox.output().fundamentalPhasor(blackBox.project().circuit().voltageChannel(bus, 'A'), FREQUENCY, start, start + 0.02)
                         .magnitude();
-                System.out.printf(Locale.ROOT, "governor rejection %sA at %.2f s: black box %+.2e off white%n", bus, start, actual / expected - 1.0);
-                softly.assertThat(actual).as("%sA at %s s", bus, start).isCloseTo(expected, within(1e-5 * expected));
+                System.out.printf(Locale.ROOT, "%s %sA at %.2f s: black box %+.2e off white%n", name, bus, start, actual / expected - 1.0);
+                softly.assertThat(actual).as("%sA at %s s", bus, start).isCloseTo(expected, within(voltageTolerance * expected));
             }
         }
         softly.assertAll();

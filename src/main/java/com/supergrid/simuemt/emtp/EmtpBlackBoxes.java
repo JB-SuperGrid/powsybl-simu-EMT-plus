@@ -51,7 +51,7 @@ import static com.supergrid.simuemt.emtp.EmtpNetlistWriter.number;
  * without any time-step delay" (the toolbox's help). Its model initialisation is called, its outputs held on their initial values until
  * its first call.
  *
- * <p>What EMTP writes: a machine's excitation alone or with its stabilizer ({@link #excitation}); its turbine-governor alone or its
+ * <p>What EMTP writes: a machine's excitation alone, with its stabilizer or with its turbine-governor ({@link #excitation}); its turbine-governor alone or its
  * stabilizer alone, on its rotor's speed ({@link #speedBlackBox}); a converter's inner and outer controls together
  * ({@link #converterControl}); a machine alone, a voltage behind its interface impedance ({@link #machine}), beside a typed simplified
  * AVR and IEEE PSS1A on its field voltage and speed, if any ({@link #typedRegulators}).
@@ -94,10 +94,12 @@ final class EmtpBlackBoxes {
      * vt}, the stabilizer's output {@code vs} ({@code null} without one: 0) and, for a black box covering the stabilizer too, the rotor's
      * speed per unit {@code speed}, on the ports bound to them, a constant on a port held at one, initialised on the load flow; its field
      * voltage on {@code efd}, also scoped ({@code control:<name>_EFD}); its stabilizer's output, if it gives it out, on {@code vs} for the
-     * record only, scoped as a typed PSS1A's ({@code control:<name>_P1VS}).
+     * record only, scoped as a typed PSS1A's ({@code control:<name>_P1VS}). Covering the turbine-governor too, initialised on the load
+     * flow's mechanical power {@code Pm0} as well, it drives the mass's power {@code massPower} with its own, scoped as a typed governor's
+     * ({@code control:<name>_PM}), as {@link #speedBlackBox} does.
      */
     static List<EmtpSynchronousMachines.Device> excitation(Generator generator, String name, MachineInitialState initial, String vt, String vs,
-                                                           String speed, String efd) {
+                                                           String speed, String efd, String massPower) {
         BlackBoxModel<Generator> model = BlackBoxModels.of(generator);
         boolean withPss = model.covers(com.powsybl.simuemt.extensions.blackbox.BlackBoxSlot.PSS);
         List<EmtpSynchronousMachines.Device> devices = new ArrayList<>();
@@ -122,6 +124,7 @@ final class EmtpBlackBoxes {
             initialValues.add(switch (initialValue.quantity()) {
                 case TERMINAL_VOLTAGE_MAGNITUDE_PU -> initial.terminalVoltage();
                 case FIELD_VOLTAGE_PU -> initial.efd();
+                case MECHANICAL_POWER_PU -> initial.mechanicalPower();
                 default -> throw new PowsyblException("SimuEmt Plus: generator '" + generator.getId() + "': no initial value of "
                         + initialValue.quantity() + " for a black-box excitation");
             });
@@ -138,6 +141,10 @@ final class EmtpBlackBoxes {
                     outputs.add(withPss ? name + "_VS" : name + "_BBX_" + output.port());
                     initialOutputs.add(0.0);
                 }
+                case MECHANICAL_POWER_PU -> {
+                    outputs.add(name + "_BBPM");
+                    initialOutputs.add(initial.mechanicalPower());
+                }
                 default -> throw new PowsyblException("SimuEmt Plus: generator '" + generator.getId() + "': output '" + output.port() + "' gives "
                         + output.quantity() + ", which EMTP does not take from a black-box excitation");
             }
@@ -146,6 +153,10 @@ final class EmtpBlackBoxes {
         devices.add(EmtpVoltageSourceConverters.scoped(EmtpSynchronousMachines.function(name + "_EFD", name + "_EFD", List.of(efd), initial.efd(), "u[1]")));
         if (withPss && outputs.contains(name + "_VS")) {
             devices.add(EmtpVoltageSourceConverters.scoped(EmtpSynchronousMachines.function(name + "_P1VS", name + "_P1VS", List.of(name + "_VS"), 0.0, "u[1]")));
+        }
+        if (outputs.contains(name + "_BBPM")) {
+            devices.add(EmtpVoltageSourceConverters.scoped(EmtpSynchronousMachines.function(name + "_PM", massPower, List.of(name + "_BBPM"),
+                    initial.mechanicalPower(), "u[1]")));
         }
         return devices;
     }

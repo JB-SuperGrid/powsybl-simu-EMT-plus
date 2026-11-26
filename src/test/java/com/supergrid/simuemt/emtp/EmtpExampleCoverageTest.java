@@ -44,7 +44,8 @@ import static org.assertj.core.api.Assertions.within;
  * black-box machine and converter control refused by name; 118 with the converter control, 119 with the machine - its machine beside
  * typed regulators left to Kestrel and PSCAD; 120 with that machine under typed regulators - all but the 21 no backend writes;
  * 2026-11-25, {@code 4295f31d}: 123 of 144, its black-box turbine-governor, stabilizer, and excitation with its stabilizer - all but
- * the 21 no backend writes. Its
+ * the 21 no backend writes; 2026-11-26, {@code 401c921c}: 137 of 166, its excitation with the turbine-governor inside it and its white
+ * bench, and its network-scale studies - all but the 29 no backend writes (8 of them the studies' builders, bare IIDM). Its
  * refusals, the most frequent first: power electronics (VSCs, MMCs, their DC sides), load models
  * (induction motors, constant power), zero-sequence data of lumped lines, excitation limiters,
  * governors but TGOV1, PSS2A.
@@ -75,6 +76,8 @@ class EmtpExampleCoverageTest {
             "createTwoBusNetworkWithEmtExtensions",
             "createTwoBusNetworkWithBlackBoxAvr",
             "createTwoBusNetworkWithBlackBoxAvrAndPss",
+            "createTwoBusNetworkWithAvrAndTgov1",
+            "createTwoBusNetworkWithBlackBoxAvrAndGovernor",
             "createTwoBusNetworkWithBlackBoxGovernor",
             "createTwoBusNetworkWithBlackBoxPss",
             "createTwoBusNetworkWithBlackBoxMachine",
@@ -163,6 +166,19 @@ class EmtpExampleCoverageTest {
             "vsc-symmetric-monopole-infinite-buses",
             "vsc-symmetric-monopole-mmc",
             "cigre-dcs2",
+            // The network-scale studies, upstream's since 401c921c
+            "cigre-b4",
+            "ieee14-dc",
+            "ieee39-dc",
+            "ieee39-gfl",
+            "ieee39-gfl65",
+            "ieee39-gfm",
+            "ieee39-gfm65",
+            "ieee39-mix65",
+            "ieee39-sync",
+            "ieee68-dc",
+            "kundur-dc",
+            "promotion-dc",
             "vsc-three-terminal",
             "vsc-three-terminal-all-droop",
             "vsc-three-terminal-all-droop-mmc",
@@ -181,6 +197,10 @@ class EmtpExampleCoverageTest {
             "vsc-monopole-infinite-buses-ground-resistance",
             "vsc-monopole-infinite-buses-metallic-return",
             "two-bus");
+
+    /** The network-scale studies, upstream's since {@code 401c921c}. */
+    private static final List<String> STUDIES = List.of("cigre-b4", "ieee14-dc", "ieee39-dc", "ieee39-gfl", "ieee39-gfl65", "ieee39-gfm", "ieee39-gfm65",
+            "ieee39-mix65", "ieee39-sync", "ieee68-dc", "kundur-dc", "promotion-dc");
 
     /** Every example written, or refused naming what it holds that is not written yet; the written ones pinned. */
     @Test
@@ -256,9 +276,12 @@ class EmtpExampleCoverageTest {
         // proportional regulator.
         // The OEL1B examples' limit (2.1) under the load flow's field current (2.67): their limiter picks up by design, its smooth steps
         // drawing the machine 1.5e-4 pu off within 0.2 s, as in the other backends.
+        // The network-scale studies' converters, from their load flow, still settling at 0.2 s - their stations' buses up to 3.5e-4 pu and
+        // 0.082 degree off it (run 2026-11-26) -: their studies hold them through their events.
+        boolean study = STUDIES.contains(name);
         double pu = MAGNETIZED_AND_TAPPED.equals(name) ? 1.5e-2 : name.startsWith("createTwoBusNetworkWithOel1B") ? 3.0e-4
-                : "createTwoBusNetworkWithSaturatedMachine".equals(name) ? 2.0e-4 : 1.0e-4;
-        double degrees = MAGNETIZED_AND_TAPPED.equals(name) ? 0.1 : 0.01;
+                : "createTwoBusNetworkWithSaturatedMachine".equals(name) ? 2.0e-4 : study ? 5.0e-4 : 1.0e-4;
+        double degrees = MAGNETIZED_AND_TAPPED.equals(name) ? 0.1 : study ? 0.1 : 0.01;
         for (Bus bus : network.getBusBreakerView().getBuses()) {
             if (Double.isNaN(bus.getV())) {
                 continue;
