@@ -353,7 +353,7 @@ public class EmtpVscFaultAgainstPscadTest {
     }
 
     /**
-     * The overlay's Kundur two-area system with its DC grid ({@code KundurDcNetwork}): its four machines with their exciters, PSSs and
+     * Upstream's Kundur two-area system with its DC grid ({@code KundurDcNetwork}): its four machines with their exciters, PSSs and
      * TGOV1s, its three VSC stations and its wind park, through a solid three-phase fault at bus 7 for 100 ms, as its PSCAD study's
      * {@code kundur-dc-fault-b7} - PSCAD's 2.5 s, from rest. Its stations by 5 ms windows: settled within 1e-3 pu of PSCAD's, through the
      * fault and the recovery 3e-2 - the network's first comparison at its own scale, four machines swinging, PSCAD's from rest.
@@ -374,7 +374,7 @@ public class EmtpVscFaultAgainstPscadTest {
     }
 
     /**
-     * The overlay's IEEE 39-bus system with its DC grid ({@code Ieee39DcNetwork}): its ten machines with their exciters, PSSs and governors,
+     * Upstream's IEEE 39-bus system with its DC grid ({@code Ieee39DcNetwork}): its ten machines with their exciters, PSSs and governors,
      * its four VSC stations and its wind park, two capacitive loads among its loads (L9, L24), through a solid three-phase fault at bus
      * 16, CS16's, for 100 ms, as its PSCAD study's {@code ieee39-dc-fault-b16} - PSCAD's 2.5 s, from rest. Its stations by 5 ms windows:
      * settled within 1e-3 pu of PSCAD's, through the fault and the recovery 3e-2, as Kundur's.
@@ -394,7 +394,7 @@ public class EmtpVscFaultAgainstPscadTest {
     }
 
     /**
-     * The overlay's PROMOTioN five-terminal benchmark ({@code PromotionDcNetwork}): its MMC stations - A1's and B1's choppers across their
+     * Upstream's PROMOTioN five-terminal benchmark ({@code PromotionDcNetwork}): its MMC stations - A1's and B1's choppers across their
      * DC terminals - and its wind parks, through a solid three-phase fault at A1's grid for 100 ms, as its PSCAD study's {@code
      * promotion-dc-ac-fault-a1}: A1's power gone, the DC voltages braked by A1's and B1's choppers. PSCAD's 2.3 s, from rest. Its stations
      * by 5 ms windows: settled within 5e-3 pu of PSCAD's - its DC grid's cables ringing in both before the fault, CB1's power around

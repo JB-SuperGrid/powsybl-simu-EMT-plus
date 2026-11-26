@@ -216,7 +216,7 @@ class PscadProFaultSwingTest {
     }
 
     /**
-     * IEEE 39 with a high share of power electronics ({@link Ieee39IbrNetwork}): its machines, then four, then six of them replaced by
+     * IEEE 39 with a high share of power electronics ({@link com.powsybl.simuemt.testresources.Ieee39IbrNetwork}): its machines, then four, then six of them replaced by
      * grid-following, grid-forming or mixed converter sources, through a fault and a load step at bus 16 - but the six replaced
      * grid-following through the fault, where the network is lost, G31 out of step, held apart. Every machine left against G39.
      */
