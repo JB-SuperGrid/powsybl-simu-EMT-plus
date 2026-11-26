@@ -463,7 +463,7 @@ final class PscadProCases {
     private static final EmtEvent IBR_FAULT = new BusFault("F", "B16", "ABC", true, 1.0, 2.5, 2.6, FaultClearing.AT_CURRENT_ZERO);
     private static final EmtEvent IBR_LOAD_STEP = new LoadStep("L16", 2.5, 2.5);
 
-    /** One of IEEE 39's high power electronics variants ({@link Ieee39IbrNetwork}) through {@code event}: run 8 s at 50 us. */
+    /** One of IEEE 39's high power electronics variants ({@link com.powsybl.simuemt.testresources.Ieee39IbrNetwork}) through {@code event}: run 8 s at 50 us. */
     private static Case ibrCase(String name, String bench, EmtEvent event) {
         return new Case(name, () -> preprocessed(bench, false, false), List.of(event), new PscadSimulationSettings(50.0e-6, 8.0, 50.0,
                 PscadEdition.PROFESSIONAL), Kind.FROM_REST);
@@ -622,43 +622,11 @@ final class PscadProCases {
         return network;
     }
 
-    /** A bench of powsybl-simu-emt's test resources: {@code <bench>.xiidm} with its models, {@code <bench>-extensions.xml} - but
-     * {@code cigre-b4}, {@code ieee14-dc}, {@code kundur-dc}, {@code ieee39-dc} and {@code promotion-dc}, this project's own ({@link
-     * CigreB4Network}, {@link Ieee14DcNetwork}, {@link KundurDcNetwork}, {@link Ieee39DcNetwork}, {@link PromotionDcNetwork}). */
+    /** A bench of powsybl-simu-emt's test resources, as its backends' solver tests read it ({@link ExampleNetworks#readVscBench}):
+     * {@code <bench>.xiidm} with its models, {@code <bench>-extensions.xml} - the network-scale studies' too (CIGRE B4, IEEE 14, 39 and
+     * 68, Kundur's, PROMOTioN), IEEE 39's power electronics variants on their shared network file. */
     static Network bench(String bench) {
-        // This project's own, not upstream's.
-        if ("cigre-b4".equals(bench)) {
-            return CigreB4Network.load();
-        }
-        if ("ieee14-dc".equals(bench)) {
-            return Ieee14DcNetwork.load();
-        }
-        if ("kundur-dc".equals(bench)) {
-            return KundurDcNetwork.load();
-        }
-        if ("ieee39-dc".equals(bench)) {
-            return Ieee39DcNetwork.load();
-        }
-        if ("promotion-dc".equals(bench)) {
-            return PromotionDcNetwork.load();
-        }
-        if ("ieee68-dc".equals(bench)) {
-            return Ieee68DcNetwork.load();
-        }
-        if ("ieee39-sync".equals(bench)) {
-            return Ieee39IbrNetwork.loadSync();
-        }
-        if ("ieee39-gfl".equals(bench) || "ieee39-gfm".equals(bench)) {
-            return Ieee39IbrNetwork.loadIbr("ieee39-gfm".equals(bench));
-        }
-        if ("ieee39-mix65".equals(bench)) {
-            return Ieee39IbrNetwork.loadMix65();
-        }
-        if ("ieee39-gfl65".equals(bench) || "ieee39-gfm65".equals(bench)) {
-            return Ieee39IbrNetwork.loadIbr65("ieee39-gfm65".equals(bench));
-        }
-        return EmtExtensionsXmlReader.readNetwork(ExampleNetworks.resource("/" + bench + ".xiidm"),
-                ExampleNetworks.resource("/" + bench + "-extensions.xml"));
+        return ExampleNetworks.readVscBench(bench, EmtExtensionsXmlReader::readNetwork);
     }
 
     /** Example 4's three stations, VSC2 and VSC3 on the DC voltage droop, VSC1 holding the DC voltage; its generators infinite buses. */
