@@ -53,6 +53,7 @@ class PscadProDcVoltageBandTest {
     private static final double SHIFT = 2.0;
     private static final String MONOPOLE = "vsc-symmetric-monopole-converter-transformers";
     private static final String RIGID = "vsc-bipole-converter-transformers-rigid";
+    private static final String MMC_MONOPOLE = "vsc-symmetric-monopole-mmc";
 
     /**
      * {@code AtpSolverIntegrationTest#aProtectionsDcUndervoltageBlocksTheInverterOnceTheRectifierIsLost}: both stations protected at 2
@@ -141,6 +142,33 @@ class PscadProDcVoltageBandTest {
     }
 
     /**
+     * {@code AtpSolverIntegrationTest#anMmcsAutomaticRestartWaitsForItsCapacitorWithinItsBandAndItNeverComes} on the symmetric MMC
+     * monopole ({@code vsc-symmetric-monopole-mmc}, its equivalent capacitors behind their diodes on both sides, past PSCAD Free's 15
+     * nodes): both stations protected at 2 pu, on a band of 0.8 to 1.05 pu, restarting by themselves ({@code AutomaticRestart(0.5, 0.02,
+     * 0.1, 2)}), one blocked at 0.3 s, run 1.5 s. The other blocked on its band at ATP's instant within 0.5 ms, never restarted - its
+     * DC terminal bleeds back within the band, its capacitor stays at the limit it tripped on -, its DC terminal at 0.4 to 0.55 pu at
+     * the end (ATP some 0.48), as {@code EmtpDcVoltageBandTest#aSymmetricMmcNeverRestartsWithItsCapacitorOutOfItsBand} holds EMTP.
+     * Upstream only checks this bench's circuit ({@code PscadFileWriterTest#writeBlocksASymmetricMonopolesMmcBehindDiodesOnBothSides},
+     * tagged professional).
+     *
+     * <p>Run 2026-11-26: VSC1 lost, VSC2 blocked at 0.31474 s (ATP 0.31468, 60 us), 0.4785 pu at the end; VSC2 lost, VSC1 blocked at
+     * 0.31440 s (ATP 0.31412, 280 us), 0.4804 pu; neither restarted.
+     */
+    @ParameterizedTest(name = "{0} blocked")
+    @CsvSource({"VSC1, VSC2, 0.31468", "VSC2, VSC1, 0.31412"})
+    void aSymmetricMmcNeverRestartsWithItsCapacitorOutOfItsBand(String lost, String tripped, double atp, @TempDir Path tempDir) {
+        PscadOutput out = run(protectedBench(MMC_MONOPOLE, new AutomaticRestart(0.5, 0.02, 0.1, 2)), List.of(new ConverterBlocking(lost, SHIFT + 0.3)),
+                1.5, tempDir);
+        double runEnd = SHIFT + 1.5;
+        SoftAssertions softly = new SoftAssertions();
+        blockedAt(softly, out, tripped, atp, 5.0e-4);
+        double blocked = out.firstTimeBelow(tripped + "_RUN", 0.5, SHIFT + 0.1);
+        softly.assertThat(out.firstTimeAbove(tripped + "_RUN", 0.5, blocked)).as("%s restarted: never", tripped).isNaN();
+        end(softly, out, tripped + "_VDC", runEnd, 0.4, 0.55);
+        softly.assertAll();
+    }
+
+    /**
      * Upstream's {@code b0f48a99} asks the Professional repository to run a protected MMC with its return solidly earthed, on a DC
      * voltage band, restarting by itself: {@code vsc-three-terminal-all-droop-mmc}, every station protected at 2 pu, on a band of 0.8 to
      * 1.05 pu, {@code AutomaticRestart(0.5, 0.02, 0.1, 2)}, one station blocked at 0.3 s, run 1.5 s. The inverter VSC2 lost: VSC1 and
@@ -208,7 +236,12 @@ class PscadProDcVoltageBandTest {
 
     /** The same, each station restarting by itself on {@code restart}, if any. */
     private static Network monopole(AutomaticRestart restart) {
-        Network network = bench(MONOPOLE);
+        return protectedBench(MONOPOLE, restart);
+    }
+
+    /** {@code name}'s stations protected at 2 pu and on a band of 0.8 to 1.05 pu, each restarting by itself on {@code restart}, if any. */
+    private static Network protectedBench(String name, AutomaticRestart restart) {
+        Network network = bench(name);
         network.getVoltageSourceConverters().forEach(converter -> converter.addExtension(VscProtectionModel.class,
                 new OvercurrentProtection(2.0, 0.0, restart, 0.8, 1.05)));
         EmtNetworkPreprocessor.preprocess(network, LocalComputationManager.getDefault());
