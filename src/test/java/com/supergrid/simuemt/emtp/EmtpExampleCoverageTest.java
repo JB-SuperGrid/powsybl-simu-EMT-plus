@@ -46,9 +46,8 @@ import static org.assertj.core.api.Assertions.within;
  * 2026-11-25, {@code 4295f31d}: 123 of 144, its black-box turbine-governor, stabilizer, and excitation with its stabilizer - all but
  * the 21 no backend writes; 2026-11-26, {@code 401c921c}: 137 of 166, its excitation with the turbine-governor inside it and its white
  * bench, and its network-scale studies - all but the 29 no backend writes (8 of them the studies' builders, bare IIDM). Its
- * refusals, the most frequent first: power electronics (VSCs, MMCs, their DC sides), load models
- * (induction motors, constant power), zero-sequence data of lumped lines, excitation limiters,
- * governors but TGOV1, PSS2A.
+ * refusals are those 29 only, whose components have no EMT model: converters neither an averaged two-level VSC nor an averaged MMC,
+ * generators neither an infinite bus nor a synchronous machine.
  *
  * @author Jean-Baptiste Heyberger : jean-baptiste.heyberger@supergrid-institute.com
  */
