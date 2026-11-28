@@ -5,7 +5,6 @@
 package com.supergrid.simuemt.pscadpro;
 
 import com.powsybl.computation.local.LocalComputationManager;
-import com.powsybl.iidm.network.AcDcConverter;
 import com.powsybl.iidm.network.Bus;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.VoltageSourceConverter;
@@ -22,6 +21,7 @@ import com.powsybl.simuemt.pscad.PscadCircuit;
 import com.powsybl.simuemt.pscad.PscadEdition;
 import com.powsybl.simuemt.pscad.PscadOutput;
 import com.powsybl.simuemt.pscad.PscadSimulationSettings;
+import com.powsybl.simuemt.testresources.DcLossBalance;
 import com.powsybl.simuemt.testresources.ExampleCatalogue;
 import com.powsybl.simuemt.testresources.ExampleNetworks;
 import org.assertj.core.api.SoftAssertions;
@@ -46,14 +46,14 @@ import static org.assertj.core.api.Assertions.within;
  * tags Professional's alone is run here with nothing to add.
  *
  * <p>From rest over 3 s - machines and converters let go at 2 s, as a template's are -, the last 40 ms held: each AC bus within 2e-3
- * pu, each converter's powers within 5e-3 pu of its rating, but a V_DC converter's active power within 1e-2 pu -, its DC voltage within
- * 1e-3 pu. A V_DC converter balances its DC grid, so it carries every phase reactor's {@code R |i|^2} on that grid, its own included,
- * which the load flow leaves out: OpenLoadFlow's converter knows no phase reactor (its resistive loss is on the DC current, see
- * {@code docs/converter-losses-in-load-flow.md}). Some 0.3% of its rating on a lightly loaded grid ({@link PscadProSimulationTest});
- * on CIGRE B4 DCS3, three heavily loaded converters (CBA1 0.64 pu of 2400 MW, CBB1 0.63 of 2400, CBB2 0.97 of 1600, at 0.003 pu
- * each) lose some 10 MW, 4.3e-3 of CBA1's rating - CBA1 measured 5.4e-3 off the load flow's on 2026-11-27. A grid-forming converter's
+ * pu, each converter's powers within 5e-3 pu of its rating -, its DC voltage within 1e-3 pu. Each pole's loss-taking V_DC converter
+ * (upstream's {@code DcPoles#lossTakers}) is held within 2e-4 pu of the power upstream's {@code DcLossBalance} gives from the circuit -
+ * what the other converters actually deliver, through the DC network, plus every phase reactor's {@code R |i|^2} - rather than to the
+ * load flow's, which knows no phase reactor (OpenLoadFlow's converter loss is on the DC current, see
+ * {@code docs/converter-losses-in-load-flow.md}): 0.3% to 0.5% of its rating off the load flow's on the network studies (CIGRE B4's CBA1
+ * 5.4e-3), 7.2e-5 at most off the circuit's balance on 2026-11-28, a rigid bipole's. A grid-forming converter's
  * power off the load flow's along its swing law at the speed its virtual machine ends on, the network's frequency a little off 50 Hz,
- * a lone V_DC converter taking the rest, as upstream's {@code XyceSolverIntegrationTest} holds them - over 7 s rather than 3. The scenarios' physics are
+ * as upstream's {@code XyceSolverIntegrationTest} holds them - over 7 s rather than 3. The scenarios' physics are
  * held tighter elsewhere: {@link PscadProBeyondFreeTest}, {@link PscadProConvertersTest}, {@link PscadProCigreDcs2Test}, {@link
  * PscadProSimulationTest}.
  *
@@ -77,9 +77,11 @@ class PscadProExampleCoverageTest {
     private static final double GRID_FORMING_RUN_END = 7.0;
     private static final double BUS_TOLERANCE = 2.0e-3;
     private static final double POWER_TOLERANCE = 5.0e-3;
-    /** A V_DC converter's active power: its DC grid's phase reactor losses on top, which the load flow does not see. */
-    private static final double V_DC_POWER_TOLERANCE = 1.0e-2;
+    /** A loss-taking V_DC converter's active power against the circuit's balance: 7.2e-5 at most, a rigid bipole's (2026-11-28). */
+    private static final double LOSS_TAKER_POWER_TOLERANCE = 2.0e-4;
     private static final double DC_VOLTAGE_TOLERANCE = 1.0e-3;
+    /** PSCAD's solid DC ground, ohm: earth itself - near enough nothing for upstream's DcLossBalance, which takes a resistance. */
+    private static final double SOLID_DC_GROUND_OHM = 1.0e-6;
 
     /** Upstream's catalogue's examples of PSCAD Professional's alone - {@code -Dpscad.examples=vsc-monopole-3,...} runs only those. */
     static List<ExampleCatalogue.Example> professionalOnly() {
@@ -113,27 +115,36 @@ class PscadProExampleCoverageTest {
             softly.assertThat(error).as("%s: |%s| at the end against the load flow's, pu", example, bus.getId()).isCloseTo(0.0, within(BUS_TOLERANCE));
         }
         // A grid-forming converter's power off the load flow's along its swing law, at the speed and acceleration its virtual machine
-        // ends on; a lone V_DC converter balancing what they deliver beyond the load flow's (upstream's XyceSolverIntegrationTest).
+        // ends on (upstream's XyceSolverIntegrationTest).
         Map<String, Double> offsets = new HashMap<>();
-        double swingTotal = 0.0;
         for (VoltageSourceConverter converter : network.getVoltageSourceConverters()) {
             if (converter.getExtension(VscControlModel.class) instanceof GridFormingControl control) {
-                double offset = swingPowerMw(converter, control, out, from, runEnd);
-                offsets.put(converter.getId(), offset);
-                swingTotal += out.mean(converter.getId() + "_P", from, runEnd) * rating(converter) - converter.getTerminal1().getP();
+                offsets.put(converter.getId(), swingPowerMw(converter, control, out, from, runEnd));
             }
         }
-        List<VoltageSourceConverter> dcVoltage = network.getVoltageSourceConverterStream()
-                .filter(c -> c.getControlMode() == AcDcConverter.ControlMode.V_DC).toList();
-        if (!offsets.isEmpty() && dcVoltage.size() == 1) {
-            offsets.put(dcVoltage.get(0).getId(), -swingTotal);
+        // Each pole's loss-taking V_DC converter at the power the circuit gives (upstream's DcLossBalance): what the others actually
+        // deliver, through the DC network, and every phase reactor's losses, which the load flow knows nothing of. PSCAD's solid DC
+        // ground is earth itself (PscadCircuitBuilder#addDcSide), where the other backends write 1e-2 ohm.
+        Map<String, DcLossBalance.Measurement> measured = new HashMap<>();
+        for (VoltageSourceConverter converter : network.getVoltageSourceConverters()) {
+            String id = converter.getId();
+            measured.put(id, new DcLossBalance.Measurement(out.mean(id + "_P", from, runEnd) * rating(converter),
+                    out.mean(id + "_Q", from, runEnd) * rating(converter), out.mean(id + "_VAC", from, runEnd)));
         }
+        Map<String, Double> lossTakerPowers = DcLossBalance.lossTakerPowers(network, measured, 50.0, settings.timeStepSeconds(),
+                SOLID_DC_GROUND_OHM);
         double worstPower = 0.0;
         double worstDc = 0.0;
         for (VoltageSourceConverter converter : network.getVoltageSourceConverters()) {
             String id = converter.getId();
             double rating = rating(converter);
-            double p = out.mean(id + "_P", from, runEnd) - (converter.getTerminal1().getP() + offsets.getOrDefault(id, 0.0)) / rating;
+            boolean lossTaker = lossTakerPowers.containsKey(id);
+            double expectedP = lossTaker ? lossTakerPowers.get(id) : converter.getTerminal1().getP() + offsets.getOrDefault(id, 0.0);
+            double p = out.mean(id + "_P", from, runEnd) - expectedP / rating;
+            if (lossTaker) {
+                System.out.printf(Locale.ROOT, "%s %s: P %.1e pu off the circuit's balance, %.1e off the load flow's%n", example, id, p,
+                        out.mean(id + "_P", from, runEnd) - converter.getTerminal1().getP() / rating);
+            }
             double q = out.mean(id + "_Q", from, runEnd) - converter.getTerminal1().getQ() / rating;
             // Its DC voltage across its two terminals: a bipole's negative pole has its DC terminal 1 on the earthed neutral.
             double vdc = out.mean(id + "_VDC", from, runEnd)
@@ -141,8 +152,8 @@ class PscadProExampleCoverageTest {
                     / converter.getDcTerminal1().getDcNode().getNominalV();
             worstPower = Math.max(worstPower, Math.max(Math.abs(p), Math.abs(q)));
             worstDc = Math.max(worstDc, Math.abs(vdc));
-            double powerTolerance = converter.getControlMode() == AcDcConverter.ControlMode.V_DC ? V_DC_POWER_TOLERANCE : POWER_TOLERANCE;
-            softly.assertThat(p).as("%s: %s's power at the end against the load flow's, pu", example, id).isCloseTo(0.0, within(powerTolerance));
+            softly.assertThat(p).as("%s: %s's power at the end against %s, pu", example, id, lossTaker ? "the circuit's balance" : "the load flow's")
+                    .isCloseTo(0.0, within(lossTaker ? LOSS_TAKER_POWER_TOLERANCE : POWER_TOLERANCE));
             softly.assertThat(q).as("%s: %s's reactive power at the end against the load flow's, pu", example, id).isCloseTo(0.0, within(POWER_TOLERANCE));
             softly.assertThat(vdc).as("%s: %s's DC voltage at the end against the load flow's, pu", example, id).isCloseTo(0.0, within(DC_VOLTAGE_TOLERANCE));
         }
