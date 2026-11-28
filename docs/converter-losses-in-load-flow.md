@@ -5,8 +5,10 @@ All rights reserved. Proprietary and confidential.
 
 # Phase reactor losses in the load flow
 
-Status: **not done** - written down 2026-11-27, kept for later. Meanwhile `PscadProExampleCoverageTest` holds a V_DC
-converter's active power within 1e-2 pu of its rating instead of 5e-3.
+Status: **not done** - written down 2026-11-27, kept for later. Meanwhile the tests read the losses off the circuit: since
+upstream `cbd50a7c`, its `DcLossBalance` gives each pole's loss-taking V_DC converter's power from what the other converters
+actually deliver plus every phase reactor's `R |i|^2`, and `PscadProExampleCoverageTest` holds those converters to it within
+2e-4 pu (7.2e-5 at most measured, 2026-11-28). What follows would make the load flow itself right, for every backend's start.
 
 ## The gap
 
@@ -62,13 +64,13 @@ user-given converter losses, and update `AveragedVscInitialState`'s javadoc - it
 - **The phase reactor as an IIDM branch** (an internal bus and an `R + jX` line): OpenLoadFlow would then hold the converter's
   P, Q and AC voltage on the internal bus rather than at the terminal, unlike the EMT controls, and the backends would count the
   reactor twice (branch and averaged model).
-- **Correcting the expected power in the test** (adding the DC grid's `R |i|^2` to the V_DC converter's load-flow power): would
-  work for this test only; the tolerance was widened instead.
+- **Correcting the expected power in the test**: done, but it fixes the tests' reading only, not the load flow every backend
+  starts from - upstream's `DcLossBalance` (above).
 
 ## Cost and blocker
 
 - powsybl-core / powsybl-open-loadflow: one or two PRs to LF Energy projects (a few days of code, then review and a release).
 - powsybl-simu-emt: about a day once released.
 - Revalidation: every load flow with a VSC moves by 0.1-0.5%. Upstream's ATP, Xyce and Kestrel comparisons and Xyce tables would
-  have to be rerun - none of the three solvers is installed on the PC this overlay runs on. Then a full `-Ppscad,emtp` run here,
-  and `PscadProExampleCoverageTest` back to 5e-3 for V_DC converters.
+  have to be rerun - none of the three solvers is installed on the PC this overlay runs on. Then a full `-Ppscad,emtp` run here;
+  the loss takers would then be on the load flow's too.
